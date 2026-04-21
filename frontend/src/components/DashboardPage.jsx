@@ -1,0 +1,178 @@
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { api } from '../api'
+
+const CATEGORIES = [
+  { label:'YC Startups',              slug:'yc-startups',                  tint:'#F26625', bg:'rgba(242,102,37,0.08)' },
+  { label:'Tech & Software',          slug:'Tech%20%26%20Software',        tint:'#2563eb', bg:'rgba(37,99,235,0.08)' },
+  { label:'Finance & Investing',      slug:'Finance%20%26%20Investing',    tint:'#059669', bg:'rgba(5,150,105,0.08)' },
+  { label:'AI & Research',            slug:'AI%20%26%20Research',          tint:'#7c3aed', bg:'rgba(124,58,237,0.08)' },
+  { label:'Healthcare & Life Sciences',slug:'Healthcare%20%26%20Life%20Sciences', tint:'#dc2626', bg:'rgba(220,38,38,0.08)' },
+  { label:'Data & Analytics',         slug:'Data%20%26%20Analytics',       tint:'#4f46e5', bg:'rgba(79,70,229,0.08)' },
+]
+
+function Spin({ color = '#6366f1', size = 20 }) {
+  return <span style={{ display:'inline-block', width:size, height:size, border:`2px solid ${color}30`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
+}
+
+function timeAgo(iso) {
+  if (!iso) return ''
+  const h = Math.floor((Date.now() - new Date(iso)) / 3600000)
+  if (h < 1) return 'just now'
+  if (h < 24) return `${h}h ago`
+  if (h < 24 * 7) return `${Math.floor(h / 24)}d ago`
+  return `${Math.floor(h / 168)}w ago`
+}
+
+export default function DashboardPage({ onStatsChange }) {
+  const navigate = useNavigate()
+  const [stats, setStats]       = useState(null)
+  const [activity, setActivity] = useState([])
+  const [catCounts, setCatCounts] = useState({})
+  const [ycCount, setYcCount]   = useState(null)
+
+  useEffect(() => {
+    const loadStats = () => {
+      api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {})
+      api.unified.categoryCounts().then(d => {
+        const map = {}
+        for (const r of (d.counts || [])) map[r.category] = r.count
+        setCatCounts(map)
+      }).catch(() => {})
+    }
+    loadStats()
+    api.activity().then(d => setActivity(d.activity || [])).catch(() => {})
+    fetch('https://yc-oss.github.io/api/companies/hiring.json')
+      .then(r => r.json()).then(d => setYcCount(Array.isArray(d) ? d.length : null))
+      .catch(() => {})
+    window.addEventListener('stats-refresh', loadStats)
+    return () => window.removeEventListener('stats-refresh', loadStats)
+  }, [])
+
+  const statCards = stats ? [
+    { label:'Companies',    value: stats.totalCompanies?.toLocaleString() ?? '—',  sub:'in database',       tint:'#6366f1', action: () => navigate('/companies') },
+    { label:'Contacts',     value: stats.totalContacts?.toLocaleString() ?? '—',   sub:'with emails found', tint:'#059669', action: () => navigate('/outreach') },
+    { label:'Sent',         value: stats.totalSent?.toLocaleString() ?? '—',       sub:'outreach emails',   tint:'#0891b2', action: null },
+    { label:'Response Rate',value: stats.responseRate != null ? `${stats.responseRate}%` : '—', sub:'reply rate', tint:'#d97706', action: null },
+    { label:'Evaluated',    value: stats.totalApplications?.toLocaleString() ?? '—', sub:'applications',   tint:'#9333ea', action: () => navigate('/career-ops') },
+  ] : []
+
+  const activityIcons = {
+    yc_import: '⭐', yc_import_all: '⭐', scrape: '🔍', find_people: '👤',
+    email_found: '✉', outreach_sent: '📤', yc_waas_scrape: '🌐',
+  }
+
+  return (
+    <div style={{ flex:1, overflowY:'auto', background:'#f8fafc' }}>
+      {/* Header */}
+      <div style={{ padding:'32px 40px 24px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
+        <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Dashboard</h1>
+        <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Your internship search at a glance</p>
+
+        {/* Stats row */}
+        {stats ? (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:12, marginTop:24 }}>
+            {statCards.map(s => (
+              <div key={s.label}
+                onClick={s.action}
+                style={{ padding:'16px 18px', background:'#f8fafc', borderRadius:12, border:'1px solid #e2e8f0', cursor: s.action ? 'pointer' : 'default', transition:'all 0.15s' }}
+                onMouseEnter={e => { if (s.action) { e.currentTarget.style.borderColor = s.tint; e.currentTarget.style.background = '#fff' } }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = '#f8fafc' }}>
+                <div style={{ fontSize:22, fontWeight:800, color: s.tint }}>{s.value}</div>
+                <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', marginTop:2 }}>{s.label}</div>
+                <div style={{ fontSize:11, color:'#94a3b8', marginTop:1 }}>{s.sub}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ marginTop:24, display:'flex', justifyContent:'center' }}><Spin /></div>
+        )}
+      </div>
+
+      <div style={{ padding:'28px 40px', display:'grid', gridTemplateColumns:'1fr 320px', gap:28 }}>
+
+        {/* Left column */}
+        <div>
+
+          {/* Quick Actions */}
+          <div style={{ marginBottom:28 }}>
+            <div style={{ fontSize:14, fontWeight:800, color:'#0f172a', marginBottom:14 }}>Quick Actions</div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:12 }}>
+              {[
+                { icon:'🔍', label:'Browse Companies', sub:'Search & explore by category',   action: () => navigate('/companies'),  tint:'#6366f1' },
+                { icon:'🎓', label:'Intern Roles',      sub:'Find open internship positions', action: () => navigate('/scraper'),    tint:'#f59e0b' },
+                { icon:'💼', label:'New Grad Roles',    sub:'Entry-level & new grad roles',   action: () => navigate('/scraper'),    tint:'#10b981' },
+                { icon:'📥', label:'Scrape New Roles',  sub:'Bulk scraping across sources',   action: () => navigate('/scraper'),    tint:'#059669' },
+                { icon:'✉',  label:'Write Outreach',   sub:'Find contacts & draft emails',   action: () => navigate('/outreach'),   tint:'#0891b2' },
+                { icon:'🎯', label:'Career Ops',        sub:'Evaluate & track applications',  action: () => navigate('/career-ops'), tint:'#7c3aed' },
+              ].map(q => (
+                <div key={q.label} onClick={q.action}
+                  style={{ padding:'18px 20px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, cursor:'pointer', transition:'all 0.15s' }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = q.tint; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)' }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none' }}>
+                  <div style={{ fontSize:24, marginBottom:8 }}>{q.icon}</div>
+                  <div style={{ fontSize:13, fontWeight:700, color:'#0f172a', marginBottom:3 }}>{q.label}</div>
+                  <div style={{ fontSize:11, color:'#94a3b8', lineHeight:1.4 }}>{q.sub}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Top Categories */}
+          <div>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+              <div style={{ fontSize:14, fontWeight:800, color:'#0f172a' }}>Top Categories</div>
+              <button onClick={() => navigate('/companies')}
+                style={{ fontSize:12, color:'#6366f1', background:'none', border:'none', cursor:'pointer', fontWeight:600 }}>
+                View all →
+              </button>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:10 }}>
+              {CATEGORIES.map(cat => {
+                // YC card shows actual imported YC startups in YOUR DB (not the global YC API list).
+                const count = cat.label === 'YC Startups' ? (stats?.ycImported ?? 0) : (catCounts[cat.label] || 0)
+                return (
+                  <div key={cat.label}
+                    onClick={() => navigate(`/category/${cat.slug}`)}
+                    style={{ padding:'14px 16px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, cursor:'pointer', transition:'all 0.15s' }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = cat.tint; e.currentTarget.style.transform = 'translateY(-2px)' }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.transform = 'none' }}>
+                    <div style={{ fontSize:18, fontWeight:800, color: cat.tint, marginBottom:2 }}>
+                      {count != null ? count.toLocaleString() : '—'}
+                    </div>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#0f172a', lineHeight:1.3 }}>{cat.label}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Right column — Activity feed */}
+        <div>
+          <div style={{ fontSize:14, fontWeight:800, color:'#0f172a', marginBottom:14 }}>Recent Activity</div>
+          <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, overflow:'hidden' }}>
+            {activity.length === 0 ? (
+              <div style={{ padding:'32px 20px', textAlign:'center', color:'#94a3b8', fontSize:13 }}>
+                No activity yet. Start scraping companies!
+              </div>
+            ) : (
+              activity.slice(0, 12).map((a, i) => (
+                <div key={a.id || i} style={{ padding:'12px 16px', borderBottom: i < activity.length - 1 ? '1px solid #f1f5f9' : 'none', display:'flex', gap:10, alignItems:'flex-start' }}>
+                  <span style={{ fontSize:14, flexShrink:0, marginTop:1 }}>{activityIcons[a.action] || '•'}</span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, color:'#0f172a', lineHeight:1.4 }}>{a.details || a.action}</div>
+                    {a.created_at && (
+                      <div style={{ fontSize:10, color:'#94a3b8', marginTop:2 }}>{timeAgo(a.created_at)}</div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  )
+}
