@@ -45,7 +45,7 @@ const ASHBY_COMPANIES = [
 // ─── CS dept / intern title filters ──────────────────────────────────────────
 
 const CS_DEPTS  = /engineering|software|data|machine.?learning|\bml\b|infrastructure|platform|backend|frontend|systems|sre|devops|security|ai\b|research|analytics|cloud/i;
-const INTERN_RE = /intern/i;
+const INTERN_RE = /\bintern(?:s|ship|ships)?\b/i;
 
 // ─── Search terms per subcategory ─────────────────────────────────────────────
 
@@ -1111,7 +1111,7 @@ export async function scraperHealth() {
 
 // ─── Main export ──────────────────────────────────────────────────────────────
 
-const SOURCES = [
+export const SOURCES = [
   { key: 'greenhouse',   fn: ()      => scrapeGreenhouse() },
   { key: 'lever',        fn: ()      => scrapeLever() },
   { key: 'ashby',        fn: ()      => scrapeAshby() },
@@ -1160,4 +1160,15 @@ export async function scrapeAllSources(subcategory = '', category = '') {
   const results = dedupe(allRaw);
   console.log(`[scraper] done — raw=${allRaw.length} deduped=${results.length}`);
   return { results, bySource, errors };
+}
+
+/**
+ * Scrape a single source by key and return normalized, deduped results.
+ */
+export async function scrapeOneSource(key, subcategory = '', category = '') {
+  const src = SOURCES.find(s => s.key === key);
+  if (!src) throw new Error(`unknown source: ${key}`);
+  const searchTerms = getSearchTerms(category, subcategory);
+  const raw = await src.fn(searchTerms);
+  return { results: dedupe(raw), count: raw.length };
 }

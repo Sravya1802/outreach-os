@@ -21,14 +21,16 @@ export const api = {
 
   // Stats from Supabase
   stats: async () => {
-    const [jobsRes, evaluationsRes, contactsRes] = await Promise.all([
-      supabase.from('jobs').select('*', { count: 'exact' }),
-      supabase.from('evaluations').select('*', { count: 'exact' }),
-      supabase.from('job_contacts').select('*', { count: 'exact' }),
+    const [companiesRes, jobsRes, evaluationsRes, contactsRes] = await Promise.all([
+      supabase.from('companies').select('*', { count: 'exact', head: true }),
+      supabase.from('jobs').select('*', { count: 'exact', head: true }),
+      supabase.from('evaluations').select('*', { count: 'exact', head: true }),
+      supabase.from('job_contacts').select('*', { count: 'exact', head: true }),
     ])
 
     return {
-      totalCompanies: jobsRes.count || 0,
+      totalCompanies: companiesRes.count || 0,
+      totalJobs: jobsRes.count || 0,
       totalEvaluations: evaluationsRes.count || 0,
       totalContacts: contactsRes.count || 0,
       responseRate: 0,
@@ -48,12 +50,14 @@ export const api = {
   },
 
   jobMetrics: async () => {
-    const { data: jobs } = await supabase.from('jobs').select('*', { count: 'exact' })
+    const { data: companies } = await supabase.from('companies').select('id')
+    const { data: jobs } = await supabase.from('jobs').select('id')
     const { data: evaluations } = await supabase.from('evaluations').select('*')
 
     return {
       summary: {
-        totalCompanies: jobs?.length || 0,
+        totalCompanies: companies?.length || 0,
+        totalJobs: jobs?.length || 0,
         totalEvaluations: evaluations?.length || 0,
         totalContacts: 0,
         responseRate: 0,
@@ -81,9 +85,10 @@ export const api = {
     searchByName: (companyName) => apiCall('/companies/search-by-name', { method: 'POST', body: { companyName } }),
 
     categories: async () => {
-      const { data } = await supabase.from('jobs').select('category')
+      const { data } = await supabase.from('companies').select('category')
       const cats = {}
       data?.forEach(row => {
+        if (!row.category) return
         cats[row.category] = (cats[row.category] || 0) + 1
       })
       return { categories: Object.keys(cats) }
@@ -93,14 +98,18 @@ export const api = {
     scrapeSource: (src, params) => apiCall(`/companies/scrape/${src}`, { method: 'POST', body: params }),
 
     list: async () => {
-      const { data } = await supabase.from('jobs').select('*').limit(100)
+      const { data } = await supabase
+        .from('companies')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100)
       return data || []
     },
   },
 
   yc: {
     companies: async (params = {}) => {
-      let query = supabase.from('jobs').select('*').eq('source', 'yc_startups')
+      let query = supabase.from('companies').select('*').not('yc_batch', 'is', null)
 
       if (params.category) query = query.eq('category', params.category)
       if (params.search) query = query.ilike('name', `%${params.search}%`)
@@ -110,7 +119,7 @@ export const api = {
     },
 
     company: async (slug) => {
-      const { data } = await supabase.from('jobs').select('*').eq('name', slug).single()
+      const { data } = await supabase.from('companies').select('*').eq('name', slug).single()
       return data || {}
     },
 
@@ -127,43 +136,53 @@ export const api = {
 
   unified: {
     categoryCounts: async () => {
-      const { data } = await supabase.from('jobs').select('category')
+      const { data } = await supabase.from('companies').select('category')
       const counts = {}
       data?.forEach(row => {
+        if (!row.category) return
         counts[row.category] = (counts[row.category] || 0) + 1
       })
       return { counts: Object.entries(counts).map(([category, count]) => ({ category, count })) }
     },
 
     companies: async (params = {}) => {
-      let query = supabase.from('jobs').select('*')
+      let query = supabase.from('companies').select('*', { count: 'exact' })
 
       if (params.category) query = query.eq('category', params.category)
       if (params.search) query = query.ilike('name', `%${params.search}%`)
       if (params.status) query = query.eq('status', params.status)
 
+      const pageSize = params.pageSize || 50
+      const page = params.page || 0
       const { data, count } = await query
         .order('created_at', { ascending: false })
-        .range(params.page * 50 || 0, ((params.page || 0) + 1) * 50)
-        .select('*', { count: 'exact' })
+        .range(page * pageSize, (page + 1) * pageSize - 1)
 
       return { companies: data || [], total: count || 0 }
     },
 
     dashboard: async () => {
-      const { data: jobs } = await supabase.from('jobs').select('*')
+      const { data: companies } = await supabase
+        .from('companies')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100)
+      const companyIds = (companies || []).map(c => c.id)
+      const { data: jobs } = companyIds.length
+        ? await supabase.from('jobs').select('*').in('company_name', (companies || []).map(c => c.name))
+        : { data: [] }
       const { data: contacts } = await supabase.from('job_contacts').select('*')
 
-      const grouped = {}
-      jobs?.forEach(job => {
-        grouped[job.id] = {
-          id: job.id,
-          name: job.name,
-          contacts: contacts?.filter(c => c.job_id === job.id) || [],
-        }
-      })
+      const grouped = (companies || []).map(c => ({
+        id: c.id,
+        name: c.name,
+        category: c.category,
+        website: c.website,
+        jobs: (jobs || []).filter(j => j.company_name === c.name),
+        contacts: (contacts || []).filter(ct => (jobs || []).some(j => j.id === ct.job_id && j.company_name === c.name)),
+      }))
 
-      return { companies: Object.values(grouped) }
+      return { companies: grouped }
     },
   },
 
@@ -172,7 +191,7 @@ export const api = {
       const { data } = await supabase
         .from('jobs')
         .select('*')
-        .ilike('name', `%${query}%`)
+        .or(`title.ilike.%${query}%,company_name.ilike.%${query}%`)
         .limit(20)
       return data || []
     },
