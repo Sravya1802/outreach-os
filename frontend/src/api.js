@@ -1,143 +1,268 @@
-const BASE = '/api';
+import { supabase } from './supabaseClient'
 
-async function req(url, options = {}) {
-  const res = await fetch(`${BASE}${url}`, {
+const API = '/api'
+
+async function apiCall(url, options = {}) {
+  const res = await fetch(`${API}${url}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
     body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  })
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || 'Request failed');
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || 'Request failed')
   }
-  return res.json();
+  return res.json()
 }
 
-const post  = (url, body) => req(url, { method: 'POST', body });
-const get   = (url)       => req(url);
-const put   = (url, body) => req(url, { method: 'PUT', body });
-const patch = (url, body) => req(url, { method: 'PATCH', body });
-const del   = (url)       => req(url, { method: 'DELETE' });
-
 export const api = {
-  health:      () => get('/health'),
-  stats:       () => get('/stats'),
-  activity:    () => get('/activity'),
-  jobMetrics:  () => get('/dashboard/job-metrics'),
+  // System health (Vercel function)
+  health: () => apiCall('/health'),
+
+  // Stats from Supabase
+  stats: async () => {
+    const [jobsRes, evaluationsRes, contactsRes] = await Promise.all([
+      supabase.from('jobs').select('*', { count: 'exact' }),
+      supabase.from('evaluations').select('*', { count: 'exact' }),
+      supabase.from('job_contacts').select('*', { count: 'exact' }),
+    ])
+
+    return {
+      totalCompanies: jobsRes.count || 0,
+      totalEvaluations: evaluationsRes.count || 0,
+      totalContacts: contactsRes.count || 0,
+      responseRate: 0,
+      activeSources: 0,
+      ycImported: 0,
+      totalApplications: 0,
+    }
+  },
+
+  activity: async () => {
+    const { data } = await supabase
+      .from('activity_log')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(10)
+    return { activity: data || [] }
+  },
+
+  jobMetrics: async () => {
+    const { data: jobs } = await supabase.from('jobs').select('*', { count: 'exact' })
+    const { data: evaluations } = await supabase.from('evaluations').select('*')
+
+    return {
+      summary: {
+        totalCompanies: jobs?.length || 0,
+        totalEvaluations: evaluations?.length || 0,
+        totalContacts: 0,
+        responseRate: 0,
+        applyRate: 0,
+      },
+      applyFunnel: {
+        evaluated: evaluations?.filter(e => !e.apply_status).length || 0,
+        applied: evaluations?.filter(e => ['opened', 'submitted', 'queued'].includes(e.apply_status)).length || 0,
+        responded: evaluations?.filter(e => e.apply_status === 'responded').length || 0,
+        interview: evaluations?.filter(e => e.apply_status === 'interview').length || 0,
+        offer: evaluations?.filter(e => e.apply_status === 'offer').length || 0,
+        rejected: evaluations?.filter(e => e.apply_status === 'rejected').length || 0,
+      },
+      gradeDist: { A: 0, B: 0, C: 0, D: 0, F: 0 },
+      topOutreachCompanies: [],
+      recentEvals: [],
+    }
+  },
 
   credits: {
-    status: (refresh = false) => get(`/credits/status${refresh ? '?refresh=true' : ''}`),
+    status: () => apiCall('/credits/status'),
   },
 
   companies: {
-    searchByName: (companyName) => post('/companies/search-by-name', { companyName }),
-    categories:   ()            => get('/companies/categories'),
-    scrape:       (params = {}) => post('/companies/scrape', params),
-    scrapeSource: (src, params) => post(`/companies/scrape/${src}`, params),
+    searchByName: (companyName) => apiCall('/companies/search-by-name', { method: 'POST', body: { companyName } }),
+
+    categories: async () => {
+      const { data } = await supabase.from('jobs').select('category')
+      const cats = {}
+      data?.forEach(row => {
+        cats[row.category] = (cats[row.category] || 0) + 1
+      })
+      return { categories: Object.keys(cats) }
+    },
+
+    scrape: (params) => apiCall('/companies/scrape', { method: 'POST', body: params }),
+    scrapeSource: (src, params) => apiCall(`/companies/scrape/${src}`, { method: 'POST', body: params }),
+
+    list: async () => {
+      const { data } = await supabase.from('jobs').select('*').limit(100)
+      return data || []
+    },
   },
 
   yc: {
-    companies:  (params = {}) => get(`/yc/companies?${new URLSearchParams(params)}`),
-    company:    (slug)        => get(`/yc/companies/${slug}`),
-    import:     (slugs)       => post('/yc/import', { slugs }),
-    importAll:  (filters)     => post('/yc/import-all', { filters }),
-    scrapeWaas: ()            => post('/yc/scrape-waas', {}),
+    companies: async (params = {}) => {
+      let query = supabase.from('jobs').select('*').eq('source', 'yc_startups')
+
+      if (params.category) query = query.eq('category', params.category)
+      if (params.search) query = query.ilike('name', `%${params.search}%`)
+
+      const { data } = await query.limit(params.pageSize || 50)
+      return { companies: data || [], total: data?.length || 0 }
+    },
+
+    company: async (slug) => {
+      const { data } = await supabase.from('jobs').select('*').eq('name', slug).single()
+      return data || {}
+    },
+
+    import: (slugs) => apiCall('/yc/import', { method: 'POST', body: { slugs } }),
+    importAll: (filters) => apiCall('/yc/import-all', { method: 'POST', body: { filters } }),
+    scrapeWaas: () => apiCall('/yc/scrape-waas', { method: 'POST', body: {} }),
   },
 
   generate: {
-    email:       (body) => post('/generate/email', body),
-    linkedin:    (body) => post('/generate/linkedin', body),
-    both:        (body) => post('/generate/both', body),
-    waas:        (body) => post('/generate/waas', body),
-    coverLetter: (body) => post('/generate/cover-letter', body),
+    email: (body) => apiCall('/generate/email', { method: 'POST', body }),
+    linkedin: (body) => apiCall('/generate/linkedin', { method: 'POST', body }),
+    both: (body) => apiCall('/generate/both', { method: 'POST', body }),
   },
 
   unified: {
-    companies:      (params = {}) => get(`/unified/companies?${new URLSearchParams(params)}`),
-    categoryCounts: ()            => get('/unified/category-counts'),
-    cityCounts:     (params = {}) => get(`/unified/city-counts?${new URLSearchParams(params)}`),
-    contacts:       (name)        => get(`/unified/contacts/${encodeURIComponent(name)}`),
-    dashboard:      ()            => get('/unified/dashboard'),
+    categoryCounts: async () => {
+      const { data } = await supabase.from('jobs').select('category')
+      const counts = {}
+      data?.forEach(row => {
+        counts[row.category] = (counts[row.category] || 0) + 1
+      })
+      return { counts: Object.entries(counts).map(([category, count]) => ({ category, count })) }
+    },
+
+    companies: async (params = {}) => {
+      let query = supabase.from('jobs').select('*')
+
+      if (params.category) query = query.eq('category', params.category)
+      if (params.search) query = query.ilike('name', `%${params.search}%`)
+      if (params.status) query = query.eq('status', params.status)
+
+      const { data, count } = await query
+        .order('created_at', { ascending: false })
+        .range(params.page * 50 || 0, ((params.page || 0) + 1) * 50)
+        .select('*', { count: 'exact' })
+
+      return { companies: data || [], total: count || 0 }
+    },
+
+    dashboard: async () => {
+      const { data: jobs } = await supabase.from('jobs').select('*')
+      const { data: contacts } = await supabase.from('job_contacts').select('*')
+
+      const grouped = {}
+      jobs?.forEach(job => {
+        grouped[job.id] = {
+          id: job.id,
+          name: job.name,
+          contacts: contacts?.filter(c => c.job_id === job.id) || [],
+        }
+      })
+
+      return { companies: Object.values(grouped) }
+    },
   },
 
   jobs: {
-    list:         (params = {}) => get(`/jobs?${new URLSearchParams(params)}`),
-    search:       (q)           => get(`/jobs/search?q=${encodeURIComponent(q)}`),
-    scrape:       (params = {}) => post('/jobs/scrape', params),
-    detail:       (id)          => get(`/jobs/${id}/detail`),
-    updateStatus: (id, status)  => put(`/jobs/${id}/status`, { status }),
-    contacts:     (id, source) => get(`/jobs/${id}/contacts${source ? `?source=${source}` : ''}`),
-    roles:        (id)          => get(`/jobs/${id}/roles`),
-    careersUrl:   (id)          => get(`/jobs/${id}/careers-url`),
-    scrapeRoles:  (id, roleType = 'intern') => post(`/jobs/${id}/scrape-roles`, { roleType }),
-    findLinkedIn:          (id)            => post(`/jobs/${id}/find-linkedin`, {}),
-    findPeopleStream:      (id)            => `/api/jobs/${id}/find-people-stream`, // SSE URL
-    scrapeLinkedInCompany: (id, linkedinUrl) => post(`/jobs/${id}/scrape-linkedin-company`, { linkedinUrl }),
-    findEmails:   (id, domain = null) => post(`/jobs/${id}/find-emails`, domain ? { domain } : {}),
-    findEmailForContact: (contactId) => post(`/jobs/contacts/${contactId}/find-email`, {}),
-    generate:     (contactId, type, extraContext = '') => post(`/jobs/contacts/${contactId}/generate`, { type, extraContext }),
-    updateContact:(contactId, data) => put(`/jobs/contacts/${contactId}`, data),
-    deleteContact:     (contactId)  => del(`/jobs/contacts/${contactId}`),
-    checkInternRoles:  (id)         => post(`/jobs/${id}/check-intern-roles`, {}),
-    scraperHealth:     ()           => get('/jobs/scraper-health'),
-    importSheet: () => fetch('/api/jobs/import-startup-sheet', { method: 'POST' }), // returns raw Response for SSE
+    search: async (query) => {
+      const { data } = await supabase
+        .from('jobs')
+        .select('*')
+        .ilike('name', `%${query}%`)
+        .limit(20)
+      return data || []
+    },
+
+    detail: async (id) => {
+      const { data: job } = await supabase.from('jobs').select('*').eq('id', id).single()
+      const { data: contacts } = await supabase.from('job_contacts').select('*').eq('job_id', id)
+      return { job, contacts: contacts || [] }
+    },
+
+    updateStatus: async (id, status) => {
+      const { data } = await supabase.from('jobs').update({ status }).eq('id', id)
+      return data?.[0] || {}
+    },
+
+    scrape: (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
   },
 
   career: {
-    resume:           ()           => get('/career/resume'),
-    getCompany:       (id)         => get(`/career/company/${id}`),
-    updateCompany:    (id, data)   => put(`/career/company/${id}`, data),
-    stats:            ()           => get('/career/stats'),
-    ranked:           ()           => get('/career/ranked'),
-    documents:        (id)         => get(`/career/${id}/documents`),
-    deleteDocument:   (cId, dId)   => del(`/career/${cId}/documents/${dId}`),
-    uploadResume:     (formData)   => fetch('/api/career/resume', { method: 'POST', body: formData }).then(r => r.json()),
-    evaluate:         (body)       => post('/career/evaluate', body),
-    evaluations:      ()           => get('/career/evaluations'),
-    evaluation:       (id)         => get(`/career/evaluations/${id}`),
-    deleteEvaluation: (id)         => del(`/career/evaluations/${id}`),
-    tailoredResume:   (id)         => post(`/career/tailored-resume/${id}`, {}),
-    setApplyMode:     (id, mode)   => patch(`/career/evaluations/${id}/apply-mode`, { mode }),
-    setApplyStatus:   (id, status) => patch(`/career/evaluations/${id}/apply-status`, { status }),
-    apply:            (id)         => post(`/career/evaluations/${id}/apply`, {}),
-    markApplied:      (id)         => post(`/career/evaluations/${id}/mark-applied`, {}),
-    pipeline:         ()           => get('/career/pipeline'),
-    profile:          ()           => get('/career/profile'),
-    updateProfile:    (data)       => put('/career/profile', data),
-    resumesLibrary:   ()           => get('/career/resumes-library'),
-    autoApplyRun:     (body = {})  => post('/career/auto-apply/run', body),
-    autoApplyOne:     (id, body = {}) => post(`/career/auto-apply/${id}`, body),
-    autoApplyDirect:  (body)       => post('/career/auto-apply-direct', body),
-    autoApplyResumePreview: (jobUrls) => post('/career/auto-apply/resume-preview', { jobUrls }),
-    downloadUrl:      (id)         => `/api/career/download/${id}`,
-    scanPortals:      ()           => post('/career/scan-portals', {}),
-    batchEvaluate:    (urls)       => post('/career/batch-evaluate', { urls }),
-    tracker:          ()           => get('/career/tracker'),
-    reports:          ()           => get('/career/reports'),
-    reportUrl:        (filename)   => `/api/career/reports/${filename}`,
-    reportHtmlUrl:    (evalId)     => `/api/career/evaluations/${evalId}/report.html`,
+    resume: async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return { hasResume: false }
+
+        const { data } = await supabase.storage
+          .from('resumes')
+          .list(`${user.id}`)
+
+        return { hasResume: data && data.length > 0, name: 'resume.pdf' }
+      } catch {
+        return { hasResume: false }
+      }
+    },
+
+    uploadResume: async (file) => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) throw new Error('Not authenticated')
+
+        const { data, error } = await supabase.storage
+          .from('resumes')
+          .upload(`${user.id}/resume.pdf`, file, { upsert: true })
+
+        if (error) throw error
+        return { success: true }
+      } catch (err) {
+        return { success: false, error: err.message }
+      }
+    },
+
+    evaluate: (body) => apiCall('/career/evaluate', { method: 'POST', body }),
+
+    pipeline: async () => {
+      const { data: evaluations } = await supabase
+        .from('evaluations')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      const columns = {}
+      ;['not_started', 'opened', 'submitted', 'queued', 'responded', 'interview', 'offer', 'rejected'].forEach(status => {
+        columns[status] = {
+          label: status,
+          items: evaluations?.filter(e => e.apply_status === status) || [],
+        }
+      })
+
+      return { columns, total: evaluations?.length || 0, totals: columns }
+    },
+
+    setApplyStatus: async (id, status) => {
+      const { data } = await supabase
+        .from('evaluations')
+        .update({ apply_status: status, updated_at: new Date() })
+        .eq('id', id)
+      return data?.[0] || {}
+    },
+
+    ranked: async () => {
+      const { data } = await supabase
+        .from('evaluations')
+        .select('*')
+        .order('grade', { ascending: false })
+        .limit(50)
+      return { applications: data || [] }
+    },
   },
 
   automations: {
-    // SSE via POST — returns raw Response for caller to stream
-    linkedinFinder: (body) => fetch('/api/automations/linkedin-finder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    aiSearch:       (body) => fetch('/api/automations/ai-search',       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    autoApply:      (body) => fetch('/api/automations/auto-apply',      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-    getLogs:        (id)   => get(`/automations/logs/${id}`),
-    getScheduled:   ()     => get('/automations/scheduled'),
-    setScheduled:   (data) => post('/automations/scheduled', data),
-    deleteScheduled:(id)   => del(`/automations/scheduled/${id}`),
+    linkedinFinder: (body) => apiCall('/automations/linkedin-finder', { method: 'POST', body }),
+    aiSearch: (body) => apiCall('/automations/ai-search', { method: 'POST', body }),
+    autoApply: (body) => apiCall('/automations/auto-apply', { method: 'POST', body }),
   },
-
-  prospects: {
-    list:        (params = {}) => get(`/prospects?${new URLSearchParams(params)}`),
-    stats:       ()            => get('/prospects/stats'),
-    discover:    (mode, limit) => post('/prospects/discover', { mode, limit }),
-    addCompany:  (companyName, companyType) => post('/prospects/add-company', { companyName, companyType }),
-    generate:    (id, extraContext = '') => post(`/prospects/${id}/generate`, { extraContext }),
-    findEmail:   (id) => post(`/prospects/${id}/find-email`, {}),
-    verifyEmail: (id) => post(`/prospects/${id}/verify-email`, {}),
-    update:      (id, data) => put(`/prospects/${id}`, data),
-    delete:      (id) => del(`/prospects/${id}`),
-  },
-};
+}

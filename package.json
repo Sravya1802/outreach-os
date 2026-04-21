@@ -1,0 +1,20 @@
+{
+  "name": "outreach-os",
+  "description": "AI-powered job search & outreach automation platform",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm install --prefix frontend && npm install --prefix backend",
+    "dev": "concurrently \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "dev:backend": "npm run dev --prefix backend",
+    "build:frontend": "npm run build --prefix frontend",
+    "build": "npm run build:frontend",
+    "lint": "npm run lint --prefix frontend",
+    "preview": "npm run preview --prefix frontend",
+    "setup": "bash setup.sh"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
+  }
+}

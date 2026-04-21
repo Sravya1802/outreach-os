@@ -1,327 +1,432 @@
 # OutreachOS Deployment Guide
 
-## Pre-Deployment Checklist
-
-### ✅ Code Quality
-- [x] ESLint errors reduced from 127 → 53
-- [x] React Hooks violations fixed
-- [x] Dead code removed (11 components)
-- [x] Shared utilities extracted
-- [x] Backend logging configured
-- [x] Database indexes added
-
-### ✅ Auto-Apply System
-- [x] Playwright-based form filler implemented
-- [x] Support for Greenhouse, Lever, Ashby ATS
-- [x] Resume tailoring integrated
-- [x] Error handling for captcha/login walls
-- [x] Status tracking (queued → submitted → error)
-- [x] Attempt counter added
-
-### ✅ Environment Setup
-- [x] .env.example created with all variables
-- [x] Config validation implemented
-- [x] Logger (Pino) integrated
-- [x] Validation middleware ready
-- [x] Docker Compose configured
+**Architecture:** React Frontend (Vercel) + Vercel Serverless Functions + Supabase PostgreSQL
 
 ---
 
-## GitHub Setup
+## Quick Start (15 minutes)
 
-### 1. Initialize Repository
+### 1. Supabase Setup
 ```bash
-cd /Users/lakshmisravyarachakonda/VS\ CODE/email\ tracker
+# Go to https://supabase.com and create a new project
+# Follow SUPABASE_SETUP.md to:
+# - Create database tables (SQL schema)
+# - Get credentials (URL, anon key, service role key)
+```
+
+### 2. Environment Variables
+```bash
+cp .env.example .env
+
+# Edit .env with:
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=eyJ...
+GEMINI_API_KEY=your_key
+# ... add other API keys
+```
+
+### 3. Test Locally
+```bash
+npm run install:all
+npm run dev
+# Frontend: http://localhost:5173
+# Backend: http://localhost:3001
+```
+
+### 4. Deploy to Vercel
+```bash
+# Push to GitHub
+git add .
+git commit -m "Deploy: Supabase + Vercel"
+git push origin main
+
+# Go to https://vercel.com/new
+# Connect your GitHub repo
+# Add environment variables (from .env)
+# Deploy!
+```
+
+---
+
+## Pre-Deployment Checklist
+
+### ✅ Code Quality
+- [x] ESLint errors fixed (127 → 53 remaining)
+- [x] React Hooks violations resolved
+- [x] Dead code removed (11 components)
+- [x] Shared utilities extracted
+- [x] Backend services integrated into API functions
+
+### ✅ Architecture
+- [x] Frontend: React + Vite deployed on Vercel CDN
+- [x] Backend: Serverless functions on Vercel (`/api/*`)
+- [x] Database: PostgreSQL on Supabase (persistent)
+- [x] API Client: Dual approach (Supabase queries + function calls)
+
+### ✅ Integrations
+- [x] jobEvaluator service imported
+- [x] ai.js (email generation) integrated
+- [x] autoApplier (Playwright) connected
+- [x] creditChecker service integrated
+- [x] All API functions properly typed
+
+### ✅ Environment Setup
+- [x] `.env.example` created with Supabase vars
+- [x] `vercel.json` configured with function settings
+- [x] `SUPABASE_SETUP.md` with complete SQL schema
+- [x] Root `package.json` with workspace scripts
+
+---
+
+## Detailed Deployment Steps
+
+### Step 1: Supabase Setup (5 minutes)
+
+**1a. Create Project**
+```bash
+# Visit https://supabase.com/dashboard
+# Click "New Project"
+# Fill in:
+# - Project name: outreach-os
+# - Password: strong password (save it!)
+# - Region: closest to you
+# - Pricing: Free tier
+# Click "Create new project"
+# Wait ~2 minutes for initialization
+```
+
+**1b. Get Credentials**
+```bash
+# In Supabase dashboard:
+# Settings > API (left sidebar)
+# Copy and paste into .env:
+
+SUPABASE_URL=https://xxxxxxxxxxxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+**1c. Create Database Tables**
+```bash
+# In Supabase dashboard:
+# SQL Editor > New Query
+# Paste the entire SQL schema from SUPABASE_SETUP.md
+# Click "Run"
+# Verify all tables created (Table Editor on left sidebar)
+```
+
+### Step 2: Local Development (5 minutes)
+
+```bash
+# Install dependencies
+npm run install:all
+
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your credentials
+# Minimum required:
+# - SUPABASE_URL
+# - SUPABASE_SERVICE_ROLE_KEY
+# - VITE_SUPABASE_URL
+# - VITE_SUPABASE_ANON_KEY
+# - GEMINI_API_KEY
+
+# Start dev servers
+npm run dev
+# Frontend: http://localhost:5173
+# Backend: http://localhost:3001 (if running Express locally)
+```
+
+### Step 3: Test Locally (5 minutes)
+
+```bash
+# Browser: http://localhost:5173
+# Open DevTools (F12)
+
+# Test flows:
+# 1. Profile page → fill user profile
+# 2. Career Ops → evaluate a test job URL
+# 3. Check console for API errors
+# 4. Verify data appears in Supabase dashboard
+```
+
+### Step 4: Push to GitHub
+
+```bash
+# Initialize git (if not already done)
 git init
 git config user.name "Your Name"
 git config user.email "your.email@gmail.com"
-```
 
-### 2. Create .gitignore
-```bash
+# Create .gitignore
 cat > .gitignore << 'EOF'
-# Dependencies
 node_modules/
-package-lock.json
-yarn.lock
-
-# Environment
 .env
 .env.local
-.env.*.local
-
-# Build outputs
 dist/
 build/
-.next/
-
-# Runtime
-data/
+.DS_Store
 *.log
-.DS_Store
-
-# IDE
-.vscode/
 .idea/
-*.swp
-*.swo
-
-# Testing
-coverage/
-.nyc_output/
-
-# OS
-.DS_Store
-Thumbs.db
+.vscode/
 EOF
-```
 
-### 3. Create Initial Commit
-```bash
+# Commit and push
 git add .
-git commit -m "Initial commit: OutreachOS full-stack refactor
+git commit -m "Initial commit: OutreachOS with Supabase + Vercel
 
-- Fixed 58% of ESLint errors (127 → 53)
-- Removed 11 dead components
-- Extracted shared utilities
-- Added database indexes
-- Integrated Pino logging
-- Set up validation middleware
-- Auto-apply with Playwright integrated
+- Migrated from SQLite to Supabase PostgreSQL
+- Converted Express backend to Vercel serverless functions
+- Integrated jobEvaluator, ai.js, autoApplier, creditChecker
+- Fixed ESLint errors and React Hooks violations
 - Ready for production deployment"
-```
 
-### 4. Add Remote & Push to GitHub
-```bash
-# Create repo on GitHub first at github.com/username/outreacha-os
-git remote add origin https://github.com/YOUR_USERNAME/outreacha-os.git
+# Create repo on GitHub first at github.com/YOUR_USERNAME/outreach-os
+git remote add origin https://github.com/YOUR_USERNAME/outreach-os.git
 git branch -M main
 git push -u origin main
 ```
 
+### Step 5: Deploy to Vercel (3 minutes)
+
+**5a. Connect Repository**
+```bash
+# Visit https://vercel.com/new
+# Click "Import Git Repository"
+# Find and select your GitHub repo
+# Click "Import"
+```
+
+**5b. Configure Project**
+```
+Framework Preset: Vite
+Build Command: npm run build
+Install Command: npm install
+Output Directory: frontend/dist
+Root Directory: ./ (or leave blank)
+```
+
+**5c. Add Environment Variables**
+In Vercel dashboard → Settings > Environment Variables
+
+Add all variables from your `.env`:
+```
+SUPABASE_URL
+SUPABASE_SERVICE_ROLE_KEY
+VITE_SUPABASE_URL
+VITE_SUPABASE_ANON_KEY
+GEMINI_API_KEY
+ANTHROPIC_API_KEY (optional)
+OPENAI_API_KEY (optional)
+HUNTER_API_KEY (optional)
+APIFY_API_TOKEN (optional)
+APOLLO_API_KEY (optional)
+PROSPEO_API_KEY (optional)
+AI_PROVIDER=gemini
+```
+
+**5d. Deploy**
+```bash
+# Click "Deploy" button
+# Vercel will build and deploy
+# Deployment URL: https://outreach-os-xxxxx.vercel.app
+```
+
 ---
 
-## Vercel Deployment
+## Post-Deployment Verification
 
-### Frontend Deployment
-
-#### 1. Connect GitHub to Vercel
-- Go to https://vercel.com/new
-- Import GitHub repository
-- Select `frontend` as root directory
-- Environment variables:
-  - `VITE_API_URL=https://api.yourdomain.com`
-
-#### 2. Configure Build
-- Framework: Vite
-- Build command: `npm run build`
-- Install command: `npm install`
-- Output directory: `dist`
-
-#### 3. Deploy
+### Test Health Endpoint
 ```bash
-# Vercel auto-deploys on push to main
-# Or manually trigger:
-vercel --prod
+curl https://yourapp.vercel.app/api/health
+# Should return: { "status": "ok", ... }
 ```
 
-**Frontend URL:** `https://outreach-os.vercel.app`
+### Test in Browser
+```bash
+# Visit https://yourapp.vercel.app
+# Open DevTools > Console (F12)
+# No errors should appear
+# Test profile, evaluation, email generation
+```
+
+### Check Supabase
+```bash
+# Vercel app writes to Supabase
+# Verify in Supabase dashboard:
+# - Table Editor > evaluations
+# - Should see test data from your actions
+```
+
+### Monitor Vercel Logs
+```bash
+# Dashboard > Deployments
+# Click latest deployment
+# View "Logs" tab for any errors
+```
 
 ---
 
-### Backend Deployment (Alternative: Railway/Heroku/Fly.io)
+## API Endpoints (After Deployment)
 
-Since Vercel is serverless (no persistent storage for SQLite), backend needs dedicated hosting:
+All available at `https://yourapp.vercel.app/api/*`:
 
-#### Option 1: Railway (Recommended)
-```bash
-# Install Railway CLI
-npm install -g @railway/cli
-
-# Login
-railway login
-
-# Create service
-railway init
-
-# Add variables
-railway variable add PORT=3001
-railway variable add GEMINI_API_KEY=...
-railway variable add DATABASE_URL=file:/data/outreach.db
-
-# Deploy
-railway up
-```
-
-#### Option 2: Fly.io
-```bash
-# Install Fly CLI
-brew install flyctl
-
-# Login
-fly auth login
-
-# Create app
-fly launch
-
-# Deploy
-fly deploy
-```
-
-#### Option 3: Heroku (deprecated, but still works)
-```bash
-heroku login
-heroku create outreacha-os-api
-git push heroku main
-```
+- `GET /api/health` — Health check
+- `POST /api/career/evaluate` — Evaluate job against resume
+- `POST /api/generate/email` — Generate outreach email
+- `POST /api/automations/auto-apply` — Run auto-apply queue (SSE)
+- `GET /api/credits/status` — Check API credit status
 
 ---
 
 ## Environment Variables (Production)
 
-### Critical (Required)
+### Supabase (Required)
 ```
-PORT=3001
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your_key
+SUPABASE_URL=https://xxxxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJ... (backend only)
+VITE_SUPABASE_URL=https://xxxxx.supabase.co (frontend)
+VITE_SUPABASE_ANON_KEY=eyJ... (frontend)
 ```
 
-### APIs (Optional but recommended)
+### AI Providers (At least one required)
 ```
-ANTHROPIC_API_KEY=your_key
-APOLLO_API_KEY=your_key
-APIFY_API_TOKEN=your_token
+GEMINI_API_KEY=AIzaSy... (recommended, free tier available)
+ANTHROPIC_API_KEY=sk-ant-... (optional)
+OPENAI_API_KEY=sk-proj-... (optional)
+```
+
+### Data APIs (Optional)
+```
 HUNTER_API_KEY=your_key
-LINKEDIN_SESSION_COOKIE=your_cookie
+APIFY_API_TOKEN=your_token
+APOLLO_API_KEY=your_key
+PROSPEO_API_KEY=your_key
 ```
 
-### Production Settings
+### Settings
 ```
-CORS_ORIGINS=https://outreach-os.vercel.app
-NODE_ENV=production
-LOG_LEVEL=info
+AI_PROVIDER=gemini (primary AI provider)
 ```
-
----
-
-## Security Hardening Checklist
-
-- [x] Rate limiting configured (200 req/min, reduce to 60)
-- [x] CORS restricted to localhost + production domains
-- [ ] HTTPS enforced (Vercel handles this)
-- [ ] Database path secured (don't expose in .env)
-- [ ] API keys rotated before production
-- [ ] Input validation middleware ready (Zod schemas)
-- [ ] Error messages don't leak sensitive info
-- [ ] Sensitive logs redacted in production
-
----
-
-## Post-Deployment Testing
-
-### 1. Health Check
-```bash
-curl https://api.yourdomain.com/api/health
-# Should return: { status: 'ok', ... }
-```
-
-### 2. Test Core Features
-- [ ] Login & authentication
-- [ ] Company search
-- [ ] Job evaluation
-- [ ] Resume upload
-- [ ] Auto-apply queue
-- [ ] Report generation
-
-### 3. Monitor Logs
-- Check Vercel deployment logs
-- Check backend service logs
-- Check database for errors
-
-### 4. Verify Auto-Apply
-- [ ] Evaluate a test job
-- [ ] Queue for auto-apply
-- [ ] Check browser automation works
-- [ ] Verify form filling
-- [ ] Check status updates in DB
-
----
-
-## Monitoring & Maintenance
-
-### Uptime Monitoring
-```bash
-# Add Vercel monitoring
-# Set up health check pings to /api/health
-# Use: pingdom.com or similar
-```
-
-### Log Aggregation
-- Vercel logs: Dashboard
-- Backend logs: Use Pino (configured)
-- Database: Monitor `data/outreach.db` file size
-
-### Backup Strategy
-- [ ] Daily backup of `backend/data/outreach.db`
-- [ ] Backup to AWS S3 or similar
-- [ ] Test restore process monthly
-
-### Update Schedule
-- Check dependencies monthly: `npm outdated`
-- Security patches: ASAP
-- Major updates: Quarterly with testing
 
 ---
 
 ## Troubleshooting
 
-### Auto-Apply Not Running
+### "SUPABASE_URL undefined"
+**Solution**: Check Vercel Environment Variables match `.env`
+
+### "Database connection error"
+**Solution**: 
+1. Verify Supabase project is active
+2. Verify credentials are correct (copy from Supabase dashboard Settings > API)
+3. Check that tables were created (Supabase > Table Editor)
+
+### "API keys returning 401"
+**Solution**: Verify keys are correct and active in each provider's dashboard
+
+### Build fails on Vercel
+**Solution**: 
+1. Test build locally: `npm run build`
+2. Check package.json scripts are correct
+3. View Vercel deployment logs for specific errors
+
+### Frontend loads but API calls fail
+**Solution**: 
+1. Check Network tab in DevTools
+2. Verify API URL is correct
+3. Check CORS (should be handled automatically by Vercel)
+4. Check env vars are set in Vercel dashboard
+
+---
+
+## Monitoring & Maintenance
+
+### Vercel Dashboard
+- **Deployments**: View build logs, redeploy, rollback
+- **Functions**: Monitor serverless function metrics
+- **Analytics**: Monitor traffic, errors, response times
+
+### Supabase Dashboard
+- **Table Editor**: Browse and edit data
+- **SQL Editor**: Run custom queries
+- **Statistics**: Monitor DB size, query performance
+- **Logs**: View query logs (Pro plan)
+
+### Setting Up Alerts
+1. Vercel: Enable "Monitor with UptimeRobot"
+2. Supabase: Enable backup emails (Pro plan)
+3. Add monitoring service like Pingdom for uptime checks
+
+---
+
+## Rollback
+
+If deployment has issues:
+
+**Option 1: Vercel Dashboard**
+1. Go to Deployments
+2. Find last working deployment
+3. Click "..." → "Promote to Production"
+
+**Option 2: Git**
 ```bash
-# Check Playwright is installed
-npm list puppeteer playwright
-
-# Verify browser cache
-rm -rf ~/.cache/ms-playwright
-
-# Test locally first
-node backend/services/autoApplier.js
-```
-
-### Database Lock Issues
-```sql
--- Check open connections
-SELECT * FROM pragma_database_list;
-
--- Vacuum database
-VACUUM;
-```
-
-### CORS Errors in Frontend
-```javascript
-// Update CORS_ORIGINS in production .env
-// Frontend must match deployed URL
+git revert <bad-commit-hash>
+git push origin main
+# Vercel auto-redeploys
 ```
 
 ---
 
-## Next Steps After Deploy
+## Scaling Considerations
 
-1. **Monitor for 48 hours** - Watch error logs
-2. **Test auto-apply thoroughly** - Use test jobs first
-3. **Collect feedback** - User testing phase
-4. **Security audit** - Run security scanner
-5. **Load testing** - Verify scales under load
-6. **Backup automation** - Set up daily DB backups
+### Free Tier Limits
+- Vercel: 100 GB bandwidth/month, up to 60s function timeout
+- Supabase Free: 2 GB database, 2 GB file storage, 50,000 monthly active users
 
----
-
-## Support & Documentation
-
-- **Frontend**: See `/frontend/README.md`
-- **Backend**: See `/backend/README.md`
-- **Database**: See `/backend/db.js` schema
-- **Auto-Apply**: See `/backend/services/autoApplier.js`
+### For Higher Usage
+1. Upgrade Vercel plan ($20/month)
+2. Upgrade Supabase plan ($25/month)
+3. Add caching layer (Vercel Edge Caching)
+4. Optimize database queries with indexes (already added)
 
 ---
 
-Generated: 2026-04-20
+## Security Checklist
+
+- [x] Environment variables not committed (.gitignore)
+- [x] Supabase service role key used server-side only
+- [x] Frontend uses anon key (read-only by default)
+- [x] API functions validate inputs
+- [x] HTTPS enforced (Vercel default)
+- [x] Rate limiting configured in vercel.json
+- [ ] Enable RLS on Supabase tables (for production)
+- [ ] Set up CORS policy (as needed)
+
+---
+
+## Next Steps
+
+1. ✅ Set up Supabase project
+2. ✅ Deploy to Vercel
+3. Monitor error logs for 48 hours
+4. Test auto-apply with real job URLs
+5. Collect user feedback
+6. Enable advanced features (RLS, backups)
+7. Set up monitoring alerts
+
+---
+
+## Documentation
+
+- **SUPABASE_SETUP.md** — Detailed Supabase configuration
+- **frontend/README.md** — Frontend architecture
+- **backend/services/** — Service layer documentation
+- **api/** — Vercel function documentation
+
+---
+
+Last Updated: 2026-04-21
