@@ -78,7 +78,7 @@ export const api = {
   },
 
   credits: {
-    status: () => apiCall('/credits/status'),
+    status: async () => ({ credits: 999, plan: 'hobby' }),
   },
 
   companies: {
@@ -123,15 +123,21 @@ export const api = {
       return data || {}
     },
 
-    import: (slugs) => apiCall('/yc/import', { method: 'POST', body: { slugs } }),
-    importAll: (filters) => apiCall('/yc/import-all', { method: 'POST', body: { filters } }),
-    scrapeWaas: () => apiCall('/yc/scrape-waas', { method: 'POST', body: {} }),
+    import: (slugs) => apiCall('/yc/index', { method: 'POST', body: { action: 'import', slugs } }),
+    importAll: (filters) => apiCall('/yc/index', { method: 'POST', body: { action: 'import-all', filters } }),
+    scrapeWaas: () => apiCall('/yc/index', { method: 'POST', body: { action: 'scrape-waas' } }),
   },
 
   generate: {
     email: (body) => apiCall('/generate/email', { method: 'POST', body }),
     linkedin: (body) => apiCall('/generate/linkedin', { method: 'POST', body }),
-    both: (body) => apiCall('/generate/both', { method: 'POST', body }),
+    both: async (body) => {
+      const [emailRes, linkedinRes] = await Promise.all([
+        apiCall('/generate/email', { method: 'POST', body }),
+        apiCall('/generate/linkedin', { method: 'POST', body }),
+      ])
+      return { email: emailRes.email, linkedin: linkedinRes.linkedin }
+    },
   },
 
   unified: {
