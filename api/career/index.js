@@ -148,6 +148,7 @@ async function fetchWorkdayRoles(slug, roleType) {
   if (!slug) return []
   const searchText = roleType === 'fulltime' ? 'software engineer' : 'intern'
   const results = []
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
   for (const sub of ['wd1', 'wd5', 'wd12', 'wd3', 'wd2']) {
     const tenants = ['External_Career_Site', 'External', 'Careers', `${slug}_careers`]
     for (const tenant of tenants) {
@@ -155,20 +156,28 @@ async function fetchWorkdayRoles(slug, roleType) {
         const url = `https://${slug}.${sub}.myworkdayjobs.com/wday/cxs/${slug}/${tenant}/jobs`
         const r = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-          body: JSON.stringify({ limit: 20, offset: 0, searchText, appliedFacets: {} }),
-          signal: AbortSignal.timeout(6000),
+          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'User-Agent': UA },
+          body: JSON.stringify({ limit: 100, offset: 0, searchText, appliedFacets: {} }),
+          signal: AbortSignal.timeout(8000),
         })
         if (!r.ok) continue
         const d = await r.json()
-        for (const j of (d.jobPostings || [])) {
-          const cls = classifyRoleType(j.title || '')
-          if (!roleTypeMatches(cls, roleType)) continue
+        const postings = d.jobPostings || []
+        if (postings.length === 0) continue
+        // Trust Workday's text search when it returns results — use a softer
+        // filter. For intern: require "intern" or "co-op" literally in title.
+        // For fulltime: require a CS-role keyword and reject obvious non-CS.
+        for (const j of postings) {
+          const title = j.title || ''
+          const ok = roleType === 'intern'
+            ? /\binterns?\b|\binternship\b|\bco-?op\b/i.test(title) && !NON_CS_ROLE.test(title)
+            : CS_ROLE_KW.test(title) && !NON_CS_ROLE.test(title) && !INTERN_KW.test(title)
+          if (!ok) continue
           results.push({
-            title: j.title,
+            title,
             location: j.locationsText || '',
             source: 'workday',
-            apply_url: `https://${slug}.${sub}.myworkdayjobs.com/${tenant}/job/${j.externalPath || ''}`,
+            apply_url: `https://${slug}.${sub}.myworkdayjobs.com/${tenant}/job${j.externalPath || ''}`,
           })
         }
         if (results.length) return results
@@ -181,30 +190,51 @@ async function fetchWorkdayRoles(slug, roleType) {
 // ── Apple's internal jobs API ───────────────────────────────────────────────
 async function fetchAppleRoles(roleType) {
   const out = []
-  const query = roleType === 'fulltime' ? 'software engineer' : 'internship'
-  try {
-    const r = await fetch('https://jobs.apple.com/api/role/search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-      body: JSON.stringify({ query, filters: { locations: ['united-states-USA'] }, page: 1, locale: 'en-us', sort: 'newest' }),
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!r.ok) return out
-    const d = await r.json()
-    const items = d?.searchResults || d?.res?.searchResults || []
-    for (const it of items.slice(0, 20)) {
-      const title = it.postingTitle || it.transformedPostingTitle
-      const cls = classifyRoleType(title || '')
-      if (!roleTypeMatches(cls, roleType)) continue
-      const slug = (it.transformedPostingTitle || title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
-      out.push({
-        title,
-        location: Array.isArray(it.locations) ? (it.locations[0]?.name || '') : '',
-        source: 'apple',
-        apply_url: `https://jobs.apple.com/en-us/details/${it.id || it.positionId}/${slug}`,
+  const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+  const endpoints = [
+    'https://jobs.apple.com/api/role/search',
+    'https://jobs.apple.com/api/v1/search',
+  ]
+  const body = JSON.stringify({
+    query: roleType === 'fulltime' ? 'software engineer' : 'internship',
+    filters: { locations: ['united-states-USA'] },
+    page: 1, locale: 'en-us', sort: 'newest',
+  })
+  for (const url of endpoints) {
+    try {
+      const r = await fetch(url, {
+        method: 'POST',
+        redirect: 'follow',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          'User-Agent': UA,
+          'Origin': 'https://jobs.apple.com',
+          'Referer': 'https://jobs.apple.com/en-us/search',
+        },
+        body,
+        signal: AbortSignal.timeout(9000),
       })
-    }
-  } catch {}
+      if (!r.ok) continue
+      const d = await r.json().catch(() => null)
+      const items = d?.searchResults || d?.res?.searchResults || []
+      for (const it of items.slice(0, 30)) {
+        const title = it.postingTitle || it.transformedPostingTitle
+        if (!title) continue
+        const isIntern = /\bintern/i.test(title)
+        if (roleType === 'intern' && !isIntern) continue
+        if (roleType === 'fulltime' && isIntern) continue
+        const slug = (it.transformedPostingTitle || title).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+        out.push({
+          title,
+          location: Array.isArray(it.locations) ? (it.locations[0]?.name || '') : '',
+          source: 'apple',
+          apply_url: `https://jobs.apple.com/en-us/details/${it.id || it.positionId}/${slug}`,
+        })
+      }
+      if (out.length) return out
+    } catch {}
+  }
   return out
 }
 
