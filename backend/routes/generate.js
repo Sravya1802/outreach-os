@@ -1,20 +1,19 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { one, run } from '../db.js';
 import { generateOutreach, generateWaaSMessage, generateCoverLetter } from '../services/ai.js';
 
 const router = Router();
 
-// Get contact + company info, gracefully handles missing company
-function getContactInfo(contactId) {
-  return db.prepare(`
+async function getContactInfo(contactId) {
+  return one(`
     SELECT contacts.*,
            COALESCE(companies.name, contacts.name) as company_name,
            COALESCE(companies.role, '') as company_role,
            COALESCE(companies.stage, 'startup') as company_stage
     FROM contacts
     LEFT JOIN companies ON contacts.company_id = companies.id
-    WHERE contacts.id = ?
-  `).get(contactId);
+    WHERE contacts.id = $1
+  `, [contactId]);
 }
 
 // Generate cold email
@@ -25,42 +24,27 @@ router.post('/email', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = getContactInfo(contactId);
+      const contact = await getContactInfo(contactId);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
-      name = contact.name;
-      title = contact.title;
-      company = contact.company_name;
-      stage = contact.company_stage;
-      role = contact.company_role;
+      name = contact.name; title = contact.title; company = contact.company_name;
+      stage = contact.company_stage; role = contact.company_role;
     } else {
-      // Allow generating without a DB contact
-      name = recipientName;
-      title = recipientTitle;
-      company = companyName;
-      stage = 'startup';
-      role = '';
+      name = recipientName; title = recipientTitle; company = companyName;
+      stage = 'startup'; role = '';
     }
 
     const result = await generateOutreach({
       type: 'cold_email',
-      recipientName: name,
-      recipientTitle: title,
-      companyName: company,
-      companyStage: stage,
-      role,
-      extraContext,
-      hasApplied,
-      rolesAvailable,
-      specificAchievement,
-      position,
-      isRecruiter,
+      recipientName: name, recipientTitle: title, companyName: company,
+      companyStage: stage, role, extraContext, hasApplied, rolesAvailable,
+      specificAchievement, position, isRecruiter,
     });
 
     if (contactId) {
-      db.prepare(`
+      await run(`
         INSERT INTO outreach (contact_id, type, subject, body, status)
-        VALUES (?, 'email', ?, ?, 'draft')
-      `).run(contactId, result.subject, result.body);
+        VALUES ($1, 'email', $2, $3, 'draft')
+      `, [contactId, result.subject, result.body]);
     }
 
     res.json(result);
@@ -78,41 +62,27 @@ router.post('/linkedin', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = getContactInfo(contactId);
+      const contact = await getContactInfo(contactId);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
-      name = contact.name;
-      title = contact.title;
-      company = contact.company_name;
-      stage = contact.company_stage;
-      role = contact.company_role;
+      name = contact.name; title = contact.title; company = contact.company_name;
+      stage = contact.company_stage; role = contact.company_role;
     } else {
-      name = recipientName;
-      title = recipientTitle;
-      company = companyName;
-      stage = 'startup';
-      role = '';
+      name = recipientName; title = recipientTitle; company = companyName;
+      stage = 'startup'; role = '';
     }
 
     const result = await generateOutreach({
       type: 'linkedin',
-      recipientName: name,
-      recipientTitle: title,
-      companyName: company,
-      companyStage: stage,
-      role,
-      extraContext,
-      hasApplied,
-      rolesAvailable,
-      specificAchievement,
-      position,
-      isRecruiter,
+      recipientName: name, recipientTitle: title, companyName: company,
+      companyStage: stage, role, extraContext, hasApplied, rolesAvailable,
+      specificAchievement, position, isRecruiter,
     });
 
     if (contactId) {
-      db.prepare(`
+      await run(`
         INSERT INTO outreach (contact_id, type, subject, body, status)
-        VALUES (?, 'linkedin', NULL, ?, 'draft')
-      `).run(contactId, result.message || result.body);
+        VALUES ($1, 'linkedin', NULL, $2, 'draft')
+      `, [contactId, result.message || result.body]);
     }
 
     res.json(result);
@@ -130,19 +100,13 @@ router.post('/both', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = getContactInfo(contactId);
+      const contact = await getContactInfo(contactId);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
-      name = contact.name;
-      title = contact.title;
-      company = contact.company_name;
-      stage = contact.company_stage;
-      role = contact.company_role;
+      name = contact.name; title = contact.title; company = contact.company_name;
+      stage = contact.company_stage; role = contact.company_role;
     } else {
-      name = recipientName;
-      title = recipientTitle;
-      company = companyName;
-      stage = 'startup';
-      role = '';
+      name = recipientName; title = recipientTitle; company = companyName;
+      stage = 'startup'; role = '';
     }
 
     const params = { recipientName: name, recipientTitle: title, companyName: company, companyStage: stage, role, extraContext, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter };
@@ -153,8 +117,8 @@ router.post('/both', async (req, res) => {
     ]);
 
     if (contactId) {
-      db.prepare(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES (?, 'email', ?, ?, 'draft')`).run(contactId, email.subject, email.body);
-      db.prepare(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES (?, 'linkedin', NULL, ?, 'draft')`).run(contactId, linkedin.message || linkedin.body);
+      await run(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES ($1, 'email', $2, $3, 'draft')`, [contactId, email.subject, email.body]);
+      await run(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES ($1, 'linkedin', NULL, $2, 'draft')`, [contactId, linkedin.message || linkedin.body]);
     }
 
     res.json({ email, linkedin });
@@ -172,11 +136,10 @@ router.post('/waas', async (req, res) => {
 
     const result = await generateWaaSMessage({ companyName, companyDescription, industry, ycBatch, contactName, extraContext });
 
-    // Optionally save to outreach table if contactId provided
     if (req.body.contactId) {
       try {
-        db.prepare("INSERT INTO outreach (contact_id, type, body, status) VALUES (?, 'waas', ?, 'draft')")
-          .run(req.body.contactId, result.message);
+        await run("INSERT INTO outreach (contact_id, type, body, status) VALUES ($1, 'waas', $2, 'draft')",
+          [req.body.contactId, result.message]);
       } catch (_) {}
     }
 
@@ -195,7 +158,7 @@ router.post('/cover-letter', async (req, res) => {
     let companyDescription = '';
 
     if (companyId) {
-      const company = db.prepare('SELECT * FROM jobs WHERE id = ?').get(companyId);
+      const company = await one('SELECT * FROM jobs WHERE id = $1', [companyId]);
       if (company) {
         companyName = company.name;
         companyDescription = company.description || company.wikipedia_summary || '';
