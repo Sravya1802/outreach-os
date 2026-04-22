@@ -1,0 +1,376 @@
+================================================================================
+ORACLE CLOUD SETUP - STEP BY STEP WALKTHROUGH
+================================================================================
+
+This file walks you through creating your Oracle Cloud account, spinning up
+a free 24 GB RAM VM, and getting SSH access to it.
+
+Time: ~45 minutes
+Cost: $0 (now and forever)
+
+
+================================================================================
+BEFORE YOU START
+================================================================================
+
+What you need:
+  - Your Mac
+  - A debit or credit card (for identity verification only, never charged)
+  - A phone that can receive SMS
+  - Terminal app (built into macOS; Spotlight search "Terminal")
+
+What we're doing:
+  1. Create Oracle Cloud account
+  2. Create a free virtual machine (VM) with 24 GB RAM
+  3. Get SSH access to that VM
+  4. Paste confirmation to the AI assistant
+
+Recommended home region: US Midwest (Chicago) — Chicago has better ARM availability than Ashburn and lower latency since you're local to it.
+  NOTE: The home region is PERMANENT. You cannot change it after signup.
+
+
+================================================================================
+STEP 1 - SIGN UP FOR ORACLE CLOUD FREE TIER (~15 min)
+================================================================================
+
+1.1 - Open the signup page
+    URL: https://www.oracle.com/cloud/free/
+    Click the big "Start for free" button.
+
+1.2 - Fill in the form
+
+    Field                 What to enter
+    -----                 -------------
+    Country/Territory     United States (or exact match to your card billing)
+    First Name            Your legal first name
+    Last Name             Your legal last name
+    Email                 Your primary email (you'll log in with this forever)
+    Customer Type         Individual
+    Cloud Account Name    Short, memorable (e.g. "yourname-free")
+                          This becomes part of your login URL
+    Home Region           US Midwest (Chicago)   <-- CRITICAL: CANNOT CHANGE LATER
+
+    Click "Continue verification"
+
+1.3 - Email verification
+    - Check your inbox for Oracle email
+    - Click the verification link
+    - It returns you to the signup form
+
+1.4 - Phone verification
+    - Enter your mobile number
+    - Receive SMS code
+    - Enter the code on the form
+
+1.5 - Payment verification (the tricky part)
+    - Add your debit or credit card
+    - Oracle makes a $0 authorization charge only
+    - Nothing beyond that will be charged on Always Free resources
+    - If there's a "Pay as you go" toggle, LEAVE IT OFF
+
+    IF YOUR CARD IS REJECTED (common issue):
+    - Try a different card
+    - Try a virtual card from your bank
+    - Try Privacy.com virtual card
+    - Try a different browser (Chrome extensions sometimes break Oracle's form)
+
+1.6 - Agree to T&Cs and submit
+    Oracle may show "Setting up your account" for 5-30 minutes.
+
+    YOU'LL RECEIVE AN EMAIL: "Your OCI account is ready"
+
+    IF ORACLE SAYS "MANUAL REVIEW" - this can take up to 24 hours.
+    Ping the AI assistant; we'll work on other phases while you wait.
+
+
+================================================================================
+STEP 2 - FIRST LOGIN TO ORACLE CLOUD CONSOLE (~2 min)
+================================================================================
+
+2.1 - Log in
+    URL: https://cloud.oracle.com
+    - Enter your Cloud Account Name (from step 1.2)
+    - Log in with your email + password
+
+    You'll land on the OCI dashboard. It looks cluttered - ignore 95% of it.
+
+2.2 - Bookmark this page
+    You'll come back here regularly.
+
+2.3 - Verify region
+    Top-right corner shows your current region.
+    It should say US Midwest (Chicago).
+    If not, change it using the region dropdown.
+
+
+================================================================================
+STEP 3 - GENERATE SSH KEY ON YOUR MAC (~3 min)
+================================================================================
+
+This key lets you log in to the VM. It's two files:
+  - Private key (you keep secret, never share)
+  - Public key (you upload to Oracle)
+
+3.1 - Open Terminal
+    Spotlight search: press Cmd+Space, type "Terminal", press Enter.
+
+3.2 - Check if you already have a key
+    Run this command:
+        ls -la ~/.ssh/
+
+    If you see files named "id_ed25519" and "id_ed25519.pub", you
+    already have a key. Skip to step 3.4.
+
+3.3 - Generate a new key
+    Run this command:
+        ssh-keygen -t ed25519 -C "oracle-vm"
+
+    When it asks for file location: press Enter (use default)
+    When it asks for passphrase: press Enter twice (no passphrase)
+
+3.4 - Copy public key to clipboard
+    Run this command:
+        cat ~/.ssh/id_ed25519.pub | pbcopy
+
+    Your public key is now in your clipboard. It starts with:
+        ssh-ed25519 AAAA...
+
+    And ends with:
+        oracle-vm
+
+    DO NOT SHARE THE PRIVATE KEY (~/.ssh/id_ed25519) WITH ANYONE, EVER.
+
+
+================================================================================
+STEP 4 - CREATE THE VM (~10 min)
+================================================================================
+
+4.1 - Start the create flow
+    In OCI Console:
+    - Click the hamburger menu (three lines, top-left)
+    - Compute -> Instances
+    - Click blue "Create instance" button
+
+4.2 - Basic info
+    Name: outreach-backend
+    Compartment: leave default (your-account (root))
+
+4.3 - Image and shape (THE IMPORTANT PART)
+
+    In the "Image and shape" section, click "Edit"
+
+    IMAGE:
+    - Click "Change image"
+    - Image source: Platform image
+    - Operating system: Canonical Ubuntu
+    - OS version: 22.04
+    - Click "Select image"
+
+    SHAPE:
+    - Click "Change shape"
+    - Instance type: Virtual machine
+    - Shape series: Ampere  (this is the ARM chip, free tier)
+    - Shape name: VM.Standard.A1.Flex
+    - A slider appears:
+        - Number of OCPUs: set to 4
+        - Amount of memory (GB): set to 24
+    - Click "Select shape"
+
+    You should see an "Always Free Eligible" badge.
+    If you don't, either the allocation is used or capacity is out - see STEP 5.
+
+4.4 - Networking
+    Leave defaults. Oracle auto-creates VCN with public subnet.
+
+    Just verify:
+    - Primary network: "Create new virtual cloud network" (auto-selected)
+    - Public IPv4 address: "Assign a public IPv4 address" is CHECKED
+
+4.5 - SSH keys
+    - Select "Paste public keys"
+    - Paste your public key (Cmd+V) - the one you copied in step 3.4
+
+4.6 - Boot volume
+    Leave default (50 GB). Or bump to 200 GB if you want more disk.
+
+4.7 - Create
+    Click "Create" button at the bottom.
+
+    Status will show PROVISIONING for ~2 minutes, then RUNNING.
+
+    IF YOU SEE "Out of host capacity" - see STEP 5.
+
+4.8 - Note the public IP
+    Once VM is RUNNING, scroll down on the VM details page.
+    Under "Instance access", copy the Public IPv4 address.
+    Looks like: 129.80.XX.XX
+
+    PASTE THIS TO THE AI ASSISTANT.
+
+
+================================================================================
+STEP 5 - ARM "OUT OF CAPACITY" FALLBACK (only if step 4.7 fails)
+================================================================================
+
+Don't panic. This is the #1 hurdle for Oracle Always Free users.
+Three fixes, in order of preference:
+
+5.1 - Try different availability domains
+    Oracle Chicago has 3 availability domains (AD-1, AD-2, AD-3).
+    Capacity varies between them.
+
+    Go back to "Create instance":
+    - Scroll to bottom, find "Advanced options"
+    - Placement -> Availability domain
+    - Try AD-2, then AD-3
+
+5.2 - Use the auto-retry script
+    A community tool retries VM creation every few minutes until
+    capacity frees up. Takes 30 min to 48 hours.
+
+    On your Mac:
+        brew install oci-cli
+        oci setup config
+        git clone https://github.com/hitrov/oci-arm-host-capacity.git
+        cd oci-arm-host-capacity
+        # Edit .env per README
+        npm install
+        npm start
+
+    If intimidating, ping the AI assistant for a line-by-line walkthrough.
+
+5.3 - Try a different region (nuclear option)
+    Your home region is permanent, but you can subscribe to a second
+    region if Ashburn stays full.
+    Governance & Administration -> Tenancy -> Region Management
+    Try Phoenix or Frankfurt.
+
+    IF NONE OF 5.1/5.2/5.3 WORK WITHIN A DAY - ping the AI assistant.
+    We pivot to GCP e2-micro + GitHub Actions for Playwright (more complex
+    but works).
+
+
+================================================================================
+STEP 6 - OPEN FIREWALL PORTS IN ORACLE (~5 min)
+================================================================================
+
+The VM is running, but Oracle blocks all inbound traffic except port 22
+(SSH). We need ports 80 and 443 open for HTTP/HTTPS.
+
+6.1 - Navigate to the Security List
+    - On VM details page, find "Primary VNIC" section
+    - Click the "Subnet" link (looks like "Public Subnet-<vcn-name>")
+    - On subnet page, find "Security Lists" section
+    - Click "Default Security List for vcn-xxxx"
+
+6.2 - Add ingress rules
+    - Stay on "Ingress Rules" tab
+    - Click "Add Ingress Rules"
+
+    First rule:
+        Stateless:              unchecked
+        Source Type:            CIDR
+        Source CIDR:            0.0.0.0/0
+        IP Protocol:            TCP
+        Source Port Range:      (leave blank)
+        Destination Port Range: 80
+        Description:            HTTP
+
+    Click "+ Another Ingress Rule"
+
+    Second rule:
+        Same as above but:
+        Destination Port Range: 443
+        Description:            HTTPS
+
+    Click "Add Ingress Rules"
+
+    You should now see 3 ingress rules total: 22 (SSH), 80 (HTTP), 443 (HTTPS).
+
+
+================================================================================
+STEP 7 - SSH INTO YOUR VM (~2 min)
+================================================================================
+
+7.1 - Open Terminal on your Mac
+
+7.2 - SSH command
+    Run this (replace <your-public-ip> with the IP from step 4.8):
+        ssh -i ~/.ssh/id_ed25519 ubuntu@<your-public-ip>
+
+    Example:
+        ssh -i ~/.ssh/id_ed25519 ubuntu@129.80.42.17
+
+7.3 - Accept the fingerprint
+    First time connecting, it shows:
+        The authenticity of host '129.80.42.17' can't be established.
+        ED25519 key fingerprint is SHA256:xxxxx
+        Are you sure you want to continue connecting (yes/no/[fingerprint])?
+
+    Type: yes
+    Press Enter.
+
+7.4 - You should see this prompt:
+        ubuntu@outreach-backend:~$
+
+    YOU'RE IN THE VM.
+
+7.5 - Paste confirmation to the AI assistant
+    Copy this exact line and send it:
+
+        VM ready. Public IP: <your-ip>. SSH works.
+        Prompt shows: ubuntu@outreach-backend:~$
+
+    That's the handoff. The assistant will then give you the next
+    command to run for Phase 2 (automated setup script).
+
+
+================================================================================
+YOUR CHECKLIST
+================================================================================
+
+Check each item as you complete it:
+
+  [ ] Oracle account created
+  [ ] Home region = US Midwest (Chicago)
+  [ ] Email and phone verified
+  [ ] Card added, not charged
+  [ ] Logged into OCI Console
+  [ ] SSH key generated on Mac
+  [ ] VM created with ARM Ampere, 4 OCPU, 24 GB RAM
+  [ ] VM shows "RUNNING"
+  [ ] Public IP noted
+  [ ] Firewall ports 80 and 443 opened in Security List
+  [ ] SSH into VM works, see ubuntu@outreach-backend:~$ prompt
+  [ ] Confirmation pasted to AI assistant
+
+
+================================================================================
+IF YOU GET STUCK
+================================================================================
+
+At any step, paste the AI assistant:
+  - Screenshot of what you see
+  - Any error message (copy the text)
+  - Which step number you're on
+
+Response within a few messages.
+
+
+================================================================================
+WHAT HAPPENS AFTER YOU COMPLETE PHASE 1
+================================================================================
+
+1. Assistant has already written oracle-setup.sh in the repo
+2. You get a one-line curl command to run on your VM
+3. That command installs everything automatically (~25 min)
+4. Your backend is live at https://your-subdomain.duckdns.org/api/health
+
+You'll also:
+  - Set up a DuckDNS subdomain (free, 2 min, assistant walks you through)
+  - Paste API keys into an env template for the setup script
+
+
+================================================================================
+END - ORACLE SETUP WALKTHROUGH
+================================================================================

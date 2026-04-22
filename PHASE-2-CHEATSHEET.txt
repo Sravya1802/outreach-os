@@ -1,0 +1,234 @@
+================================================================================
+PHASE 2 CHEATSHEET — run these commands once your VM is up
+================================================================================
+
+Assumes Phase 1 is complete:
+  - Oracle VM running (4 OCPU, 24 GB RAM, Ubuntu 22.04 ARM)
+  - Public IP noted
+  - Firewall ports 80 and 443 open in Oracle Security List
+  - SSH from your Mac works: ssh -i ~/.ssh/id_ed25519 ubuntu@<your-vm-ip>
+
+You'll spend ~30 min total. Most of it is watching the installer run.
+
+
+================================================================================
+STEP 2.0 — SUBSTITUTE YOUR VALUES
+================================================================================
+
+Throughout this file, replace these placeholders with your real values:
+
+  <VM_IP>               - Public IP from Oracle (like 129.80.42.17)
+  <DUCKDNS_SUBDOMAIN>   - Something you pick (e.g. "sravya-outreach")
+  <DUCKDNS_TOKEN>       - From the top of https://www.duckdns.org after login
+  <YOUR_EMAIL>          - Email for Let's Encrypt (SSL) notices
+
+
+================================================================================
+STEP 2.1 — SIGN UP FOR DUCKDNS (~2 min, your Mac browser)
+================================================================================
+
+DuckDNS gives you a free subdomain. We need it so Let's Encrypt can issue
+an SSL cert (can't issue for raw IPs).
+
+1. Open https://www.duckdns.org
+2. Click any sign-in option (GitHub / Google / Twitter — Google is easiest)
+3. You land on a page that shows your TOKEN at the very top
+   - Example: token 8a1b2c3d-4567-890e-fabc-def123456789
+   - Copy it to a note, you'll need it in Step 2.5
+
+4. At the top there's a "sub domain" box. Pick something unique:
+     sravya-outreach
+   (This becomes sravya-outreach.duckdns.org)
+
+5. In the "current ip" box next to it, paste your VM's public IP (<VM_IP>)
+
+6. Click "add domain"
+
+7. You should see your row appear in the list with a green checkmark
+
+
+================================================================================
+STEP 2.2 — PREPARE YOUR ENV FILE (~2 min, your Mac Terminal)
+================================================================================
+
+Your local .env already has all the API keys we need. We just need to
+copy it and add 3 production-specific lines.
+
+Run this in Terminal (on your Mac):
+
+  # 1. Copy your existing env to /tmp for edits
+  cp "/Users/lakshmisravyarachakonda/VS CODE/email tracker/.env" /tmp/outreach.env
+
+  # 2. Append production settings
+  cat >> /tmp/outreach.env <<'EOF'
+
+# Production settings (added for Oracle deploy)
+NODE_ENV=production
+FRONTEND_ORIGIN=https://outreach-jt.vercel.app
+DISABLE_AUTO_APPLY=false
+EOF
+
+  # 3. Verify it looks sane — you should see ~25 lines
+  cat /tmp/outreach.env | wc -l
+  head -30 /tmp/outreach.env
+
+
+================================================================================
+STEP 2.3 — SCP ENV FILE TO YOUR VM (~5 sec)
+================================================================================
+
+On your Mac:
+
+  scp -i ~/.ssh/id_ed25519 /tmp/outreach.env ubuntu@<VM_IP>:/tmp/outreach.env
+
+Expected output: "outreach.env  100%  ..."
+
+
+================================================================================
+STEP 2.4 — SSH TO VM AND DOWNLOAD THE INSTALLER (~30 sec)
+================================================================================
+
+On your Mac:
+
+  ssh -i ~/.ssh/id_ed25519 ubuntu@<VM_IP>
+
+Now you're on the VM. Run:
+
+  curl -fsSL https://raw.githubusercontent.com/Sravya1802/outreach-os/local-backup/deploy/oracle-setup.sh -o setup.sh
+  chmod +x setup.sh
+  ls -la setup.sh
+
+You should see setup.sh with executable permission.
+
+
+================================================================================
+STEP 2.5 — RUN THE INSTALLER (~25 min, mostly automated)
+================================================================================
+
+Still on the VM:
+
+  sudo ./setup.sh
+
+The script asks 4 questions:
+
+  1. "DuckDNS subdomain (e.g. 'outreach-jt' for outreach-jt.duckdns.org):"
+     - Type: <DUCKDNS_SUBDOMAIN>    (just the name, without .duckdns.org)
+     - Press Enter
+
+  2. "DuckDNS token (from duckdns.org top bar):"
+     - Paste: <DUCKDNS_TOKEN>
+     - Press Enter
+
+  3. "Email for Let's Encrypt notices (e.g. you@example.com):"
+     - Type your email
+     - Press Enter
+
+  4. "Path to your env file [default: /tmp/outreach.env]:"
+     - Press Enter (use default, you scp'd it there in 2.3)
+
+Then the script runs for ~25 min unattended. You can watch the log; the
+useful steps are:
+
+  [ok] Apt refreshed
+  [ok] Node installed
+  [ok] pm2 installed
+  [ok] Playwright OS deps installed
+  [ok] Repo cloned to /home/ubuntu/outreach
+  [ok] .env installed
+  [ok] Backend deps installed                  <-- slowest step (3-5 min)
+  [ok] Playwright Chromium installed           <-- second slowest (3-5 min)
+  [ok] nginx configured
+  [ok] Firewall: 22, 80, 443 open
+  [ok] SSL configured                          <-- if this fails see TROUBLESHOOTING
+  [ok] pm2 configured with auto-start on reboot
+  [ok] Backend is live at https://<DUCKDNS_SUBDOMAIN>.duckdns.org/api/health
+
+Final line prints the health URL. Copy it.
+
+
+================================================================================
+STEP 2.6 — VERIFY FROM YOUR MAC (~5 sec)
+================================================================================
+
+Back on your Mac (new Terminal tab, don't exit the SSH):
+
+  curl https://<DUCKDNS_SUBDOMAIN>.duckdns.org/api/health
+
+Expected output:
+  {"status":"ok","ai_provider":"openai","has_openai":true,"has_apify":true,...}
+
+If you see that JSON, Phase 2 is DONE.
+
+
+================================================================================
+STEP 2.7 — PASTE TO AI ASSISTANT
+================================================================================
+
+Paste exactly this to the AI (replace placeholders):
+
+  Phase 2 complete.
+  Backend URL: https://<DUCKDNS_SUBDOMAIN>.duckdns.org/api/health
+  Health response: <paste the JSON output here>
+
+Assistant will then start Phase 3 (Playwright verification).
+
+
+================================================================================
+COMMANDS YOU'LL USE AFTER DEPLOY
+================================================================================
+
+Once deploy is done, these are your day-to-day commands.
+SSH to VM first: ssh -i ~/.ssh/id_ed25519 ubuntu@<VM_IP>
+
+  pm2 status                              - see if backend is running
+  pm2 logs outreach-backend               - tail live logs
+  pm2 logs outreach-backend --lines 200   - last 200 log lines
+  pm2 logs outreach-backend --err         - errors only
+  pm2 restart outreach-backend            - restart after env changes
+
+  sudo bash ~/outreach/deploy/update.sh   - pull latest code + restart
+
+  # System health
+  free -h                                 - RAM usage (should show ~22G free)
+  df -h                                   - disk usage
+  systemctl status nginx                  - nginx status
+  sudo tail -f /var/log/nginx/access.log  - watch requests hit nginx
+
+  # Monthly maintenance (takes 2 min)
+  sudo apt update && sudo apt upgrade -y
+  pm2 restart outreach-backend
+
+
+================================================================================
+TROUBLESHOOTING — COMMON STUMBLES
+================================================================================
+
+Problem: "curl: (7) Failed to connect" when checking health endpoint
+  - Check Oracle Security List rules: ports 80, 443 source 0.0.0.0/0
+  - Check pm2 status — if backend isn't running, check logs
+
+Problem: "Let's Encrypt Certificate Error" during setup
+  - DuckDNS might not have propagated yet. Wait 2-3 min.
+  - Re-run: sudo certbot --nginx -d <DUCKDNS_SUBDOMAIN>.duckdns.org
+
+Problem: "npm ci failed"
+  - Check node -v (should be v20+)
+  - Try: cd /home/ubuntu/outreach/backend && npm install
+
+Problem: "Playwright failed to download Chromium"
+  - Usually network hiccup. Rerun:
+    sudo -u ubuntu -H bash -c "cd /home/ubuntu/outreach/backend && npx playwright install chromium"
+
+Problem: Setup script stops halfway
+  - Safe to rerun. It's idempotent:
+    sudo ./setup.sh
+
+Problem: VM feels slow or unresponsive
+  - Check: top  or  htop
+  - Check memory: free -h
+  - Restart backend: pm2 restart outreach-backend
+
+
+================================================================================
+END PHASE 2 CHEATSHEET
+================================================================================

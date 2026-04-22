@@ -1,0 +1,327 @@
+================================================================================
+PHASE 7 — 40-FEATURE END-TO-END TEST PLAN
+================================================================================
+
+Runs against: https://outreach-jt.vercel.app (frontend) → your Oracle VM URL
+              https://<DUCKDNS_SUBDOMAIN>.duckdns.org (backend).
+
+Format:
+  [ ] N. Feature — what to do — expected outcome
+      Status: PASS / FAIL — notes if fail
+
+I'll walk through this live during Phase 7, filling in PASS/FAIL as we go.
+Don't declare "done" until all 40 are PASS.
+
+================================================================================
+AUTH + NAV
+================================================================================
+
+[ ]  1. Sign up new user
+       Do:  Open frontend → Login page → click "Create account" →
+            email+password (test: test1@example.com / changeme123) → submit
+       Expected: Supabase creates user, redirect to /dashboard, sidebar visible
+
+[ ]  2. Sign in existing user
+       Do:  Sign out → sign in with same creds
+       Expected: Redirect to /dashboard, same sidebar state
+
+[ ]  3. Magic link login
+       Do:  Login page → "Email me a magic link" → enter email → click link
+       Expected: Auto-signed-in when returning from email
+
+[ ]  4. Sidebar navigation
+       Do:  Click each nav item: Dashboard, Companies, Pipeline, Job Dashboard,
+            Outreach, Job Scraper, Role Eligibility Info, Career Ops, Settings
+       Expected: Each route loads without blank page
+
+
+================================================================================
+DASHBOARD
+================================================================================
+
+[ ]  5. Stats dashboard
+       Do:  Open /dashboard
+       Expected: Cards show non-zero counts (companies, evaluations,
+                 contacts, sent, response rate). Match actual Supabase
+                 counts (query via service-role to confirm).
+
+[ ]  6. Recent Activity feed
+       Do:  Trigger an action (scrape, yc_import) → refresh Dashboard
+       Expected: New entry appears in Recent Activity, human-readable
+                 (no raw JSON, no React error #31)
+
+
+================================================================================
+COMPANIES - LIST + CATEGORIES
+================================================================================
+
+[ ]  7. Companies landing page
+       Do:  Click "Companies" in sidebar
+       Expected: Page loads, shows 23 category cards, YC Startups card
+
+[ ]  8. Category tile counts
+       Do:  Check a category with known data (e.g. Finance & Investing)
+       Expected: Count matches SELECT COUNT(*) FROM jobs
+                 WHERE category='Finance & Investing'
+
+[ ]  9. Click category → category page loads
+       Do:  Click "Tech & Software" tile
+       Expected: /category/Tech%20%26%20Software loads, shows company list
+                 header + filter controls
+
+[ ] 10. Category scrape — all sources
+       Do:  On a category page, click "All Sources" in the Scrape bar
+       Expected: Status message shows "N scraped · +X new · Y already in DB"
+                 within ~30 sec. New companies visible on reload.
+
+[ ] 11. Scrape by specific source (LinkedIn, Wellfound, Google Jobs, GitHub)
+       Do:  Click each source button one at a time
+       Expected: Each returns a status message without error
+                 (0 new is OK if existing; 500 is FAIL)
+
+
+================================================================================
+YC STARTUPS
+================================================================================
+
+[ ] 12. YC live list
+       Do:  Companies → YC Startups
+       Expected: List loads with ~100-500 companies (live from YC API)
+                 within ~5 sec. Filter bar visible.
+
+[ ] 13. YC filters work
+       Do:  Change Industry filter to "Fintech"
+       Expected: List filters down to fintech companies. Changing
+                 team-size also filters live.
+
+[ ] 14. YC import one
+       Do:  Click any YC company card
+       Expected: After ~2 sec, navigates to /company/<uuid>
+                 Company detail page renders with correct name, website
+
+[ ] 15. YC "Import All Filtered"
+       Do:  With filters applied, click "Import All Filtered"
+       Expected: Status "Imported N companies"
+
+
+================================================================================
+COMPANY DETAIL
+================================================================================
+
+[ ] 16. Header shows real website (not ATS hostname)
+       Do:  Open any /company/:id (e.g. Salesforce)
+       Expected: Website link reads "salesforce.com →", not "salesforce.wd12..."
+
+[ ] 17. Careers Page button opens real careers page
+       Do:  Click "Careers Page" button top-right
+       Expected: Opens real careers URL (careers.salesforce.com),
+                 NOT a Workday ATS subdomain
+
+[ ] 18. Scrape Intern Roles for Salesforce
+       Do:  Click "Scrape Intern Roles"
+       Expected: Within ~30 sec, returns N roles (5+ expected via Workday
+                 + Serper). All titles contain "intern"/"internship"
+
+[ ] 19. Scrape Intern Roles for Apple
+       Do:  Same, on Apple's page
+       Expected: Returns ≥5 roles via Apple's jobs.apple.com API
+
+[ ] 20. Scrape Intern Roles for a Greenhouse company (e.g. Stripe)
+       Do:  Same, on Stripe's page
+       Expected: Returns roles via Greenhouse JSON API
+
+[ ] 21. Scrape Full-Time/New Grad
+       Do:  Click the second button
+       Expected: Returns SWE/engineer roles that are not "intern"
+
+
+================================================================================
+OUTREACH TAB
+================================================================================
+
+[ ] 22. Find People (LinkedIn discovery)
+       Do:  Company detail → Outreach tab → "Find People"
+       Expected: Apollo/LinkedIn scrape returns N contacts within ~60 sec.
+                 Contacts appear in the list.
+
+[ ] 23. Find Email (bulk)
+       Do:  Click "Find Emails" above the contact list
+       Expected: Hunter/Prospeo enriches contacts, emails appear next to names
+
+[ ] 24. Find email for single contact
+       Do:  On a contact without email, click the "Find Email" icon
+       Expected: Email lookup, status updates for that one contact
+
+[ ] 25. Generate cold email
+       Do:  On a contact, click "Generate Email"
+       Expected: Modal opens with AI-generated subject + body within ~10 sec
+
+[ ] 26. Generate LinkedIn DM
+       Do:  Same contact, Generate LinkedIn
+       Expected: Returns a message
+
+[ ] 27. Generate cover letter
+       Do:  Company detail → Job Automation tab → "Generate Cover Letter"
+       Expected: 300-500 word cover letter specific to the company
+
+[ ] 28. Generate WaaS DM (YC only)
+       Do:  Open a YC company → Outreach tab → Generate WaaS DM
+       Expected: Returns a message specific to YC WorkAtAStartup format
+
+
+================================================================================
+CAREER OPS
+================================================================================
+
+[ ] 29. Resume upload
+       Do:  Career Ops → upload a PDF resume
+       Expected: Upload succeeds, "Resume: filename.pdf" shows as current
+
+[ ] 30. Resume library
+       Do:  Sidebar → Role Eligibility Info → Resume section
+       Expected: List of uploaded PDFs appears
+
+[ ] 31. Profile editor
+       Do:  Career Ops → Profile → fill in name, email, phone, LinkedIn
+       Expected: Save succeeds, refresh shows saved values
+
+[ ] 32. Evaluate single job URL
+       Do:  Career Ops → Evaluate tab → paste a real Greenhouse URL → Analyze
+       Expected: Returns grade (A-F), score, full report within ~60 sec
+
+[ ] 33. Batch evaluate
+       Do:  Career Ops → Batch Evaluate → paste 3 URLs → Evaluate All
+       Expected: All 3 complete, sorted by score
+
+[ ] 34. Portal Scanner
+       Do:  Career Ops → Portal Scanner → Scan Now
+       Expected: Returns jobs from Greenhouse/Lever/Ashby within ~30 sec
+
+[ ] 35. Career Ops history
+       Do:  Career Ops → History tab
+       Expected: Lists all past evaluations. Click one → opens report
+
+[ ] 36. Evaluation report HTML view
+       Do:  Click HTML↗ button on an evaluation
+       Expected: New tab opens with styled HTML report
+
+[ ] 37. Evaluation PDF download
+       Do:  Click PDF download on an evaluation
+       Expected: PDF downloads, contains grade + full evaluation text
+
+[ ] 38. Tailored resume PDF
+       Do:  On an evaluation, click "Generate Tailored Resume"
+       Expected: PDF downloads, resume tailored to that job description
+
+
+================================================================================
+PIPELINE + APPLICATION TRACKING
+================================================================================
+
+[ ] 39. Application Pipeline kanban
+       Do:  Sidebar → Pipeline
+       Expected: Kanban with 6 columns (Evaluated, Applied, Responded,
+                 Interview, Offer, Rejected). Evaluations appear as cards.
+
+[ ] 40. Move card between columns
+       Do:  Drag a card from "Evaluated" to "Applied"
+       Expected: Card moves, Supabase evaluations.apply_status updates,
+                 applied_at timestamp set
+
+
+================================================================================
+AUTO-APPLY (THE BIG ONE)
+================================================================================
+
+[ ] 41. Auto-Apply single role
+       Do:  Find an evaluation with a Greenhouse URL → Apply → select "auto"
+            mode → hit Apply
+       Expected: Within 60 sec, status updates to "submitted".
+                 Supabase evaluations.apply_status = 'submitted'.
+                 VM memory during run stays under 2 GB (check: ssh + free -h)
+
+[ ] 42. Auto-Apply batch run
+       Do:  Career Ops → select 3 evaluations → Apply All
+       Expected: Queue processes serially, each result logged. No OOM.
+
+[ ] 43. Auto-Apply resume preview
+       Do:  Hover any evaluation with a Greenhouse URL
+       Expected: Tooltip shows which resume will be used
+
+[ ] 44. Auto-Apply failure modes
+       Do:  Try auto-apply on a bad URL (manually set apply_url to garbage)
+       Expected: Fails gracefully with error in evaluations.apply_error,
+                 not a pm2 crash
+
+
+================================================================================
+JOB DASHBOARD
+================================================================================
+
+[ ] 45. Job Dashboard loads
+       Do:  Sidebar → Job Dashboard
+       Expected: KPI cards (Companies, Evaluations, Applied, Contacts, etc.)
+                 Funnel chart, grade distribution, recent evaluations
+
+[ ] 46. Recently Applied section
+       Do:  Scroll down on Job Dashboard
+       Expected: Shows evaluations with applied_at, clickable
+
+
+================================================================================
+COMPANY DOCUMENTS (OPTIONAL)
+================================================================================
+
+[ ] 47. Upload company document
+       Do:  Company detail → Documents section → upload a PDF
+       Expected: File uploads to Supabase Storage, appears in list
+
+[ ] 48. Download company document
+       Do:  Click a document in the list
+       Expected: File downloads
+
+
+================================================================================
+CRON + REFRESH
+================================================================================
+
+[ ] 49. Daily refresh cron (skip by default — test manual trigger)
+       Do:  SSH to VM → sudo -u ubuntu crontab -l
+       Expected: Shows keep-alive + DuckDNS refresh cron entries
+
+[ ] 50. Manual refresh SSE
+       Do:  Sidebar → click refresh icon
+       Expected: Progress messages stream in real-time for ~1-2 min,
+                 ends with "✓ Refresh complete"
+
+
+================================================================================
+ADDITIONAL SMOKE TESTS
+================================================================================
+
+[ ]  Memory baseline: pm2 restart outreach-backend → free -h right after
+     Expected: ~200 MB used total, ~23.8 GB free
+
+[ ]  Memory under load: scrape 3 categories, batch-evaluate 5 URLs
+     Expected: Peak stays under 1.5 GB total, no OOM kills in dmesg
+
+[ ]  SSL: all traffic HTTPS, certbot renewal cron exists
+     Do: sudo certbot certificates
+     Expected: Cert valid 60+ days, auto-renew enabled
+
+[ ]  pm2 survives VM reboot
+     Do: sudo reboot (from VM), wait 60 sec, curl /api/health
+     Expected: Backend auto-started, responds 200
+
+[ ]  Logs rotate / don't fill disk
+     Do: check /var/log/outreach size after a day of use
+     Expected: < 100 MB (pm2-logrotate handles this)
+
+
+================================================================================
+END PHASE 7 TEST PLAN
+================================================================================
+
+Total: 50 checks (40 features + 10 smoke tests).
+Expected time to run all: ~2-3 hours end to end.
+Will be done together live during Phase 7 via screenshare or paste-log.

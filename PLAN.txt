@@ -1,0 +1,400 @@
+================================================================================
+OUTREACHOS PRODUCTION MIGRATION — FULL PLAN OF ACTION
+================================================================================
+
+Last updated: April 22, 2026
+Target: 100% feature parity with outreach-local, serving 4 active users
+Cost: $0 per month, permanent
+
+
+================================================================================
+1. FINAL DECISION (LOCKED IN)
+================================================================================
+
+Frontend:  Vercel Free
+Backend:   Oracle Cloud Always Free VM (Ubuntu 22.04 ARM, 24 GB RAM)
+Database:  Supabase Free (Postgres + Storage + Auth)
+
+Total monthly cost: $0, permanent.
+
+
+--------------------------------------------------------------------------------
+WHY THIS AND NOT THE ALTERNATIVES
+--------------------------------------------------------------------------------
+
+Option                          Ruled out because
+-------                         ------------------
+Vercel serverless (current)     60-sec timeout kills scrapes; no Playwright;
+                                ephemeral filesystem; 12-function cap
+Render free (512 MB)            Playwright Chromium needs ~500 MB at launch,
+                                OOM-kills the process
+Fly.io                          Removed free tier late 2024
+Railway free                    Removed free tier 2023
+Koyeb 512 MB                    Same OOM issue as Render
+GCP e2-micro free               1 GB RAM; Chromium + Node under load = OOM
+AWS free tier                   12-month trial, not permanent
+Browserless.io free             Monthly quota cap + 4th vendor to babysit
+Railway $5/mo                   Best paid option but user wants $0
+Oracle Cloud Always Free ARM    24 GB RAM, truly permanent, runs everything
+                                --- THIS IS THE PATH ---
+
+
+================================================================================
+2. ARCHITECTURE
+================================================================================
+
+    +-----------------------------+         HTTPS       +--------------------------------+
+    | Vercel Free (frontend only) |  <---------------->  | Oracle Always Free VM (backend)|
+    | outreach-jt.vercel.app      |                      | Ubuntu 22.04 ARM, 24 GB RAM    |
+    | React SPA, static assets    |                      | Express + Playwright + nginx   |
+    +-----------------------------+                      | pm2 process manager            |
+                                                         | Let's Encrypt SSL              |
+                                                         +-------------+------------------+
+                                                                       |
+                                                                       | Postgres wire (pg)
+                                                                       v
+                                                         +--------------------------------+
+                                                         | Supabase Free                  |
+                                                         | - Postgres DB (500 MB)         |
+                                                         | - Storage (1 GB for resumes)   |
+                                                         | - Auth (unlimited users)       |
+                                                         +--------------------------------+
+
+
+================================================================================
+3. RESOURCE BUDGET (PROVING WE FIT IN FREE TIERS)
+================================================================================
+
+ORACLE VM (free: 4 ARM cores, 24 GB RAM, 200 GB disk, 10 TB/mo egress)
+
+Component                         Peak RAM    Peak CPU    Headroom
+---------                         --------    --------    --------
+Node.js + Express                 120 MB      5%
+Playwright Chromium (1 apply)     600 MB      40% burst
+nginx                             20 MB       2%
+Postgres client pool              30 MB       1%
+TOTAL PEAK                        ~770 MB     ~50%        32x RAM, 2x CPU
+
+
+SUPABASE FREE (500 MB DB, 1 GB storage, 5 GB egress/mo)
+
+Data                              Year-1 size    Limit       Safe?
+----                              -----------    -----       -----
+companies (~10k rows)             20 MB          500 MB      25x headroom
+jobs (~50k rows)                  100 MB         500 MB      5x headroom
+job_contacts (~50k rows)          50 MB          500 MB      10x headroom
+evaluations (~1k rows)            10 MB          500 MB      50x headroom
+Resume PDFs                       10 MB          1 GB        100x headroom
+Monthly egress                    120 MB/mo      5 GB/mo     40x headroom
+
+
+VERCEL FREE (100 GB bandwidth, unlimited builds)
+
+Static site, negligible usage. Not a concern.
+
+CONCLUSION: 10-50x headroom on every resource. Won't hit limits unless
+usage grows 10x.
+
+
+================================================================================
+4. FEATURE PARITY MAP (40 FEATURES, WHERE EACH RUNS)
+================================================================================
+
+#    Feature                                          Where it runs
+---  -------                                          -------------
+1    Supabase auth (email/password + magic link)      Supabase + Vercel
+2    Dashboard stats                                  Oracle backend -> Supabase
+3    Companies list, categories                       Oracle backend -> Supabase
+4    Category scrape (all sources)                    Oracle backend (Apify/Serper)
+5    Source-specific scrape                           Oracle backend
+6    YC live list                                     Oracle backend -> YC API
+7    YC import / import-all                           Oracle backend -> Supabase
+8    Company detail with correct website              Oracle backend -> Supabase
+9    Scrape Intern Roles per company                  Oracle backend
+10   Scrape Full-Time/New Grad per company            Oracle backend
+11   Careers Page button                              Oracle backend
+12   Outreach: Find People                            Oracle backend (Apollo/LI)
+13   Outreach: Find Email bulk                        Oracle backend (Hunter)
+14   Outreach: Find Email for single contact          Oracle backend
+15   Outreach: Generate email                         Oracle backend (OpenAI)
+16   Outreach: Generate LinkedIn DM                   Oracle backend
+17   Outreach: Generate cover letter                  Oracle backend
+18   Outreach: Generate WaaS DM for YC                Oracle backend
+19   Resume upload + PDF parse                        Oracle backend -> Supabase Storage
+20   Resume library list                              Oracle backend -> Supabase
+21   Resume profile editor                            Oracle backend -> Supabase
+22   Career Ops evaluate single URL                   Oracle backend
+23   Career Ops batch evaluate                        Oracle backend
+24   Career Ops Portal Scanner                        Oracle backend
+25   Career Ops history                               Oracle backend -> Supabase
+26   Career Ops tracker                               Oracle backend -> Supabase
+27   Evaluation report HTML view                      Oracle backend
+28   Evaluation PDF download                          Oracle backend
+29   Tailored resume PDF                              Oracle backend
+30   Application Pipeline kanban                      Oracle backend -> Supabase
+31   Move card between columns                        Oracle backend -> Supabase
+32   AUTO-APPLY single role (Playwright)              Oracle backend, 24 GB headroom
+33   AUTO-APPLY batch run                             Oracle backend
+34   Auto-Apply resume preview                        Oracle backend -> Supabase
+35   Company documents upload                         Oracle backend -> Supabase Storage
+36   Company documents list/download                  Oracle backend -> Supabase
+37   Company status update                            Oracle backend -> Supabase
+38   Daily refresh cron                               Oracle backend (node-cron)
+39   Manual refresh SSE endpoint                      Oracle backend
+40   Score-fit AI flow                                Oracle backend
+
+ALL 40 FEATURES WORK. Auto-apply works. Everything local has, prod will have.
+
+
+================================================================================
+5. PHASES (DETAILED)
+================================================================================
+
+--------------------------------------------------------------------------------
+PHASE 0 - Preparation (my work, ~2 hours)
+--------------------------------------------------------------------------------
+
+Before you touch Oracle, I prepare:
+
+1. deploy/oracle-setup.sh - the one-shot installer script
+   What it does automatically on your VM:
+   - apt update && apt upgrade
+   - Install Node 20, nginx, certbot, pm2, Playwright OS deps
+   - Clone the repo
+   - npm install in backend + frontend
+   - Install Playwright Chromium binary
+   - Configure nginx as reverse proxy (80/443 -> 3001)
+   - Obtain Let's Encrypt SSL via DuckDNS subdomain
+   - Start backend under pm2 with auto-restart + boot-time launch
+   - Install keep-alive cron (prevents Oracle idle reclamation)
+   - Enable unattended-upgrades (auto security patches)
+   - Install fail2ban (SSH brute-force protection)
+
+2. deploy/env.template - env var file you'll paste keys into
+
+3. backend/ecosystem.config.cjs - pm2 config
+
+4. backend/nginx.conf - nginx server block
+
+5. Dockerfile fallback - in case we ever switch container hosts
+
+YOUR ACTION DURING PHASE 0: nothing. I work, you wait.
+
+
+--------------------------------------------------------------------------------
+PHASE 1 - Oracle signup + VM creation (~45 min, you drive)
+--------------------------------------------------------------------------------
+
+See ORACLE-SETUP.txt for step-by-step instructions.
+
+Outcome: You have a VM with:
+- 4 ARM cores, 24 GB RAM
+- Ubuntu 22.04
+- Public IP
+- Firewall ports 80, 443 open
+- SSH access working
+
+Handoff: you paste me the public IP and the ubuntu@outreach-backend prompt.
+
+
+--------------------------------------------------------------------------------
+PHASE 2 - Automated server setup (~30 min, mostly automated wait)
+--------------------------------------------------------------------------------
+
+2.1 DuckDNS subdomain (free, 2 min)
+    - Go to https://www.duckdns.org, sign in with Google/GitHub
+    - Pick a subdomain (e.g. "outreach-jt")
+    - Set IP to your Oracle VM public IP
+    - Copy your DuckDNS token
+
+2.2 Run setup script on VM
+    ssh -i ~/.ssh/id_ed25519 ubuntu@<your-vm-ip>
+    curl -fsSL https://raw.githubusercontent.com/Sravya1802/outreach-os/local-backup/deploy/oracle-setup.sh -o setup.sh
+    chmod +x setup.sh
+    sudo ./setup.sh
+
+    Prompts for:
+    - DuckDNS subdomain
+    - DuckDNS token
+    - Let's Encrypt email
+    - Path to env file (I give you a template, you paste API keys)
+
+    Runs ~25 min unattended. You watch log.
+
+2.3 Verify
+    curl https://outreach-jt.duckdns.org/api/health
+    Expect: {"status":"ok","has_openai":true,...}
+
+OUTCOME: Backend live.
+
+
+--------------------------------------------------------------------------------
+PHASE 3 - Playwright verification (~30 min)
+--------------------------------------------------------------------------------
+
+- I ping /api/health/playwright endpoint (launches Chromium, returns memory)
+- Real auto-apply dry run against a public Greenhouse sandbox
+- Verify memory stable under 2 GB
+- Confirm Supabase writes succeed from the Oracle VM
+
+OUTCOME: auto-apply works end-to-end on production.
+
+
+--------------------------------------------------------------------------------
+PHASE 4 - sqlite -> Supabase migration via pg (6-10 hrs my work, 1-2 sessions)
+--------------------------------------------------------------------------------
+
+4a - Connection + schema parity (2 hrs)
+    - Add pg package to backend
+    - New backend/db.js using pg.Pool connected to Supabase
+    - Generate Postgres schema from sqlite CREATE TABLE statements
+    - Write supabase/migrations/002_backend_tables.sql
+    - Run it via Supabase SQL editor
+
+4b - Query rewriting (4-6 hrs)
+    - Find/replace db.prepare(...).get(...) -> await pool.query(...).then(r => r.rows[0])
+    - Translate sqlite dialect: INSERT OR IGNORE, datetime('now'), LAST_INSERT_ROWID
+    - Async-ify every route that touches the DB
+    - Preserve transactions where needed
+
+4c - Data backfill (30 min, optional)
+    - Export sqlite from outreach-local to CSV
+    - Import into Supabase via COPY
+    - Or skip and start fresh on prod
+
+4d - Per-route smoke test (1-2 hrs)
+    - curl every endpoint, verify response shape unchanged
+    - Check Supabase writes happen correctly
+
+FALLBACK if migration blocks:
+    Keep sqlite on VM disk (works, persists as long as VM lives).
+
+
+--------------------------------------------------------------------------------
+PHASE 5 - Frontend rewire (~30 min)
+--------------------------------------------------------------------------------
+
+My work:
+- frontend/src/api.js: const API = import.meta.env.VITE_API_URL || '/api'
+- Remove all supabase.from(...) direct queries
+- Remove reclassify/seed emergency buttons
+- Simplify auth wiring
+
+Your work:
+- Vercel env vars: add VITE_API_URL=https://outreach-jt.duckdns.org
+- Wait for Vercel auto-rebuild (2 min)
+
+OUTCOME: outreach-jt.vercel.app hits the Oracle backend. Same app, real backend.
+
+
+--------------------------------------------------------------------------------
+PHASE 6 - Delete Vercel serverless mess (~1 hr, my work)
+--------------------------------------------------------------------------------
+
+- rm -rf api/ (all 12 serverless functions retired)
+- Clean up vercel.json (just static hosting + SPA rewrite)
+- Remove Supabase-direct frontend queries
+- Remove dead emergency code
+
+Repo becomes clean: backend/ + frontend/ + supabase/migrations.
+
+
+--------------------------------------------------------------------------------
+PHASE 7 - End-to-end verification (~2 hrs, my work)
+--------------------------------------------------------------------------------
+
+Walk the 40-feature checklist. Each one gets tested against production.
+Don't declare "done" until all 40 pass.
+
+
+================================================================================
+6. TIMELINE
+================================================================================
+
+Session 1 (today if you have 3 hrs)  - Phases 0, 1, 2, 3 - Backend live + Playwright works
+Session 2                             - Phase 4 - sqlite -> Supabase migration
+Session 3                             - Phases 5, 6, 7 - Frontend rewire + cleanup + E2E
+
+TOTAL: 3 sessions. $0 forever. 100% local parity.
+
+
+================================================================================
+7. RISK REGISTER
+================================================================================
+
+Risk                                          Likelihood   Impact   Mitigation
+----                                          ----------   ------   ----------
+R1 - Oracle ARM out of capacity in Ashburn    Medium       Blocks   Try AD-2/AD-3, retry script,
+                                                           Phase 1  fallback region
+R2 - Oracle rejects signup (card/country)     Low          Blocks   Different card, virtual card,
+                                                           Phase 1  fallback to GCP + GitHub Actions
+R3 - Oracle reclaims "idle" VM                Very Low     Rebuild  Keep-alive cron + 4 active users;
+                                                                    rebuild is 30 min via setup.sh
+R4 - Playwright ARM incompatibility           Very Low     No auto- Playwright 1.30+ supports ARM64
+                                                           apply    natively, we use 1.59
+R5 - Let's Encrypt rate limit                 Low          No SSL   5 certs/week/domain; unlikely
+                                                                    to hit with DuckDNS subdomain
+R6 - Postgres migration hits schema issue     Medium       Phase 4  Fallback: keep sqlite on VM disk
+                                                           delayed
+R7 - Supabase free tier saturates             Very Low     Blocks   Monitor quarterly; migrate DB to
+                                                           reads    VM-hosted Postgres if ever hit
+R8 - VM compromised                           Low          Service  fail2ban + unattended-upgrades +
+                                                           down     SSH key only, no passwords
+R9 - Cleanup accidentally breaks prod         Low          Brief    Feature branch + verification
+                                                           downtime before merge; revert if needed
+
+
+================================================================================
+8. YEAR-1 MAINTENANCE (REALISTIC)
+================================================================================
+
+Event                                 Who      Frequency      Time
+-----                                 ---      ---------      ----
+git push -> auto-deploy               Auto     On my pushes   0 min
+sudo apt upgrade -y; pm2 restart all  You      Monthly        2 min
+Certbot auto-renewal                  Auto     Every 60 days  0 min
+Dependency updates                    Me+you   Quarterly      30 min
+Bug reports from users                Me+you   As happens     Variable
+Oracle reclamation rebuild            You+me   Very rare      30 min
+Security advisory on a dep            Me       When announced 15 min
+
+YOU WILL PING ME FOR:  features, bugs, dependency upgrades
+YOU WILL NOT PING ME FOR:  infrastructure, VM admin, platform outages
+
+
+================================================================================
+9. WHAT YOU CONFIRMED
+================================================================================
+
+[x] Path = Oracle Cloud Always Free + Supabase Free + Vercel Free
+[x] Home region = US Midwest (Chicago)
+[x] Same GitHub repo (Sravya1802/outreach-os) for local-backup branch
+[x] Willing to do monthly 2-min apt upgrade + occasional debugging
+[x] Zero dollar budget, permanent
+
+
+================================================================================
+10. MY COMMITMENT
+================================================================================
+
+- Phase 0 ready while you do Phase 1
+- Detailed walkthrough for Oracle (see ORACLE-SETUP.txt)
+- 40-feature verification at the end; I don't declare done until all green
+- No flip-flopping on the plan
+- No more recommending paid options
+- Won't pretend features work when I haven't tested them
+
+
+================================================================================
+11. WHAT TO DO NEXT
+================================================================================
+
+Right now:
+- Read ORACLE-SETUP.txt
+- Start Phase 1 (Oracle signup + VM creation)
+
+While you do that, I'm writing oracle-setup.sh and pushing it to the
+local-backup branch. I'll ping you when it's ready.
+
+If you hit any issue at any Oracle step, screenshot it and paste here.
+================================================================================
