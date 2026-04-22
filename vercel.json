@@ -1,6 +1,7 @@
 {
   "version": 2,
-  "buildCommand": "npm install && npm run build:frontend",
+  "installCommand": "npm install && npm install --prefix frontend",
+  "buildCommand": "npm run build:frontend",
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/**/*.js": {
