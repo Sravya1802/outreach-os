@@ -206,13 +206,23 @@ export const api = {
         .limit(20)
       return data || []
     },
+    // CompanyDetail route is /company/:id where id is a companies.id.
+    // Returns the shape that CompanyDetail destructures: { company, contacts, roles }.
     detail: async (id) => {
-      const { data: job } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle()
-      const { data: contacts } = await supabase.from('job_contacts').select('*').eq('job_id', id)
-      return { job, contacts: contacts || [] }
+      const { data: company } = await supabase.from('companies').select('*').eq('id', id).maybeSingle()
+      if (!company) return null
+      const [{ data: roles }, { data: contacts }] = await Promise.all([
+        supabase.from('jobs').select('*').eq('company_name', company.name).order('created_at', { ascending: false }),
+        supabase.from('job_contacts').select('*').in('job_id',
+          (await supabase.from('jobs').select('id').eq('company_name', company.name)).data?.map(j => j.id) || [0]
+        ),
+      ])
+      return { company, roles: roles || [], contacts: contacts || [] }
     },
+    // Company-level status (e.g. new/researching/contacted). Callers pass
+    // companies.id, not jobs.id.
     updateStatus: async (id, status) => {
-      const { data } = await supabase.from('jobs').update({ status }).eq('id', id).select()
+      const { data } = await supabase.from('companies').update({ status }).eq('id', id).select()
       return data?.[0] || {}
     },
     scrape: (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
