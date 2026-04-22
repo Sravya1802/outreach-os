@@ -1,0 +1,58 @@
+#!/bin/bash
+#
+# OutreachOS — pull latest code + restart backend.
+# Run on the Oracle VM whenever you want to deploy new commits.
+#
+#   sudo bash /home/ubuntu/outreach/deploy/update.sh
+#
+# Idempotent: safe to run repeatedly. Only restarts pm2 if code changed.
+
+set -euo pipefail
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'; NC='\033[0m'
+step() { echo -e "\n${BLUE}▸ $1${NC}"; }
+ok()   { echo -e "${GREEN}✓${NC} $1"; }
+
+[[ $EUID -eq 0 ]] || { echo "Run with sudo"; exit 1; }
+TARGET_USER="${SUDO_USER:-ubuntu}"
+APP_DIR="/home/$TARGET_USER/outreach"
+run_as_user() { sudo -u "$TARGET_USER" -H bash -c "$1"; }
+
+step "Fetching latest from origin"
+BEFORE=$(cd "$APP_DIR" && git rev-parse HEAD)
+run_as_user "cd '$APP_DIR' && git fetch origin && git reset --hard origin/local-backup"
+AFTER=$(cd "$APP_DIR" && git rev-parse HEAD)
+
+if [[ "$BEFORE" == "$AFTER" ]]; then
+  ok "Already up to date ($BEFORE)"
+  exit 0
+fi
+
+step "New commits: $BEFORE → $AFTER"
+run_as_user "cd '$APP_DIR' && git log --oneline $BEFORE..$AFTER"
+
+step "Installing backend deps (skipped if lockfile unchanged)"
+run_as_user "cd '$APP_DIR/backend' && npm ci --omit=dev --loglevel=error"
+ok "Backend deps current"
+
+# If Playwright version changed, re-download Chromium
+if run_as_user "cd '$APP_DIR/backend' && npm ls playwright 2>/dev/null" | grep -q "playwright@"; then
+  step "Ensuring Playwright Chromium is present"
+  run_as_user "cd '$APP_DIR/backend' && npx playwright install chromium"
+  ok "Playwright Chromium OK"
+fi
+
+step "Restarting backend"
+run_as_user "pm2 restart outreach-backend"
+sleep 2
+run_as_user "pm2 status"
+
+step "Health check"
+if curl -fsS http://localhost:3001/api/health | grep -q '"status":"ok"'; then
+  ok "Backend healthy"
+else
+  echo -e "${RED}Backend not healthy — check pm2 logs outreach-backend${NC}"
+  exit 1
+fi
+
+ok "Update complete"
