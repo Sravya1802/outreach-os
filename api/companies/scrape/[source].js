@@ -13,8 +13,8 @@ export default async (req, res) => {
 
   try {
     const { results, count } = await scrapeOneSource(source, subcategory, category)
-    const companiesResult = await upsertScrapedCompanies(results)
-    const jobsResult = await upsertScrapedJobs(results)
+    const companiesResult = await upsertScrapedCompanies(results, category)
+    const jobsResult = await upsertScrapedJobs(results, category)
 
     await logActivity('scrape_source', {
       source,

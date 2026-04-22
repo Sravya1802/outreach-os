@@ -65,23 +65,27 @@ ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS pdf_path     TEXT;
 -- ── Row-level security ───────────────────────────────────────────────────────
 -- Enable RLS and allow any authenticated user full access (4-user shared workspace).
 -- Adjust to per-user rows later by adding user_id columns + auth.uid() checks.
+--
+-- DO block is idempotent — only ENABLE RLS on tables that exist.
 
-ALTER TABLE meta         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE user_profile ENABLE ROW LEVEL SECURITY;
-ALTER TABLE evaluations  ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS "authenticated_all_meta"         ON meta;
-DROP POLICY IF EXISTS "authenticated_all_user_profile" ON user_profile;
-DROP POLICY IF EXISTS "authenticated_all_evaluations"  ON evaluations;
-
-CREATE POLICY "authenticated_all_meta" ON meta
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
-CREATE POLICY "authenticated_all_user_profile" ON user_profile
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
-
-CREATE POLICY "authenticated_all_evaluations" ON evaluations
-  FOR ALL TO authenticated USING (true) WITH CHECK (true);
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOR t IN SELECT unnest(ARRAY[
+    'meta', 'user_profile', 'evaluations',
+    'companies', 'jobs', 'job_contacts', 'activity_log'
+  ]) LOOP
+    IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = t) THEN
+      EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+      EXECUTE format('DROP POLICY IF EXISTS "authenticated_all_%s" ON public.%I', t, t);
+      EXECUTE format(
+        'CREATE POLICY "authenticated_all_%s" ON public.%I FOR ALL TO authenticated USING (true) WITH CHECK (true)',
+        t, t
+      );
+    END IF;
+  END LOOP;
+END $$;
 
 -- ── Storage RLS for resumes bucket ───────────────────────────────────────────
 -- Allow authenticated users to read/write any file in the 'resumes' bucket.

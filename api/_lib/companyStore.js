@@ -15,7 +15,7 @@ function deriveWebsite(careersUrl) {
  * Input: normalized scraper results ({ name, careersUrl, location, source, jobTitle, ... })
  * Returns: { added, updated, total, newCompanies }
  */
-export async function upsertScrapedCompanies(results) {
+export async function upsertScrapedCompanies(results, category = null) {
   const supabase = getSupabase()
 
   if (!results || results.length === 0) {
@@ -44,7 +44,7 @@ export async function upsertScrapedCompanies(results) {
   // Fetch existing rows to decide insert vs. update
   const { data: existingRows, error: selErr } = await supabase
     .from('companies')
-    .select('id, name, website, status, linkedin_url')
+    .select('id, name, website, status, linkedin_url, category')
     .in('name', names)
   if (selErr) throw selErr
 
@@ -62,13 +62,22 @@ export async function upsertScrapedCompanies(results) {
       toInsert.push({
         name: r.name,
         website,
-        category: 'startup',
+        // Use the user-supplied category (from the category page the scrape
+        // was triggered from) so newly-inserted rows are visible in that
+        // category's list. Falls back to 'startup' if nothing was provided.
+        category: category || 'startup',
         status: 'active',
       })
     } else {
       const patch = {}
       if (!existing.website && website) patch.website = website
       if (!existing.status) patch.status = 'active'
+      // Backfill category for orphan rows scraped before this code landed
+      // (or that were imported into a different category first). Only
+      // overwrite if the row has no category or the generic 'startup'.
+      if (category && (!existing.category || existing.category === 'startup')) {
+        patch.category = category
+      }
       if (Object.keys(patch).length > 0) {
         toUpdate.push({ id: existing.id, patch })
       }
@@ -102,7 +111,7 @@ export async function upsertScrapedCompanies(results) {
  * Upsert scraped job postings into the `jobs` table, linked to company_name.
  * The `jobs` table has a UNIQUE constraint on `url`, so duplicate URLs are skipped.
  */
-export async function upsertScrapedJobs(results) {
+export async function upsertScrapedJobs(results, category = null) {
   const supabase = getSupabase()
   if (!results || results.length === 0) return { added: 0 }
 
@@ -115,7 +124,7 @@ export async function upsertScrapedJobs(results) {
       company_name: r.name,
       description: r.jobDescription || null,
       url: r.careersUrl,
-      category: 'startup',
+      category: category || 'startup',
       status: 'new',
       location: r.location || null,
       remote_policy: /remote/i.test(r.location || '') ? 'remote' : null,

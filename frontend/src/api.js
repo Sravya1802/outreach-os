@@ -50,33 +50,57 @@ export const api = {
   },
 
   jobMetrics: async () => {
-    const [{ data: companies }, { data: jobs }, { data: evaluations }] = await Promise.all([
+    const [{ data: companies }, { data: jobs }, { data: evaluations }, { data: contacts }] = await Promise.all([
       supabase.from('companies').select('id'),
       supabase.from('jobs').select('id'),
       supabase.from('evaluations').select('*'),
+      supabase.from('job_contacts').select('id, email, linkedin_url, status'),
     ])
+    const evals = evaluations || []
+    const ctx   = contacts || []
+
     const gradeDist = { A: 0, B: 0, C: 0, D: 0, F: 0 }
-    ;(evaluations || []).forEach(e => { if (e.grade && gradeDist[e.grade] !== undefined) gradeDist[e.grade]++ })
+    evals.forEach(e => { if (e.grade && gradeDist[e.grade] !== undefined) gradeDist[e.grade]++ })
+
+    const applyFunnel = {
+      evaluated: evals.filter(e => !e.apply_status || e.apply_status === 'not_started').length,
+      applied:   evals.filter(e => ['opened', 'submitted', 'queued'].includes(e.apply_status)).length,
+      responded: evals.filter(e => e.apply_status === 'responded').length,
+      interview: evals.filter(e => e.apply_status === 'interview').length,
+      offer:     evals.filter(e => e.apply_status === 'offer').length,
+      rejected:  evals.filter(e => e.apply_status === 'rejected').length,
+    }
+
+    const applyModes = {
+      manual: evals.filter(e => e.apply_mode === 'manual' && e.apply_status && e.apply_status !== 'not_started').length,
+      auto:   evals.filter(e => e.apply_mode === 'auto'   && e.apply_status && e.apply_status !== 'not_started').length,
+    }
+
+    const contactsWithEmail     = ctx.filter(c => c.email).length
+    const contactsWithLinkedIn  = ctx.filter(c => c.linkedin_url).length
+    const outreachSent          = ctx.filter(c => ['sent','dm_sent','email_sent'].includes(c.status)).length
+    const outreachReplied       = ctx.filter(c => c.status === 'replied').length
+
     return {
       summary: {
-        totalCompanies: companies?.length || 0,
-        totalJobs: jobs?.length || 0,
-        totalEvaluations: evaluations?.length || 0,
-        totalContacts: 0,
-        responseRate: 0,
-        applyRate: 0,
+        totalCompanies:       companies?.length || 0,
+        totalJobs:            jobs?.length || 0,
+        totalEvaluations:     evals.length,
+        totalContacts:        ctx.length,
+        contactsWithEmail,
+        contactsWithLinkedIn,
+        outreachGenerated:    ctx.length,
+        outreachSent,
+        outreachReplied,
+        responseRate: outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0,
+        applyRate:    evals.length > 0 ? Math.round((applyFunnel.applied / evals.length) * 100) : 0,
       },
-      applyFunnel: {
-        evaluated: evaluations?.filter(e => !e.apply_status || e.apply_status === 'not_started').length || 0,
-        applied: evaluations?.filter(e => ['opened', 'submitted', 'queued'].includes(e.apply_status)).length || 0,
-        responded: evaluations?.filter(e => e.apply_status === 'responded').length || 0,
-        interview: evaluations?.filter(e => e.apply_status === 'interview').length || 0,
-        offer: evaluations?.filter(e => e.apply_status === 'offer').length || 0,
-        rejected: evaluations?.filter(e => e.apply_status === 'rejected').length || 0,
-      },
+      applyFunnel,
+      applyModes,
       gradeDist,
       topOutreachCompanies: [],
-      recentEvals: (evaluations || []).slice(0, 10).map(e => ({ kind: 'evaluation', ...e })),
+      recentEvals:   evals.slice(0, 10).map(e => ({ kind: 'evaluation', ...e })),
+      recentApplied: evals.filter(e => e.applied_at).sort((a, b) => (b.applied_at || '').localeCompare(a.applied_at || '')).slice(0, 10),
     }
   },
 
