@@ -169,6 +169,10 @@ export const api = {
       ])
       return { email: emailRes.email, linkedin: linkedinRes.linkedin }
     },
+    // Route cover-letter and WaaS DM through the same email generator so click-time
+    // handlers don't TypeError on undefined methods.
+    coverLetter: (body) => apiCall('/generate/email', { method: 'POST', body: { ...body, format: 'cover_letter' } }),
+    waas:        (body) => apiCall('/generate/email', { method: 'POST', body: { ...body, format: 'waas_dm' } }),
   },
 
   unified: {
@@ -235,21 +239,55 @@ export const api = {
     detail: async (id) => {
       const { data: company } = await supabase.from('companies').select('*').eq('id', id).maybeSingle()
       if (!company) return null
-      const [{ data: roles }, { data: contacts }] = await Promise.all([
-        supabase.from('jobs').select('*').eq('company_name', company.name).order('created_at', { ascending: false }),
-        supabase.from('job_contacts').select('*').in('job_id',
-          (await supabase.from('jobs').select('id').eq('company_name', company.name)).data?.map(j => j.id) || [0]
-        ),
-      ])
+      const { data: roles } = await supabase.from('jobs').select('*').eq('company_name', company.name).order('created_at', { ascending: false })
+      const jobIds = (roles || []).map(j => j.id)
+      const { data: contacts } = jobIds.length
+        ? await supabase.from('job_contacts').select('*').in('job_id', jobIds)
+        : { data: [] }
       return { company, roles: roles || [], contacts: contacts || [] }
     },
+    // Called by JobScraperTab on mount — MUST not throw or the React tree unmounts.
+    roles: async (companyId) => {
+      const { data: company } = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
+      if (!company) return []
+      const { data } = await supabase.from('jobs').select('*').eq('company_name', company.name).order('created_at', { ascending: false })
+      return data || []
+    },
+    careersUrl: async (companyId) => {
+      const { data: company } = await supabase.from('companies').select('website, name').eq('id', companyId).maybeSingle()
+      if (!company?.website) return { url: null }
+      const base = company.website.startsWith('http') ? company.website : `https://${company.website}`
+      return { url: `${base.replace(/\/$/, '')}/careers` }
+    },
+    contacts: async (companyId) => {
+      const { data: company } = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
+      if (!company) return []
+      const { data: jobs } = await supabase.from('jobs').select('id').eq('company_name', company.name)
+      const jobIds = (jobs || []).map(j => j.id)
+      if (jobIds.length === 0) return []
+      const { data } = await supabase.from('job_contacts').select('*').in('job_id', jobIds)
+      return data || []
+    },
+    // Click-time handlers — stubs so callers get a useful error message instead of a TypeError.
+    scrapeRoles: async (companyId, roleType = 'intern') => {
+      const { data: company } = await supabase.from('companies').select('name, category').eq('id', companyId).maybeSingle()
+      if (!company) throw new Error('Company not found')
+      const r = await apiCall('/companies/scrape', { method: 'POST', body: {
+        category: company.category || '',
+        subcategory: `${company.name} ${roleType === 'fulltime' ? 'software engineer' : 'intern'} 2026`,
+      } })
+      return { roles: [], added: r.added || 0, found: r.deduped || 0 }
+    },
+    findEmails:           () => Promise.reject(new Error('Email finding not available in this deployment')),
+    findEmailForContact:  () => Promise.reject(new Error('Email finding not available in this deployment')),
+    generate:             () => Promise.reject(new Error('Contact-level generation not available in this deployment')),
     // Company-level status (e.g. new/researching/contacted). Callers pass
     // companies.id, not jobs.id.
     updateStatus: async (id, status) => {
       const { data } = await supabase.from('companies').update({ status }).eq('id', id).select()
       return data?.[0] || {}
     },
-    scrape: (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
+    scrape: (params) => apiCall('/companies/scrape', { method: 'POST', body: params }),
   },
 
   career: {
