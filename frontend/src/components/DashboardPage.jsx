@@ -24,6 +24,26 @@ function timeAgo(iso) {
   return `${Math.floor(h / 168)}w ago`
 }
 
+// activity_log.details is JSONB in Supabase — it comes back as an object,
+// not a string. Rendering the object directly throws React error #31 and
+// blanks the dashboard. Flatten to a short human-readable summary.
+function formatActivityDetails(a) {
+  const d = a.details
+  if (!d) return a.action || ''
+  if (typeof d === 'string') return d
+  try {
+    const parts = []
+    if (d.subcategory) parts.push(d.subcategory)
+    if (d.source)      parts.push(d.source)
+    if (d.added != null || d.imported != null) parts.push(`+${d.added ?? d.imported} new`)
+    if (d.updated)     parts.push(`${d.updated} updated`)
+    if (d.skipped)     parts.push(`${d.skipped} skipped`)
+    return parts.length ? parts.join(' · ') : (a.action || 'activity')
+  } catch {
+    return a.action || 'activity'
+  }
+}
+
 export default function DashboardPage({ onStatsChange }) {
   const navigate = useNavigate()
   const [stats, setStats]       = useState(null)
@@ -161,7 +181,7 @@ export default function DashboardPage({ onStatsChange }) {
                 <div key={a.id || i} style={{ padding:'12px 16px', borderBottom: i < activity.length - 1 ? '1px solid #f1f5f9' : 'none', display:'flex', gap:10, alignItems:'flex-start' }}>
                   <span style={{ fontSize:14, flexShrink:0, marginTop:1 }}>{activityIcons[a.action] || '•'}</span>
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:12, color:'#0f172a', lineHeight:1.4 }}>{a.details || a.action}</div>
+                    <div style={{ fontSize:12, color:'#0f172a', lineHeight:1.4 }}>{formatActivityDetails(a)}</div>
                     {a.created_at && (
                       <div style={{ fontSize:10, color:'#94a3b8', marginTop:2 }}>{timeAgo(a.created_at)}</div>
                     )}
