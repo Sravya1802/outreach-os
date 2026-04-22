@@ -274,8 +274,16 @@ export const api = {
         else if (s === 'offer') buckets.offer.push(e)
         else if (s === 'rejected') buckets.rejected.push(e)
       })
-      const columns = Object.fromEntries(Object.entries(buckets).map(([k, items]) => [k, { label: k, items }]))
-      return { columns, total: evaluations?.length || 0, totals: columns }
+      const HINTS = {
+        evaluated: 'Evaluated but not applied', applied: 'Application submitted',
+        responded: 'Recruiter responded',      interview: 'In interview loop',
+        offer: 'Offer received',               rejected: 'Closed / rejected',
+      }
+      const columns = Object.fromEntries(Object.entries(buckets).map(([k, items]) =>
+        [k, { label: k.charAt(0).toUpperCase() + k.slice(1), hint: HINTS[k], items }]
+      ))
+      const totals = Object.fromEntries(Object.entries(buckets).map(([k, items]) => [k, items.length]))
+      return { columns, total: evaluations?.length || 0, totals }
     },
 
     // ── Portal scanner (Greenhouse/Lever/Ashby) ──────────────────────────────

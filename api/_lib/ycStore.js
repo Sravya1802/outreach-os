@@ -21,29 +21,29 @@ export async function upsertYCCompanies(ycCompanies) {
 
   const supabase = getSupabase()
   const rows = ycCompanies.map(ycToCompanyRow).filter(r => r.name)
-  const names = rows.map(r => r.name)
+  if (rows.length === 0) return { imported: 0, skipped: 0, companies: [] }
 
-  const { data: existingRows, error: selErr } = await supabase
+  // Upsert ignoreDuplicates: inserts new names, skips conflicts on `name`.
+  const { data: inserted, error: upErr } = await supabase
     .from('companies')
-    .select('id, name')
-    .in('name', names)
-  if (selErr) throw selErr
-  const existing = new Set((existingRows || []).map(r => r.name))
+    .upsert(rows, { onConflict: 'name', ignoreDuplicates: true })
+    .select('id, name, category, yc_batch, website')
+  if (upErr) throw upErr
 
-  const toInsert = rows.filter(r => !existing.has(r.name))
-  const skipped = rows.length - toInsert.length
+  const insertedNames = new Set((inserted || []).map(r => r.name))
+  const skippedNames = rows.map(r => r.name).filter(n => !insertedNames.has(n))
 
-  let imported = 0
-  const importedRows = []
-  if (toInsert.length > 0) {
-    const { data, error } = await supabase
+  // Fetch IDs of the skipped (already-existing) rows so the caller can navigate
+  // to them — otherwise clicking a YC card for a known company would dead-end.
+  let existing = []
+  if (skippedNames.length > 0) {
+    const { data } = await supabase
       .from('companies')
-      .insert(toInsert)
       .select('id, name, category, yc_batch, website')
-    if (error) throw error
-    imported = data?.length || 0
-    data?.forEach(row => importedRows.push(row))
+      .in('name', skippedNames)
+    existing = data || []
   }
 
-  return { imported, skipped, companies: importedRows }
+  const all = [...(inserted || []), ...existing]
+  return { imported: inserted?.length || 0, skipped: skippedNames.length, companies: all }
 }

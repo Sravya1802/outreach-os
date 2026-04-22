@@ -91,41 +91,14 @@ function YCCategoryView() {
     if (navigating) return
     setNavigating(c.slug)
     try {
-      console.log('[YC] Clicking company:', c.name, c.slug)
-      // Check if already in DB
-      const results = await api.jobs.search(c.name)
-      console.log('[YC] Search results:', results?.length, results)
-      const existing = results?.find(r => r.name.toLowerCase() === c.name.toLowerCase()) || results?.[0]
-      if (existing) {
-        console.log('[YC] Found existing, navigating to:', existing.id)
-        navigate(`/company/${existing.id}`);
-        return
-      }
-      // Auto-import — response includes the id
-      console.log('[YC] No existing found, importing...')
+      // Import (or find existing) — upsert returns the id either way
       const imported = await api.yc.import([c.slug])
-      console.log('[YC] Import response:', imported)
-      if (imported?.id) {
-        console.log('[YC] Imported, navigating to:', imported.id)
-        navigate(`/company/${imported.id}`);
+      const row = imported?.companies?.find(r => r.name === c.name) || imported?.companies?.[0]
+      if (row?.id) {
+        navigate(`/company/${row.id}`)
         return
       }
-      // Fallback: use first company from importedRows array
-      if (imported?.companies?.[0]?.id) {
-        console.log('[YC] Using fallback ID:', imported.companies[0].id)
-        navigate(`/company/${imported.companies[0].id}`);
-        return
-      }
-      console.log('[YC] No ID from import, doing last resort search')
-      // Last resort: search again with normalized name
-      const results2 = await api.jobs.search(c.name.replace(/\s+\|\s+/, ' '))
-      const found = results2?.find(r => r.name.toLowerCase() === c.name.toLowerCase()) || results2?.[0]
-      if (found) {
-        console.log('[YC] Found in last resort search:', found.id)
-        navigate(`/company/${found.id}`);
-        return
-      }
-      console.log('[YC] FAILED - no company found anywhere')
+      console.warn('[YC navigate] no id returned from import:', imported)
     } catch (err) {
       console.error('[YC navigate] ERROR:', err)
     } finally {
@@ -295,11 +268,17 @@ export default function CategoryView() {
       const r = src === 'all_sources'
         ? await api.companies.scrape({ category: categoryName, subcategory })
         : await api.companies.scrapeSource(src, { category: categoryName, subcategory })
-      setScrapeMsg({ ok: true, text: `+${r.added || 0} companies added${r.updated ? `, ${r.updated} updated` : ''}` })
+      const added = r.added || 0
+      const total = r.deduped || r.total || 0
+      const skipped = Math.max(0, total - added)
+      const parts = [`${total} scraped`, `+${added} new`]
+      if (skipped > 0) parts.push(`${skipped} already in DB`)
+      if (r.updated) parts.push(`${r.updated} updated`)
+      setScrapeMsg({ ok: true, text: parts.join(' · ') })
       load(0, search, source, status)
     } catch (err) { setScrapeMsg({ ok: false, text: err.message }) }
     setScraping(null)
-    setTimeout(() => setScrapeMsg(null), 6000)
+    setTimeout(() => setScrapeMsg(null), 8000)
   }
 
   // Inline status update

@@ -84,33 +84,14 @@ function RefreshBadge() {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
-    fetch('/api/jobs/last-refresh').then(r => r.json()).then(d => setLastRefresh(d.lastRefresh)).catch(console.warn)
     const timer = setInterval(() => setNow(Date.now()), 60000)
     return () => clearInterval(timer)
   }, [])
 
-
+  // Bulk refresh isn't available on the serverless deployment; keep badge read-only.
   async function refresh() {
-    setRefreshing(true); setProgress('Starting…')
-    try {
-      const res = await fetch('/api/jobs/refresh-all', { method: 'POST' })
-      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = ''
-      while (true) {
-        const { done, value } = await reader.read(); if (done) break
-        buf += dec.decode(value)
-        const lines = buf.split('\n'); buf = lines.pop()
-        for (const line of lines) {
-          if (line.startsWith('data:')) {
-            try {
-              const d = JSON.parse(line.slice(5))
-              if (d.message) setProgress(d.message.slice(0, 50))
-              if (d.message?.includes('complete')) setLastRefresh(new Date().toISOString())
-            } catch (e) { console.warn('SSE parse error:', e) }
-          }
-        }
-      }
-    } catch (e) { console.warn('Refresh error:', e) }
-    setRefreshing(false); setProgress('')
+    setRefreshing(true); setProgress('Not available on this deployment')
+    setTimeout(() => { setRefreshing(false); setProgress('') }, 1500)
   }
 
   const isStale = useMemo(() => lastRefresh && (now - new Date(lastRefresh)) > 48 * 3600000, [lastRefresh, now])
