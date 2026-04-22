@@ -232,19 +232,22 @@ export default function CompanyDashboard({ onStatsChange }) {
                   </button>
                 </div>
               ) : (
-                results.map(r => (
-                  <div key={r.id} className="dash-search-result"
-                    onClick={() => goToCompany(r.id)}
-                    style={{ padding:'11px 18px', borderBottom:'1px solid #f1f5f9', display:'flex', alignItems:'center', gap:12 }}>
-                    <div style={{ width:32, height:32, borderRadius:7, background:'#e0e7ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:'#4f46e5', flexShrink:0 }}>
-                      {r.name[0].toUpperCase()}
+                results.map(r => {
+                  const label = r.name || r.company_name || r.title || '?'
+                  return (
+                    <div key={r.id} className="dash-search-result"
+                      onClick={() => goToCompany(r.id)}
+                      style={{ padding:'11px 18px', borderBottom:'1px solid #f1f5f9', display:'flex', alignItems:'center', gap:12 }}>
+                      <div style={{ width:32, height:32, borderRadius:7, background:'#e0e7ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:'#4f46e5', flexShrink:0 }}>
+                        {label.charAt(0).toUpperCase()}
+                      </div>
+                      <div>
+                        <div style={{ fontSize:13, fontWeight:700, color:'#0f172a' }}>{label}</div>
+                        <div style={{ fontSize:11, color:'#94a3b8' }}>{r.category} {r.location ? `· ${r.location}` : ''}</div>
+                      </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize:13, fontWeight:700, color:'#0f172a' }}>{r.name}</div>
-                      <div style={{ fontSize:11, color:'#94a3b8' }}>{r.category} {r.location ? `· ${r.location}` : ''}</div>
-                    </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
           )}

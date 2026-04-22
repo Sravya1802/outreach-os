@@ -226,11 +226,14 @@ export const api = {
   },
 
   jobs: {
+    // Companies sidebar search. Queries the companies table (rows have `name`)
+    // — earlier version hit the jobs table which uses `company_name`, leaving
+    // r.name undefined and crashing r.name[0].toUpperCase() in the dropdown.
     search: async (query) => {
       const { data } = await supabase
-        .from('jobs')
-        .select('*')
-        .or(`title.ilike.%${query}%,company_name.ilike.%${query}%`)
+        .from('companies')
+        .select('id, name, category, website, status')
+        .ilike('name', `%${query}%`)
         .limit(20)
       return data || []
     },
