@@ -187,6 +187,65 @@ async function fetchWorkdayRoles(slug, roleType) {
   return results
 }
 
+// ── Serper (Google search) fallback ─────────────────────────────────────────
+// Searches the company's own careers domain + the major ATS hosts and filters
+// the results by CS role + intern/fulltime keyword. Matches the local backend's
+// Step 1d implementation — this is what keeps Salesforce/Microsoft/Google/
+// Amazon working when their ATS APIs refuse direct access.
+async function fetchSerperRoles(companyName, companyWebsite, roleType) {
+  const key = (process.env.SERPER_API_KEY || '').trim()
+  if (!key || key.length < 10) return []
+
+  // Build site clause.
+  let siteClause = 'site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com'
+  try {
+    if (companyWebsite) {
+      const host = new URL(companyWebsite.startsWith('http') ? companyWebsite : `https://${companyWebsite}`).hostname.replace(/^www\./, '')
+      if (host && !/greenhouse|lever|ashby/.test(host)) {
+        siteClause = `site:${host} OR ${siteClause}`
+      }
+    }
+  } catch {}
+
+  const queries = roleType === 'fulltime'
+    ? [`"${companyName}" software engineer ${siteClause}`, `"${companyName}" new grad ${siteClause}`]
+    : [`"${companyName}" intern software ${siteClause}`, `"${companyName}" internship engineering ${siteClause}`]
+
+  const out = []
+  const seen = new Set()
+  for (const q of queries) {
+    try {
+      const r = await fetch('https://google.serper.dev/search', {
+        method: 'POST',
+        headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ q, num: 20 }),
+        signal: AbortSignal.timeout(10000),
+      })
+      if (!r.ok) continue
+      const d = await r.json()
+      for (const it of (d.organic || [])) {
+        if (!it?.link || seen.has(it.link)) continue
+        // Skip aggregators.
+        if (/linkedin\.com\/jobs\/search|indeed\.com|glassdoor\.com\/job-listing|ziprecruiter|monster\.com|dice\.com\/jobs|builtin|crunchbase/i.test(it.link)) continue
+        const title = it.title.split(/[-–|·]|\s+at\s+.+$/i)[0].trim()
+        if (title.length < 8 || title.length > 120) continue
+        const isIntern = /\bintern/i.test(title)
+        if (roleType === 'intern' && !isIntern) continue
+        if (roleType === 'fulltime' && isIntern) continue
+        if (!CS_ROLE_KW.test(title) || NON_CS_ROLE.test(title)) continue
+        seen.add(it.link)
+        out.push({
+          title,
+          location: it.snippet?.match(/\b([A-Z][a-z]+(?:\s[A-Z][a-z]+)*,\s*[A-Z]{2}|Remote|Hybrid)\b/)?.[1] || '',
+          source: 'serper',
+          apply_url: it.link,
+        })
+      }
+    } catch {}
+  }
+  return out
+}
+
 // ── Apple's internal jobs API ───────────────────────────────────────────────
 async function fetchAppleRoles(roleType) {
   const out = []
@@ -552,6 +611,13 @@ export default async (req, res) => {
       if (!collected.length) {
         const wdSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '')
         collected.push(...(await fetchWorkdayRoles(wdSlug, roleType)))
+      }
+
+      // (4) Serper fallback — Google search the company's careers + ATS
+      // domains. This is what the local backend relied on for big names whose
+      // ATS is SPA-only (Salesforce, Microsoft, Google, Amazon, Apple, etc.).
+      if (!collected.length) {
+        collected.push(...(await fetchSerperRoles(name, company.website || '', roleType)))
       }
 
       // Dedupe + US-first + save.
