@@ -58,6 +58,16 @@ ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS apply_mode   TEXT DEFAULT 'manu
 ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS applied_at   TIMESTAMPTZ;
 ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS pdf_path     TEXT;
 
+-- Companies may have a distinct careers URL (e.g. jobs.netflix.com) separate
+-- from the marketing website (netflix.com). If the column doesn't exist yet
+-- (older installs), add it; safe to re-run.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'companies') THEN
+    EXECUTE 'ALTER TABLE public.companies ADD COLUMN IF NOT EXISTS careers_url TEXT';
+  END IF;
+END $$;
+
 -- ── Storage bucket for resumes ───────────────────────────────────────────────
 -- Run this ONLY if the bucket doesn't already exist:
 --   Supabase Dashboard → Storage → New bucket → name "resumes", public: OFF

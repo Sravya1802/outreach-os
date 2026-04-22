@@ -254,9 +254,16 @@ export const api = {
       return data || []
     },
     careersUrl: async (companyId) => {
-      const { data: company } = await supabase.from('companies').select('website, name').eq('id', companyId).maybeSingle()
-      if (!company?.website) return { url: null }
-      const base = company.website.startsWith('http') ? company.website : `https://${company.website}`
+      const { data: company } = await supabase.from('companies').select('careers_url, website, name').eq('id', companyId).maybeSingle()
+      if (!company) return { url: null }
+      // Prefer explicit careers_url (set by seed). Skip websites that look
+      // like ATS hostnames — they're scrape artifacts, not the real company.
+      if (company.careers_url) return { url: company.careers_url }
+      const website = company.website || ''
+      if (!website) return { url: null }
+      const isAts = /workday|myworkdayjobs|greenhouse|lever\.co|ashbyhq|ashby|icims|smartrecruiters|recruitee|workable|jobvite/i.test(website)
+      if (isAts) return { url: null }
+      const base = website.startsWith('http') ? website : `https://${website}`
       return { url: `${base.replace(/\/$/, '')}/careers` }
     },
     contacts: async (companyId) => {

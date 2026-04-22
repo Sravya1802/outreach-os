@@ -2,6 +2,80 @@ import { getSupabase } from '../_lib/supabase.js'
 import { evaluateJob, fetchJobFromUrl } from '../../backend/services/jobEvaluator.js'
 import { classifyFast, KNOWN_COMPANIES } from '../../backend/services/categorize.js'
 
+// ── Real websites + careers URLs for the companies we seed ──────────────────
+// Hand-curated for the big names that use proprietary ATS (Workday, iCIMS,
+// custom) so the UI links to the real careers page instead of a scraped ATS
+// hostname. Fallback: guess from `{name}.com`.
+const WEBSITES = {
+  'Apple':            ['apple.com',            'https://www.apple.com/careers/us/'],
+  'Microsoft':        ['microsoft.com',        'https://careers.microsoft.com/v2/global/en/home'],
+  'Google':           ['google.com',           'https://careers.google.com/jobs/results/'],
+  'Meta':             ['meta.com',             'https://www.metacareers.com/jobs'],
+  'Amazon':           ['amazon.com',           'https://www.amazon.jobs/en/'],
+  'Salesforce':       ['salesforce.com',       'https://careers.salesforce.com/en/jobs/'],
+  'Oracle':           ['oracle.com',           'https://careers.oracle.com/jobs/'],
+  'Adobe':            ['adobe.com',            'https://careers.adobe.com/us/en'],
+  'Ibm':              ['ibm.com',              'https://www.ibm.com/careers/'],
+  'Intel':            ['intel.com',            'https://jobs.intel.com/'],
+  'Nvidia':           ['nvidia.com',           'https://www.nvidia.com/en-us/about-nvidia/careers/'],
+  'Netflix':          ['netflix.com',          'https://jobs.netflix.com/'],
+  'Uber':             ['uber.com',             'https://www.uber.com/us/en/careers/'],
+  'Airbnb':           ['airbnb.com',           'https://careers.airbnb.com/'],
+  'Spotify':          ['spotify.com',          'https://www.lifeatspotify.com/jobs'],
+  'Linkedin':         ['linkedin.com',         'https://careers.linkedin.com/'],
+  'Twitter':          ['x.com',                'https://careers.x.com/en'],
+  'Goldman Sachs':    ['goldmansachs.com',     'https://www.goldmansachs.com/careers/'],
+  'Morgan Stanley':   ['morganstanley.com',    'https://www.morganstanley.com/people/'],
+  'Jp Morgan':        ['jpmorgan.com',         'https://careers.jpmorgan.com/'],
+  'Jpmorgan':         ['jpmorgan.com',         'https://careers.jpmorgan.com/'],
+  'Jpmorgan Chase':   ['jpmorganchase.com',    'https://careers.jpmorgan.com/'],
+  'Citigroup':        ['citigroup.com',        'https://jobs.citi.com/'],
+  'Citibank':         ['citi.com',             'https://jobs.citi.com/'],
+  'Citi':             ['citi.com',             'https://jobs.citi.com/'],
+  'Barclays':         ['barclays.com',         'https://home.barclays/careers/'],
+  'Ubs':              ['ubs.com',              'https://www.ubs.com/global/en/careers.html'],
+  'Deutsche Bank':    ['db.com',               'https://careers.db.com/'],
+  'Two Sigma':        ['twosigma.com',         'https://www.twosigma.com/careers/'],
+  'Citadel':          ['citadel.com',          'https://www.citadel.com/careers/'],
+  'Jane Street':      ['janestreet.com',       'https://www.janestreet.com/join-jane-street/'],
+  'Jump Trading':     ['jumptrading.com',      'https://www.jumptrading.com/careers/'],
+  'Hudson River Trading': ['hudson-trading.com','https://www.hudsonrivertrading.com/careers/'],
+  'De Shaw':          ['deshaw.com',           'https://www.deshaw.com/careers'],
+  'Renaissance Technologies': ['rentec.com',   'https://www.rentec.com/'],
+  'Optiver':          ['optiver.com',          'https://optiver.com/careers/'],
+  'Susquehanna':      ['sig.com',              'https://careers.sig.com/'],
+  'Bridgewater':      ['bridgewater.com',      'https://www.bridgewater.com/careers'],
+  'Point72':          ['point72.com',          'https://point72.com/careers/'],
+  'Palantir':         ['palantir.com',         'https://www.palantir.com/careers/'],
+  'Anduril':          ['anduril.com',          'https://www.anduril.com/careers/'],
+  'Stripe':           ['stripe.com',           'https://stripe.com/jobs/search'],
+  'Figma':            ['figma.com',            'https://www.figma.com/careers/'],
+  'Notion':           ['notion.so',            'https://www.notion.so/careers'],
+  'Anthropic':        ['anthropic.com',        'https://www.anthropic.com/careers'],
+  'Openai':           ['openai.com',           'https://openai.com/careers/'],
+  'Databricks':       ['databricks.com',       'https://www.databricks.com/company/careers'],
+  'Snowflake':        ['snowflake.com',        'https://careers.snowflake.com/'],
+  'Cloudflare':       ['cloudflare.com',       'https://www.cloudflare.com/careers/'],
+  'Datadog':          ['datadoghq.com',        'https://careers.datadoghq.com/'],
+}
+
+function guessWebsite(displayName) {
+  const hit = WEBSITES[displayName]
+  if (hit) return `https://www.${hit[0]}`
+  // Fallback: collapse to slug.com (e.g. "Jane Street" → "janestreet.com").
+  const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  if (!slug) return null
+  return `https://www.${slug}.com`
+}
+
+function guessCareersUrl(displayName) {
+  const hit = WEBSITES[displayName]
+  if (hit) return hit[1]
+  const slug = displayName.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  if (!slug) return null
+  return `https://www.${slug}.com/careers`
+}
+
 const SCAN_GREENHOUSE = [
   'stripe','airbnb','robinhood','figma','coinbase','plaid','brex','ramp','notion','anthropic',
   'openai','scale','databricks','cloudflare','datadog','palantir','anduril','gusto','rippling','lattice',
@@ -225,22 +299,42 @@ export default async (req, res) => {
     // ── Seed ~300 well-known companies from the KNOWN_COMPANIES map ──────────
     // Covers FAANG, big finance, big quant, major healthcare, etc. — companies
     // that don't show up in Greenhouse/Lever/Ashby scrapes because they run
-    // their own ATS. Safe to re-run: uses upsert with ignoreDuplicates.
+    // their own ATS. Safe to re-run; also fixes stale workday/ATS hostnames
+    // previously stored as company.website.
     if (action === 'seed-known-companies') {
       const rows = []
       for (const [name, meta] of KNOWN_COMPANIES.entries()) {
+        const displayName = name.replace(/\b\w/g, c => c.toUpperCase())
         rows.push({
-          name: name.replace(/\b\w/g, c => c.toUpperCase()), // titlecase
+          name: displayName,
           category: meta.category,
+          website: guessWebsite(displayName),
+          careers_url: guessCareersUrl(displayName),
           status: 'active',
         })
       }
-      const { data, error } = await sb
+      // First: insert fresh rows (ignoreDuplicates — skips existing names).
+      const { data: inserted, error: insErr } = await sb
         .from('companies')
         .upsert(rows, { onConflict: 'name', ignoreDuplicates: true })
-        .select('id, name, category')
-      if (error) throw error
-      return res.json({ added: data?.length || 0, total: rows.length })
+        .select('id, name')
+      if (insErr) throw insErr
+
+      // Second: fix bad websites on existing rows — if we stored a workday /
+      // myworkdayjobs / greenhouse etc hostname, overwrite with the real one.
+      const insertedNames = new Set((inserted || []).map(r => r.name))
+      const toFix = rows.filter(r => !insertedNames.has(r.name) && r.website)
+      let fixed = 0
+      for (const r of toFix) {
+        const { data: existing } = await sb.from('companies').select('website').eq('name', r.name).maybeSingle()
+        if (!existing) continue
+        const bad = !existing.website || /workday|myworkdayjobs|greenhouse|lever\.co|ashby|icims|smartrecruiters|recruitee|workable/i.test(existing.website)
+        if (bad) {
+          const { error } = await sb.from('companies').update({ website: r.website, careers_url: r.careers_url }).eq('name', r.name)
+          if (!error) fixed++
+        }
+      }
+      return res.json({ added: inserted?.length || 0, websites_fixed: fixed, total: rows.length })
     }
 
     // ── One-shot backfill: reclassify all companies using the fast classifier ─

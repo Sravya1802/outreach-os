@@ -1939,12 +1939,21 @@ export default function CompanyDetail() {
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:4, flexWrap:'wrap' }}>
               <h1 style={{ fontSize:22, fontWeight:800, color:'#0f172a', margin:0 }}>{company.name}</h1>
-              {company.website && (
-                <a href={company.website.startsWith('http') ? company.website : `https://${company.website}`} target="_blank" rel="noreferrer"
-                  style={{ fontSize:12, color:'#6366f1', textDecoration:'none', fontWeight:600 }}>
-                  {(company.website || '').replace(/^https?:\/\//, '').replace(/\/$/, '')} →
-                </a>
-              )}
+              {(() => {
+                const web = company.website || ''
+                // Don't surface ATS hostnames (workday/greenhouse/etc) as the
+                // "website" — they're scrape artifacts, not the real company.
+                const isAts = /workday|myworkdayjobs|greenhouse|lever\.co|ashbyhq|ashby|icims|smartrecruiters|recruitee|workable|jobvite/i.test(web)
+                if (!web || isAts) return null
+                const href = web.startsWith('http') ? web : `https://${web}`
+                const label = href.replace(/^https?:\/\//, '').replace(/\/$/, '')
+                return (
+                  <a href={href} target="_blank" rel="noreferrer"
+                    style={{ fontSize:12, color:'#6366f1', textDecoration:'none', fontWeight:600 }}>
+                    {label} →
+                  </a>
+                )
+              })()}
               {isYC && (company.tag || company.url) && (
                 <a href={company.url || `https://www.workatastartup.com/companies/${company.tag}`} target="_blank" rel="noreferrer"
                   style={{ fontSize:12, color:'#c2410c', textDecoration:'none', fontWeight:600, background:'#fff7ed', padding:'3px 10px', borderRadius:6, border:'1px solid #fed7aa' }}>
