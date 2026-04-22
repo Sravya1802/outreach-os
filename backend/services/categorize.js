@@ -7,7 +7,7 @@ function getAnthropicKey() { return process.env.ANTHROPIC_API_KEY || ''; }
 // ─── Level 2: Known-companies map ────────────────────────────────────────────
 // Exact company name → category (lowercased keys). Covers ~300 well-known employers.
 
-const KNOWN_COMPANIES = new Map([
+export const KNOWN_COMPANIES = new Map([
   // ── Investment Banks ──────────────────────────────────────────────────────
   ['goldman sachs',           { category: 'Finance & Investing', subcategory: 'Investment Banks',           confidence: 0.99 }],
   ['morgan stanley',          { category: 'Finance & Investing', subcategory: 'Investment Banks',           confidence: 0.99 }],

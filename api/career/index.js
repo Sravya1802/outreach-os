@@ -1,6 +1,6 @@
 import { getSupabase } from '../_lib/supabase.js'
 import { evaluateJob, fetchJobFromUrl } from '../../backend/services/jobEvaluator.js'
-import { classifyFast } from '../../backend/services/categorize.js'
+import { classifyFast, KNOWN_COMPANIES } from '../../backend/services/categorize.js'
 
 const SCAN_GREENHOUSE = [
   'stripe','airbnb','robinhood','figma','coinbase','plaid','brex','ramp','notion','anthropic',
@@ -220,6 +220,27 @@ export default async (req, res) => {
     // ── Tailored resume: deferred (PDF generation requires filesystem) ────────
     if (action === 'tailored-resume') {
       return res.status(501).json({ error: 'Tailored resume generation not available in this deployment.' })
+    }
+
+    // ── Seed ~300 well-known companies from the KNOWN_COMPANIES map ──────────
+    // Covers FAANG, big finance, big quant, major healthcare, etc. — companies
+    // that don't show up in Greenhouse/Lever/Ashby scrapes because they run
+    // their own ATS. Safe to re-run: uses upsert with ignoreDuplicates.
+    if (action === 'seed-known-companies') {
+      const rows = []
+      for (const [name, meta] of KNOWN_COMPANIES.entries()) {
+        rows.push({
+          name: name.replace(/\b\w/g, c => c.toUpperCase()), // titlecase
+          category: meta.category,
+          status: 'active',
+        })
+      }
+      const { data, error } = await sb
+        .from('companies')
+        .upsert(rows, { onConflict: 'name', ignoreDuplicates: true })
+        .select('id, name, category')
+      if (error) throw error
+      return res.json({ added: data?.length || 0, total: rows.length })
     }
 
     // ── One-shot backfill: reclassify all companies using the fast classifier ─

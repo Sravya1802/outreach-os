@@ -378,6 +378,7 @@ export const api = {
 
     // ── Reclassify companies (one-shot backfill via classifier) ──────────────
     reclassifyCompanies: () => careerAction('reclassify-companies'),
+    seedKnownCompanies: () => careerAction('seed-known-companies'),
 
     // ── Tracker ──────────────────────────────────────────────────────────────
     tracker: () => careerAction('tracker'),

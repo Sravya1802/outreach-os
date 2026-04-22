@@ -58,22 +58,38 @@ export default function CompanyDashboard({ onStatsChange }) {
   const debounce   = useRef(null)
 
   async function reclassify() {
-    setReclassifying(true)
-    setReclassifyMsg(null)
+    setReclassifying(true); setReclassifyMsg(null)
     try {
       const r = await api.career.reclassifyCompanies()
       setReclassifyMsg(`✓ Reclassified ${r.updated} of ${r.checked} companies (${r.skipped} already correct)`)
-      // Re-fetch category counts so the grid reflects the new state
-      api.unified.categoryCounts().then(d => {
-        const map = {}
-        for (const r of (d.counts || [])) map[r.category] = r.count
-        setCatCounts(map)
-      }).catch(() => {})
+      refreshCounts()
     } catch (err) {
       setReclassifyMsg(`✗ ${err.message}`)
     }
     setReclassifying(false)
     setTimeout(() => setReclassifyMsg(null), 8000)
+  }
+
+  async function seedCompanies() {
+    setReclassifying(true); setReclassifyMsg(null)
+    try {
+      const r = await api.career.seedKnownCompanies()
+      setReclassifyMsg(`✓ Seeded ${r.added} new companies (FAANG, finance, quant, healthcare, etc.)`)
+      refreshCounts()
+    } catch (err) {
+      setReclassifyMsg(`✗ ${err.message}`)
+    }
+    setReclassifying(false)
+    setTimeout(() => setReclassifyMsg(null), 8000)
+  }
+
+  function refreshCounts() {
+    api.unified.categoryCounts().then(d => {
+      const map = {}
+      for (const row of (d.counts || [])) map[row.category] = row.count
+      setCatCounts(map)
+    }).catch(() => {})
+    api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {})
   }
 
   // Inject CSS
@@ -253,10 +269,15 @@ export default function CompanyDashboard({ onStatsChange }) {
               style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #e2e8f0', background: hideEmpty ? '#eff6ff' : '#fff', color: hideEmpty ? '#2563eb' : '#64748b', fontSize:12, fontWeight:600, cursor:'pointer' }}>
               {hideEmpty ? '✓ Hide empty' : 'Hide empty'}
             </button>
+            <button onClick={seedCompanies} disabled={reclassifying}
+              title="Seed ~300 well-known companies (FAANG, finance, quant, healthcare) into the DB with correct categories. Safe to re-run."
+              style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #bbf7d0', background:'#f0fdf4', color:'#15803d', fontSize:12, fontWeight:700, cursor: reclassifying ? 'default' : 'pointer' }}>
+              + Seed Companies
+            </button>
             <button onClick={reclassify} disabled={reclassifying}
               title="Reclassify companies using the built-in industry classifier (fixes e.g. Jump Trading → Finance)"
               style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #c7d2fe', background: reclassifying ? '#e0e7ff' : '#eef2ff', color:'#4f46e5', fontSize:12, fontWeight:700, cursor: reclassifying ? 'default' : 'pointer' }}>
-              {reclassifying ? 'Reclassifying…' : '↻ Reclassify'}
+              {reclassifying ? 'Working…' : '↻ Reclassify'}
             </button>
           </div>
         </div>
