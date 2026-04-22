@@ -5,9 +5,32 @@ import { logActivity } from '../_lib/companyStore.js'
 export default async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const { action, slugs, filters } = req.body || {}
+  const { action, slugs, filters, page = 0, pageSize = 50 } = req.body || {}
 
   try {
+    if (action === 'list') {
+      const all = await getYCHiringCompanies()
+      const f = {
+        location: filters?.location === 'US' ? 'us' : (filters?.location || '').toLowerCase(),
+        industry: filters?.industry || '',
+        maxTeamSize: filters?.maxTeamSize || '',
+        minTeamSize: filters?.minTeamSize || '',
+        batch: filters?.batch || '',
+        search: filters?.q || filters?.search || '',
+      }
+      const filtered = filterYCCompanies(all, f)
+      const start = Number(page) * Number(pageSize)
+      const slice = filtered.slice(start, start + Number(pageSize))
+      const industries = Array.from(new Set(all.map(c => c.industry).filter(Boolean))).sort()
+      return res.json({
+        companies: slice,
+        total: filtered.length,
+        page: Number(page),
+        pageSize: Number(pageSize),
+        industries,
+      })
+    }
+
     if (action === 'import') {
       if (!Array.isArray(slugs) || slugs.length === 0) {
         return res.json({ imported: 0, skipped: 0, companies: [] })
@@ -38,7 +61,7 @@ export default async (req, res) => {
       return res.json({ imported: result.imported, skipped: result.skipped, total: usFilter.length, source: 'yc-oss-api' })
     }
 
-    return res.status(400).json({ error: 'action must be import, import-all, or scrape-waas' })
+    return res.status(400).json({ error: 'action must be list, import, import-all, or scrape-waas' })
   } catch (err) {
     console.error('[yc] error:', err)
     res.status(500).json({ error: err.message })

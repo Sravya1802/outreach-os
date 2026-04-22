@@ -15,11 +15,12 @@ async function apiCall(url, options = {}) {
   return res.json()
 }
 
+const careerAction = (action, body = {}) =>
+  apiCall('/career', { method: 'POST', body: { action, ...body } })
+
 export const api = {
-  // System health (Vercel function)
   health: () => apiCall('/health'),
 
-  // Stats from Supabase
   stats: async () => {
     const [companiesRes, jobsRes, evaluationsRes, contactsRes] = await Promise.all([
       supabase.from('companies').select('*', { count: 'exact', head: true }),
@@ -27,7 +28,6 @@ export const api = {
       supabase.from('evaluations').select('*', { count: 'exact', head: true }),
       supabase.from('job_contacts').select('*', { count: 'exact', head: true }),
     ])
-
     return {
       totalCompanies: companiesRes.count || 0,
       totalJobs: jobsRes.count || 0,
@@ -36,7 +36,7 @@ export const api = {
       responseRate: 0,
       activeSources: 0,
       ycImported: 0,
-      totalApplications: 0,
+      totalApplications: evaluationsRes.count || 0,
     }
   },
 
@@ -50,10 +50,13 @@ export const api = {
   },
 
   jobMetrics: async () => {
-    const { data: companies } = await supabase.from('companies').select('id')
-    const { data: jobs } = await supabase.from('jobs').select('id')
-    const { data: evaluations } = await supabase.from('evaluations').select('*')
-
+    const [{ data: companies }, { data: jobs }, { data: evaluations }] = await Promise.all([
+      supabase.from('companies').select('id'),
+      supabase.from('jobs').select('id'),
+      supabase.from('evaluations').select('*'),
+    ])
+    const gradeDist = { A: 0, B: 0, C: 0, D: 0, F: 0 }
+    ;(evaluations || []).forEach(e => { if (e.grade && gradeDist[e.grade] !== undefined) gradeDist[e.grade]++ })
     return {
       summary: {
         totalCompanies: companies?.length || 0,
@@ -64,16 +67,16 @@ export const api = {
         applyRate: 0,
       },
       applyFunnel: {
-        evaluated: evaluations?.filter(e => !e.apply_status).length || 0,
+        evaluated: evaluations?.filter(e => !e.apply_status || e.apply_status === 'not_started').length || 0,
         applied: evaluations?.filter(e => ['opened', 'submitted', 'queued'].includes(e.apply_status)).length || 0,
         responded: evaluations?.filter(e => e.apply_status === 'responded').length || 0,
         interview: evaluations?.filter(e => e.apply_status === 'interview').length || 0,
         offer: evaluations?.filter(e => e.apply_status === 'offer').length || 0,
         rejected: evaluations?.filter(e => e.apply_status === 'rejected').length || 0,
       },
-      gradeDist: { A: 0, B: 0, C: 0, D: 0, F: 0 },
+      gradeDist,
       topOutreachCompanies: [],
-      recentEvals: [],
+      recentEvals: (evaluations || []).slice(0, 10).map(e => ({ kind: 'evaluation', ...e })),
     }
   },
 
@@ -108,24 +111,28 @@ export const api = {
   },
 
   yc: {
-    companies: async (params = {}) => {
-      let query = supabase.from('companies').select('*').not('yc_batch', 'is', null)
-
-      if (params.category) query = query.eq('category', params.category)
-      if (params.search) query = query.ilike('name', `%${params.search}%`)
-
-      const { data } = await query.limit(params.pageSize || 50)
-      return { companies: data || [], total: data?.length || 0 }
-    },
+    companies: (params = {}) => apiCall('/yc', { method: 'POST', body: {
+      action: 'list',
+      page: params.page || 0,
+      pageSize: params.pageSize || 50,
+      filters: {
+        location: params.location,
+        industry: params.industry,
+        maxTeamSize: params.maxTeamSize,
+        minTeamSize: params.minTeamSize,
+        batch: params.batch,
+        q: params.q || params.search,
+      },
+    } }),
 
     company: async (slug) => {
-      const { data } = await supabase.from('companies').select('*').eq('name', slug).single()
+      const { data } = await supabase.from('companies').select('*').eq('name', slug).maybeSingle()
       return data || {}
     },
 
-    import: (slugs) => apiCall('/yc/index', { method: 'POST', body: { action: 'import', slugs } }),
-    importAll: (filters) => apiCall('/yc/index', { method: 'POST', body: { action: 'import-all', filters } }),
-    scrapeWaas: () => apiCall('/yc/index', { method: 'POST', body: { action: 'scrape-waas' } }),
+    import: (slugs) => apiCall('/yc', { method: 'POST', body: { action: 'import', slugs } }),
+    importAll: (filters) => apiCall('/yc', { method: 'POST', body: { action: 'import-all', filters } }),
+    scrapeWaas: () => apiCall('/yc', { method: 'POST', body: { action: 'scrape-waas' } }),
   },
 
   generate: {
@@ -173,9 +180,8 @@ export const api = {
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100)
-      const companyIds = (companies || []).map(c => c.id)
-      const { data: jobs } = companyIds.length
-        ? await supabase.from('jobs').select('*').in('company_name', (companies || []).map(c => c.name))
+      const { data: jobs } = companies?.length
+        ? await supabase.from('jobs').select('*').in('company_name', companies.map(c => c.name))
         : { data: [] }
       const { data: contacts } = await supabase.from('job_contacts').select('*')
 
@@ -187,7 +193,6 @@ export const api = {
         jobs: (jobs || []).filter(j => j.company_name === c.name),
         contacts: (contacts || []).filter(ct => (jobs || []).some(j => j.id === ct.job_id && j.company_name === c.name)),
       }))
-
       return { companies: grouped }
     },
   },
@@ -201,88 +206,120 @@ export const api = {
         .limit(20)
       return data || []
     },
-
     detail: async (id) => {
-      const { data: job } = await supabase.from('jobs').select('*').eq('id', id).single()
+      const { data: job } = await supabase.from('jobs').select('*').eq('id', id).maybeSingle()
       const { data: contacts } = await supabase.from('job_contacts').select('*').eq('job_id', id)
       return { job, contacts: contacts || [] }
     },
-
     updateStatus: async (id, status) => {
-      const { data } = await supabase.from('jobs').update({ status }).eq('id', id)
+      const { data } = await supabase.from('jobs').update({ status }).eq('id', id).select()
       return data?.[0] || {}
     },
-
     scrape: (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
   },
 
   career: {
-    resume: async () => {
-      try {
-        const { data: { user } } = await supabase.auth.getUser()
-        if (!user) return { hasResume: false }
-
-        const { data } = await supabase.storage
-          .from('resumes')
-          .list(`${user.id}`)
-
-        return { hasResume: data && data.length > 0, name: 'resume.pdf' }
-      } catch {
-        return { hasResume: false }
-      }
-    },
+    // ── Resume ────────────────────────────────────────────────────────────────
+    resume: () => careerAction('resume-info'),
 
     uploadResume: async (file) => {
       try {
         const { data: { user } } = await supabase.auth.getUser()
-        if (!user) throw new Error('Not authenticated')
-
-        const { data, error } = await supabase.storage
+        const key = user ? `${user.id}/resume.pdf` : 'shared/resume.pdf'
+        const { error: upErr } = await supabase.storage
           .from('resumes')
-          .upload(`${user.id}/resume.pdf`, file, { upsert: true })
+          .upload(key, file, { upsert: true, contentType: 'application/pdf' })
+        if (upErr) throw upErr
 
-        if (error) throw error
-        return { success: true }
+        // Extract text client-side using pdfjs via dynamic import
+        const text = await extractPdfText(file)
+        if (text && text.length > 50) {
+          await careerAction('resume-text-save', { text, name: file.name })
+        }
+        return { success: true, chars: text?.length || 0 }
       } catch (err) {
         return { success: false, error: err.message }
       }
     },
 
+    // ── Evaluate a job (single) — resume text pulled server-side ─────────────
     evaluate: (body) => apiCall('/career/evaluate', { method: 'POST', body }),
 
+    // ── Evaluations / history ────────────────────────────────────────────────
+    evaluations: () => careerAction('evaluations-list'),
+    evaluation: (id) => careerAction('evaluation-get', { id }),
+    deleteEvaluation: (id) => careerAction('evaluation-delete', { id }),
+    batchEvaluate: (urls) => careerAction('batch-evaluate', { urls }),
+
+    // ── Apply-state (shared with ApplicationPipeline) ────────────────────────
+    setApplyStatus: (id, status) => careerAction('apply-status', { id, status }),
+    setApplyMode: (id, mode) => careerAction('apply-mode', { id, mode }),
+
+    // ── Pipeline (kanban, read-side from Supabase) ───────────────────────────
     pipeline: async () => {
       const { data: evaluations } = await supabase
         .from('evaluations')
         .select('*')
         .order('created_at', { ascending: false })
 
-      const columns = {}
-      ;['not_started', 'opened', 'submitted', 'queued', 'responded', 'interview', 'offer', 'rejected'].forEach(status => {
-        columns[status] = {
-          label: status,
-          items: evaluations?.filter(e => e.apply_status === status) || [],
-        }
+      const buckets = {
+        evaluated: [], applied: [], responded: [], interview: [], offer: [], rejected: [],
+      }
+      ;(evaluations || []).forEach(e => {
+        const s = e.apply_status || 'not_started'
+        if (s === 'not_started') buckets.evaluated.push(e)
+        else if (['opened', 'submitted', 'queued'].includes(s)) buckets.applied.push(e)
+        else if (s === 'responded') buckets.responded.push(e)
+        else if (s === 'interview') buckets.interview.push(e)
+        else if (s === 'offer') buckets.offer.push(e)
+        else if (s === 'rejected') buckets.rejected.push(e)
       })
-
+      const columns = Object.fromEntries(Object.entries(buckets).map(([k, items]) => [k, { label: k, items }]))
       return { columns, total: evaluations?.length || 0, totals: columns }
     },
 
-    setApplyStatus: async (id, status) => {
-      const { data } = await supabase
-        .from('evaluations')
-        .update({ apply_status: status, updated_at: new Date() })
-        .eq('id', id)
-      return data?.[0] || {}
+    // ── Portal scanner (Greenhouse/Lever/Ashby) ──────────────────────────────
+    scanPortals: () => careerAction('scan-portals'),
+
+    // ── Profile / resumes library ────────────────────────────────────────────
+    profile: () => careerAction('profile-get'),
+    updateProfile: (profile) => careerAction('profile-update', { profile }),
+    resumesLibrary: () => careerAction('resumes-library'),
+
+    // ── Companies (Career Ops detail) ────────────────────────────────────────
+    getCompany: async (id) => {
+      const { data } = await supabase.from('companies').select('*').eq('id', id).maybeSingle()
+      return data || {}
+    },
+    updateCompany: async (id, patch) => {
+      const { data } = await supabase.from('companies').update(patch).eq('id', id).select().single()
+      return data || {}
     },
 
+    // ── Tracker ──────────────────────────────────────────────────────────────
+    tracker: () => careerAction('tracker'),
     ranked: async () => {
       const { data } = await supabase
         .from('evaluations')
         .select('*')
-        .order('grade', { ascending: false })
+        .order('score', { ascending: false })
         .limit(50)
       return { applications: data || [] }
     },
+
+    // ── Auto-apply (not supported on Vercel serverless) ──────────────────────
+    autoApplyRun: () => careerAction('auto-apply-run'),
+    autoApplyDirect: (body) => careerAction('auto-apply-direct', body),
+    autoApplyResumePreview: (jobUrls) => careerAction('auto-apply-resume-preview', { jobUrls }),
+    apply: async (id) => {
+      // Manual "mark as applied" shortcut (no automation)
+      return careerAction('apply-status', { id, status: 'submitted' })
+    },
+
+    // ── Resume / report URLs (static routes, not endpoints) ──────────────────
+    tailoredResume: () => ({ ok: false, error: 'Not available in this deployment' }),
+    reportHtmlUrl: (id) => `/evaluation/${id}`,
+    downloadUrl: (id) => `/evaluation/${id}`,
   },
 
   automations: {
@@ -291,3 +328,25 @@ export const api = {
     autoApply: (body) => apiCall('/automations/auto-apply', { method: 'POST', body }),
   },
 }
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+async function extractPdfText(file) {
+  try {
+    const pdfjs = await import('pdfjs-dist/build/pdf.mjs')
+    const workerSrc = (await import('pdfjs-dist/build/pdf.worker.mjs?url')).default
+    pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
+    const buf = await file.arrayBuffer()
+    const pdf = await pdfjs.getDocument({ data: buf }).promise
+    let text = ''
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p)
+      const c = await page.getTextContent()
+      text += c.items.map(it => it.str).join(' ') + '\n'
+    }
+    return text.trim()
+  } catch (err) {
+    console.warn('[pdf extract] failed:', err.message)
+    return ''
+  }
+}
+

@@ -290,10 +290,12 @@ export default function CategoryView() {
 
   async function scrapeSource(src) {
     setScraping(src)
-    const query = CATEGORY_QUERIES[categoryName] || `${categoryName.toLowerCase()} intern 2026`
+    const subcategory = CATEGORY_QUERIES[categoryName] || `${categoryName.toLowerCase()} intern 2026`
     try {
-      const r = await api.jobs.scrape({ category: categoryName, subcategory: categoryName })
-      setScrapeMsg({ ok: true, text: `+${r.added || 0} companies added` })
+      const r = src === 'all_sources'
+        ? await api.companies.scrape({ category: categoryName, subcategory })
+        : await api.companies.scrapeSource(src, { category: categoryName, subcategory })
+      setScrapeMsg({ ok: true, text: `+${r.added || 0} companies added${r.updated ? `, ${r.updated} updated` : ''}` })
       load(0, search, source, status)
     } catch (err) { setScrapeMsg({ ok: false, text: err.message }) }
     setScraping(null)

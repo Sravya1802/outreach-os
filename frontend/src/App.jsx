@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import { api } from './api'
+import { supabase } from './supabaseClient'
 import Spin from './components/Spin'
 import { timeAgo } from './utils/time'
 import CompanyDashboard from './components/CompanyDashboard'
@@ -14,10 +15,11 @@ import CareerOpsPage    from './components/CareerOpsPage'
 import CareerOps        from './components/CareerOps'
 import ApplicationPipeline from './components/ApplicationPipeline'
 import JobDashboard     from './components/JobDashboard'
+import Login            from './components/Login'
 
 
 // ── Settings page ─────────────────────────────────────────────────────────────
-function Settings({ name, setName, aiProvider, setAiProvider }) {
+function Settings({ name, setName, aiProvider, setAiProvider, onSignOut, userEmail }) {
   const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   return (
     <div style={{ flex:1, overflowY:'auto', padding:40, maxWidth:520 }}>
@@ -51,7 +53,7 @@ function Settings({ name, setName, aiProvider, setAiProvider }) {
         <p style={{ fontSize:11, color:'#94a3b8', marginTop:6 }}>Set AI_PROVIDER in .env — restart backend to apply.</p>
       </div>
 
-      <div style={{ padding:16, background:'#eff6ff', borderRadius:10, border:'1px solid #bfdbfe' }}>
+      <div style={{ padding:16, background:'#eff6ff', borderRadius:10, border:'1px solid #bfdbfe', marginBottom:20 }}>
         <div style={{ fontSize:12, fontWeight:700, color:'#1d4ed8', marginBottom:8 }}>API Keys (set in .env)</div>
         {[['GEMINI_API_KEY', 'Gemini AI (free tier available)'], ['APIFY_API_TOKEN', 'Apify (web scraping)'], ['APOLLO_API_KEY', 'Apollo.io (contact enrichment)'], ['LINKEDIN_SESSION_COOKIE', 'LinkedIn li_at cookie'], ['SERPER_API_KEY', 'Serper.dev (Google search)']].map(([key, label]) => (
           <div key={key} style={{ fontSize:11, color:'#3b82f6', marginBottom:3 }}>
@@ -59,6 +61,17 @@ function Settings({ name, setName, aiProvider, setAiProvider }) {
           </div>
         ))}
       </div>
+
+      {onSignOut && (
+        <div style={{ padding:16, background:'#fef2f2', borderRadius:10, border:'1px solid #fecaca' }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#b91c1c', marginBottom:4 }}>Account</div>
+          {userEmail && <div style={{ fontSize:11, color:'#7f1d1d', marginBottom:10 }}>{userEmail}</div>}
+          <button onClick={onSignOut}
+            style={{ padding:'7px 14px', background:'#fff', color:'#dc2626', border:'1px solid #fca5a5', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+            Sign out
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -135,18 +148,49 @@ function NavBadge({ n }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession]         = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
   const [health, setHealth]           = useState(null)
   const [stats, setStats]             = useState(null)
-  const [profileName, setProfileName] = useState('Sravya R.')
+  const [profileName, setProfileName] = useState('')
   const [aiProvider, setAiProvider]   = useState('gemini')
 
-  useEffect(() => { api.health().then(setHealth).catch(() => {}) }, [])
   useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session)
+      setAuthLoading(false)
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, sess) => setSession(sess))
+    return () => subscription?.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!session) return
+    const email = session.user?.email || ''
+    setProfileName(email.split('@')[0] || 'User')
+  }, [session])
+
+  useEffect(() => { if (session) api.health().then(setHealth).catch(() => {}) }, [session])
+  useEffect(() => {
+    if (!session) return
     const refresh = () => api.stats().then(setStats).catch(() => {})
     refresh()
     window.addEventListener('stats-refresh', refresh)
     return () => window.removeEventListener('stats-refresh', refresh)
-  }, [])
+  }, [session])
+
+  if (authLoading) {
+    return (
+      <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0f172a' }}>
+        <Spin size={28} color="#a5b4fc" />
+      </div>
+    )
+  }
+  if (!session) return <Login />
+
+  async function signOut() {
+    await supabase.auth.signOut()
+  }
 
   const initials = profileName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
 
@@ -275,7 +319,7 @@ export default function App() {
           <Route path="/career-ops"        element={<CareerOpsPage />} />
           <Route path="/career-ops-workflow" element={<CareerOps />} />
           <Route path="/job-dashboard"     element={<JobDashboard />} />
-          <Route path="/settings"          element={<Settings name={profileName} setName={setProfileName} aiProvider={aiProvider} setAiProvider={setAiProvider} />} />
+          <Route path="/settings"          element={<Settings name={profileName} setName={setProfileName} aiProvider={aiProvider} setAiProvider={setAiProvider} onSignOut={signOut} userEmail={session.user?.email} />} />
           <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>

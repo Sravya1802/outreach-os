@@ -40,7 +40,9 @@ export default function ScraperPage() {
     setScraping(src)
     setLog(l => [...l, `Starting ${src === 'all' ? 'all sources' : src}…`])
     try {
-      const r = await api.jobs.scrape({ category, subcategory: category, source: src === 'all' ? undefined : src })
+      const r = src === 'all'
+        ? await api.companies.scrape({ category, subcategory: category })
+        : await api.companies.scrapeSource(src, { category, subcategory: category })
       const added = r.added || r.imported || 0
       setResults(prev => ({ ...prev, [src]: { ok: true, added } }))
       setLog(l => [...l, `✓ ${src}: +${added} companies added`])

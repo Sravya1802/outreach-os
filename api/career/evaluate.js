@@ -9,16 +9,25 @@ const supabase = createClient(
 export default async (req, res) => {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const { jobUrl, jobTitle, companyName, resumeText } = req.body
+  const { jobUrl, jobDescription: rawDescription, jobTitle, companyName } = req.body
+  let { resumeText } = req.body
 
-  if (!jobUrl) return res.status(400).json({ error: 'jobUrl required' })
-  if (!resumeText) return res.status(400).json({ error: 'resumeText required' })
+  if (!jobUrl && !rawDescription) return res.status(400).json({ error: 'jobUrl or jobDescription required' })
 
   try {
-    // Fetch job description from URL
-    const { text: jobDescription, error: fetchError } = await fetchJobFromUrl(jobUrl)
-    if (!jobDescription) {
-      return res.status(400).json({ error: fetchError || 'Could not fetch job description' })
+    // If no resumeText supplied, fetch from Supabase meta table
+    if (!resumeText) {
+      const { data } = await supabase.from('meta').select('value').eq('key', 'user_resume_text').maybeSingle()
+      resumeText = data?.value
+    }
+    if (!resumeText) return res.status(400).json({ error: 'No resume on file — upload a resume first.' })
+
+    // Fetch job description from URL if not provided inline
+    let jobDescription = rawDescription || ''
+    if (jobUrl && !rawDescription) {
+      const { text, error: fetchError } = await fetchJobFromUrl(jobUrl)
+      if (!text) return res.status(400).json({ error: fetchError || 'Could not fetch job description' })
+      jobDescription = text
     }
 
     // Evaluate job against resume

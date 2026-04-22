@@ -68,9 +68,8 @@ function ResumeUpload({ resumeInfo, onUploaded }) {
     if (!file || file.type !== 'application/pdf') { setError('PDF files only, please.'); return }
     setUploading(true); setError(null)
     try {
-      const fd = new FormData(); fd.append('resume', file)
-      const r = await api.career.uploadResume(fd)
-      if (r.error) throw new Error(r.error)
+      const r = await api.career.uploadResume(file)
+      if (!r.success) throw new Error(r.error || 'Upload failed')
       onUploaded(r)
     } catch (err) { setError(err.message) }
     finally { setUploading(false) }
