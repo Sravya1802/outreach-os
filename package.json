@@ -5,20 +5,24 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "install:all": "npm install && npm install --prefix frontend && npm install --prefix backend",
-    "dev": "concurrently \"npm run dev --prefix frontend\" \"npm run dev --prefix backend\"",
+    "install:all": "npm install && npm install --prefix frontend",
+    "dev": "npm run dev --prefix frontend",
     "dev:frontend": "npm run dev --prefix frontend",
-    "dev:backend": "npm run dev --prefix backend",
     "dev:api": "vercel dev",
     "build:frontend": "npm run build --prefix frontend",
-    "build": "npm run build:frontend",
+    "build": "npm install --prefix frontend && npm run build --prefix frontend",
     "lint": "npm run lint --prefix frontend",
     "preview": "npm run preview --prefix frontend",
     "setup": "bash setup.sh"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.17.1",
+    "@google/generative-ai": "^0.3.0",
     "@supabase/supabase-js": "^2.104.0",
-    "apify-client": "^2.9.0"
+    "apify-client": "^2.9.0",
+    "axios": "^1.6.5",
+    "cheerio": "^1.2.0",
+    "openai": "^4.26.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
