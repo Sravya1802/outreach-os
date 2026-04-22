@@ -376,6 +376,9 @@ export const api = {
       return data || {}
     },
 
+    // ── Reclassify companies (one-shot backfill via classifier) ──────────────
+    reclassifyCompanies: () => careerAction('reclassify-companies'),
+
     // ── Tracker ──────────────────────────────────────────────────────────────
     tracker: () => careerAction('tracker'),
     ranked: async () => {

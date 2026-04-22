@@ -1,4 +1,5 @@
 import { getSupabase } from './supabase.js'
+import { classifyFast } from '../../backend/services/categorize.js'
 
 function deriveWebsite(careersUrl) {
   if (!careersUrl) return null
@@ -58,24 +59,28 @@ export async function upsertScrapedCompanies(results, category = null) {
     const existing = existingMap.get(key)
     const website = deriveWebsite(r.careersUrl)
 
+    // Classifier opinion beats the user's scrape context: Jump Trading scraped
+    // from a Tech & Software search should still land in Finance & Investing.
+    const classified = classifyFast(r)
+    const finalCategory = classified?.category || category || 'startup'
+
     if (!existing) {
       toInsert.push({
         name: r.name,
         website,
-        // Use the user-supplied category (from the category page the scrape
-        // was triggered from) so newly-inserted rows are visible in that
-        // category's list. Falls back to 'startup' if nothing was provided.
-        category: category || 'startup',
+        category: finalCategory,
         status: 'active',
       })
     } else {
       const patch = {}
       if (!existing.website && website) patch.website = website
       if (!existing.status) patch.status = 'active'
-      // Backfill category for orphan rows scraped before this code landed
-      // (or that were imported into a different category first). Only
-      // overwrite if the row has no category or the generic 'startup'.
-      if (category && (!existing.category || existing.category === 'startup')) {
+      // Prefer classifier truth over any previously-stored category when
+      // the classifier is confident. Otherwise only backfill when the
+      // existing row has no category or only the generic 'startup' tag.
+      if (classified?.category && (classified.confidence || 0) >= 0.9) {
+        if (existing.category !== classified.category) patch.category = classified.category
+      } else if (category && (!existing.category || existing.category === 'startup')) {
         patch.category = category
       }
       if (Object.keys(patch).length > 0) {

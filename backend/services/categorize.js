@@ -665,6 +665,21 @@ function keywordClassify(text) {
   return null;
 }
 
+/**
+ * Fast, synchronous classifier — L1 keyword rules + L2 known-company map only.
+ * No Wikipedia fetch, no AI call. Safe to run in a tight loop inside a serverless
+ * function during a scrape (60s budget). Returns null if the classifier has no
+ * opinion — caller should fall back to whatever context category the user was in.
+ */
+export function classifyFast(company) {
+  if (!company || !company.name) return null;
+  const title = [company.name, company.jobTitle || company.role || '', company.jobDescription || company.description || ''].join(' ');
+  const kw = keywordClassify(title);
+  if (kw) return kw;
+  const known = KNOWN_COMPANIES.get(normalizeForLookup(company.name)) || KNOWN_COMPANIES.get(company.name.toLowerCase());
+  return known || null;
+}
+
 // Normalize company name for lookup — strips common suffixes, lowercased
 function normalizeForLookup(name) {
   return name

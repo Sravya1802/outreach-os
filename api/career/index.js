@@ -1,5 +1,6 @@
 import { getSupabase } from '../_lib/supabase.js'
 import { evaluateJob, fetchJobFromUrl } from '../../backend/services/jobEvaluator.js'
+import { classifyFast } from '../../backend/services/categorize.js'
 
 const SCAN_GREENHOUSE = [
   'stripe','airbnb','robinhood','figma','coinbase','plaid','brex','ramp','notion','anthropic',
@@ -219,6 +220,24 @@ export default async (req, res) => {
     // ── Tailored resume: deferred (PDF generation requires filesystem) ────────
     if (action === 'tailored-resume') {
       return res.status(501).json({ error: 'Tailored resume generation not available in this deployment.' })
+    }
+
+    // ── One-shot backfill: reclassify all companies using the fast classifier ─
+    if (action === 'reclassify-companies') {
+      const { data: all } = await sb.from('companies').select('id, name, category, description')
+      const rows = all || []
+      let updated = 0, checked = 0, skipped = 0
+      // Serial so we don't overload the Supabase connection pool or hit the
+      // 60s timeout with a large update fan-out. Chunk of 500 is plenty.
+      for (const row of rows.slice(0, 500)) {
+        checked++
+        const opinion = classifyFast({ name: row.name, description: row.description || '' })
+        if (!opinion?.category || (opinion.confidence || 0) < 0.9) { skipped++; continue }
+        if (row.category === opinion.category) { skipped++; continue }
+        const { error } = await sb.from('companies').update({ category: opinion.category }).eq('id', row.id)
+        if (!error) updated++
+      }
+      return res.json({ checked, updated, skipped, total: rows.length })
     }
 
     return res.status(400).json({ error: `unknown action: ${action}` })

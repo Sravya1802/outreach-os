@@ -52,8 +52,29 @@ export default function CompanyDashboard({ onStatsChange }) {
   const [showDropdown, setShowDropdown] = useState(false)
   const [hideEmpty, setHideEmpty] = useState(false)
   const [sortBy, setSortBy]       = useState('count') // count | az | za
+  const [reclassifying, setReclassifying] = useState(false)
+  const [reclassifyMsg, setReclassifyMsg] = useState(null)
   const searchRef  = useRef(null)
   const debounce   = useRef(null)
+
+  async function reclassify() {
+    setReclassifying(true)
+    setReclassifyMsg(null)
+    try {
+      const r = await api.career.reclassifyCompanies()
+      setReclassifyMsg(`✓ Reclassified ${r.updated} of ${r.checked} companies (${r.skipped} already correct)`)
+      // Re-fetch category counts so the grid reflects the new state
+      api.unified.categoryCounts().then(d => {
+        const map = {}
+        for (const r of (d.counts || [])) map[r.category] = r.count
+        setCatCounts(map)
+      }).catch(() => {})
+    } catch (err) {
+      setReclassifyMsg(`✗ ${err.message}`)
+    }
+    setReclassifying(false)
+    setTimeout(() => setReclassifyMsg(null), 8000)
+  }
 
   // Inject CSS
   useEffect(() => {
@@ -232,8 +253,18 @@ export default function CompanyDashboard({ onStatsChange }) {
               style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #e2e8f0', background: hideEmpty ? '#eff6ff' : '#fff', color: hideEmpty ? '#2563eb' : '#64748b', fontSize:12, fontWeight:600, cursor:'pointer' }}>
               {hideEmpty ? '✓ Hide empty' : 'Hide empty'}
             </button>
+            <button onClick={reclassify} disabled={reclassifying}
+              title="Reclassify companies using the built-in industry classifier (fixes e.g. Jump Trading → Finance)"
+              style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #c7d2fe', background: reclassifying ? '#e0e7ff' : '#eef2ff', color:'#4f46e5', fontSize:12, fontWeight:700, cursor: reclassifying ? 'default' : 'pointer' }}>
+              {reclassifying ? 'Reclassifying…' : '↻ Reclassify'}
+            </button>
           </div>
         </div>
+        {reclassifyMsg && (
+          <div style={{ marginBottom:12, fontSize:12, fontWeight:600, color: reclassifyMsg.startsWith('✓') ? '#16a34a' : '#dc2626' }}>
+            {reclassifyMsg}
+          </div>
+        )}
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:16 }}>
           {/* YC Startups special card */}
