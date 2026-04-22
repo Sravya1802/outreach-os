@@ -8,5 +8,8 @@
       "maxDuration": 60,
       "includeFiles": "backend/career-ops-src/modes/**"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
 }

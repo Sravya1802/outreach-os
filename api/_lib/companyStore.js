@@ -78,9 +78,11 @@ export async function upsertScrapedCompanies(results) {
   let added = 0
   const newCompanies = []
   if (toInsert.length > 0) {
+    // Upsert (ignoreDuplicates) survives case-mismatch and race conditions
+    // where a row was inserted between the SELECT above and this INSERT.
     const { data, error } = await supabase
       .from('companies')
-      .insert(toInsert)
+      .upsert(toInsert, { onConflict: 'name', ignoreDuplicates: true })
       .select('id, name, category, website')
     if (error) throw error
     added = data?.length || 0
