@@ -302,10 +302,10 @@ export default async (req, res) => {
     // their own ATS. Safe to re-run; also fixes stale workday/ATS hostnames
     // previously stored as company.website.
     if (action === 'seed-known-companies') {
-      const rows = []
+      const fullRows = []
       for (const [name, meta] of KNOWN_COMPANIES.entries()) {
         const displayName = name.replace(/\b\w/g, c => c.toUpperCase())
-        rows.push({
+        fullRows.push({
           name: displayName,
           category: meta.category,
           website: guessWebsite(displayName),
@@ -313,28 +313,42 @@ export default async (req, res) => {
           status: 'active',
         })
       }
-      // First: insert fresh rows (ignoreDuplicates — skips existing names).
+      // Probe whether companies.careers_url exists (older installs won't have
+      // it until the user re-runs the migration). If missing, drop the column
+      // from the payload so insert/update still succeeds.
+      const hasCareersUrl = await (async () => {
+        const { error } = await sb.from('companies').select('careers_url').limit(1)
+        return !error
+      })()
+      const sanitize = (r) => hasCareersUrl ? r : (() => { const { careers_url, ...rest } = r; return rest })()
+
+      const rows = fullRows.map(sanitize)
       const { data: inserted, error: insErr } = await sb
         .from('companies')
         .upsert(rows, { onConflict: 'name', ignoreDuplicates: true })
         .select('id, name')
       if (insErr) throw insErr
 
-      // Second: fix bad websites on existing rows — if we stored a workday /
-      // myworkdayjobs / greenhouse etc hostname, overwrite with the real one.
+      // Fix bad websites on existing rows.
       const insertedNames = new Set((inserted || []).map(r => r.name))
-      const toFix = rows.filter(r => !insertedNames.has(r.name) && r.website)
+      const toFix = fullRows.filter(r => !insertedNames.has(r.name) && r.website)
       let fixed = 0
       for (const r of toFix) {
         const { data: existing } = await sb.from('companies').select('website').eq('name', r.name).maybeSingle()
         if (!existing) continue
         const bad = !existing.website || /workday|myworkdayjobs|greenhouse|lever\.co|ashby|icims|smartrecruiters|recruitee|workable/i.test(existing.website)
         if (bad) {
-          const { error } = await sb.from('companies').update({ website: r.website, careers_url: r.careers_url }).eq('name', r.name)
+          const patch = hasCareersUrl ? { website: r.website, careers_url: r.careers_url } : { website: r.website }
+          const { error } = await sb.from('companies').update(patch).eq('name', r.name)
           if (!error) fixed++
         }
       }
-      return res.json({ added: inserted?.length || 0, websites_fixed: fixed, total: rows.length })
+      return res.json({
+        added: inserted?.length || 0,
+        websites_fixed: fixed,
+        total: fullRows.length,
+        careers_url_column: hasCareersUrl,
+      })
     }
 
     // ── One-shot backfill: reclassify all companies using the fast classifier ─
