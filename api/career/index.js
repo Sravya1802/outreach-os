@@ -76,6 +76,138 @@ function guessCareersUrl(displayName) {
   return `https://www.${slug}.com/careers`
 }
 
+// ── Role classifier (intern vs. fulltime) — mirrors backend/routes/jobs.js ──
+const INTERN_KW   = /\binterns?\b|\binternships?\b|\bco-op\b|\bcoop\b|\bsummer 202[456]\b/i
+const FULLTIME_KW = /\bfull.?time\b|\bnew.?grad\b|\bentry.?level\b|\bjunior\b/i
+const CS_ROLE_KW  = /\b(software|engineer|developer|backend|frontend|full.?stack|data|ml|machine learning|ai|scientist|research|platform|infrastructure|devops|sre|security)\b/i
+const NON_CS_ROLE = /\b(product\s+manager|sales|marketing|business|account|recruiter|hr|finance|ops|compliance|legal|support|customer)\b/i
+
+function classifyRoleType(title) {
+  if (!title) return null
+  if (!CS_ROLE_KW.test(title)) return null
+  if (NON_CS_ROLE.test(title)) return null
+  if (INTERN_KW.test(title)) return 'intern'
+  if (FULLTIME_KW.test(title)) return 'fulltime'
+  if (/\bsenior\b|\blead\b|\bstaff\b|\bprincipal\b|\bhead\b/i.test(title)) return 'fulltime'
+  return null
+}
+
+function roleTypeMatches(classified, wanted) {
+  if (!classified) return false
+  if (wanted === 'intern')   return classified === 'intern'
+  if (wanted === 'fulltime') return classified === 'fulltime'
+  return true
+}
+
+// ── Greenhouse / Lever / Ashby JSON APIs ────────────────────────────────────
+async function fetchAtsRoles(slug, roleType) {
+  const out = []
+  // Greenhouse
+  try {
+    const r = await fetch(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=false`, { signal: AbortSignal.timeout(6000) })
+    if (r.ok) {
+      const d = await r.json()
+      for (const j of (d.jobs || [])) {
+        const cls = classifyRoleType(j.title || '')
+        if (!roleTypeMatches(cls, roleType)) continue
+        out.push({ title: j.title, location: j.location?.name || '', source: 'greenhouse', apply_url: j.absolute_url || `https://boards.greenhouse.io/${slug}` })
+      }
+    }
+  } catch {}
+  if (out.length) return out
+  // Lever
+  try {
+    const r = await fetch(`https://api.lever.co/v0/postings/${slug}?mode=json&limit=250`, { signal: AbortSignal.timeout(6000) })
+    if (r.ok) {
+      const d = await r.json()
+      for (const j of (Array.isArray(d) ? d : [])) {
+        const cls = classifyRoleType(j.text || '')
+        if (!roleTypeMatches(cls, roleType)) continue
+        out.push({ title: j.text, location: j.categories?.location || '', source: 'lever', apply_url: j.hostedUrl || `https://jobs.lever.co/${slug}` })
+      }
+    }
+  } catch {}
+  if (out.length) return out
+  // Ashby
+  try {
+    const r = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${slug}`, { signal: AbortSignal.timeout(6000) })
+    if (r.ok) {
+      const d = await r.json()
+      for (const j of (d.jobs || d.jobPostings || [])) {
+        const cls = classifyRoleType(j.title || '')
+        if (!roleTypeMatches(cls, roleType)) continue
+        out.push({ title: j.title, location: j.locationName || j.location || '', source: 'ashby', apply_url: j.jobPostingUrl || j.applyUrl || `https://jobs.ashbyhq.com/${slug}` })
+      }
+    }
+  } catch {}
+  return out
+}
+
+// ── Workday — try common subdomains (wd1/wd5/wd12/wd3/wd2) ──────────────────
+async function fetchWorkdayRoles(slug, roleType) {
+  if (!slug) return []
+  const searchText = roleType === 'fulltime' ? 'software engineer' : 'intern'
+  const results = []
+  for (const sub of ['wd1', 'wd5', 'wd12', 'wd3', 'wd2']) {
+    const tenants = ['External_Career_Site', 'External', 'Careers', `${slug}_careers`]
+    for (const tenant of tenants) {
+      try {
+        const url = `https://${slug}.${sub}.myworkdayjobs.com/wday/cxs/${slug}/${tenant}/jobs`
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({ limit: 20, offset: 0, searchText, appliedFacets: {} }),
+          signal: AbortSignal.timeout(6000),
+        })
+        if (!r.ok) continue
+        const d = await r.json()
+        for (const j of (d.jobPostings || [])) {
+          const cls = classifyRoleType(j.title || '')
+          if (!roleTypeMatches(cls, roleType)) continue
+          results.push({
+            title: j.title,
+            location: j.locationsText || '',
+            source: 'workday',
+            apply_url: `https://${slug}.${sub}.myworkdayjobs.com/${tenant}/job/${j.externalPath || ''}`,
+          })
+        }
+        if (results.length) return results
+      } catch {}
+    }
+  }
+  return results
+}
+
+// ── Apple's internal jobs API ───────────────────────────────────────────────
+async function fetchAppleRoles(roleType) {
+  const out = []
+  const query = roleType === 'fulltime' ? 'software engineer' : 'internship'
+  try {
+    const r = await fetch('https://jobs.apple.com/api/role/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+      body: JSON.stringify({ query, filters: { locations: ['united-states-USA'] }, page: 1, locale: 'en-us', sort: 'newest' }),
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!r.ok) return out
+    const d = await r.json()
+    const items = d?.searchResults || d?.res?.searchResults || []
+    for (const it of items.slice(0, 20)) {
+      const title = it.postingTitle || it.transformedPostingTitle
+      const cls = classifyRoleType(title || '')
+      if (!roleTypeMatches(cls, roleType)) continue
+      const slug = (it.transformedPostingTitle || title || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      out.push({
+        title,
+        location: Array.isArray(it.locations) ? (it.locations[0]?.name || '') : '',
+        source: 'apple',
+        apply_url: `https://jobs.apple.com/en-us/details/${it.id || it.positionId}/${slug}`,
+      })
+    }
+  } catch {}
+  return out
+}
+
 const SCAN_GREENHOUSE = [
   'stripe','airbnb','robinhood','figma','coinbase','plaid','brex','ramp','notion','anthropic',
   'openai','scale','databricks','cloudflare','datadog','palantir','anduril','gusto','rippling','lattice',
@@ -348,6 +480,80 @@ export default async (req, res) => {
         websites_fixed: fixed,
         total: fullRows.length,
         careers_url_column: hasCareersUrl,
+      })
+    }
+
+    // ── Per-company role scrape ───────────────────────────────────────────────
+    // Ports the local backend's scrape-roles across Greenhouse / Lever / Ashby
+    // JSON APIs + Workday (multi-subdomain) + Apple's internal jobs API. Writes
+    // hits to the jobs table so JobScraperTab reloads show them.
+    if (action === 'company-scrape-roles') {
+      const { companyId, roleType = 'intern' } = req.body || {}
+      if (!companyId) return res.status(400).json({ error: 'companyId required' })
+      const { data: company } = await sb.from('companies').select('*').eq('id', companyId).maybeSingle()
+      if (!company) return res.status(404).json({ error: 'Company not found' })
+      const name = company.name
+
+      const collected = []
+
+      // (1) Apple-specific — Apple's own jobs API indexes everything.
+      if (/^apple\b/i.test(name)) {
+        try { collected.push(...(await fetchAppleRoles(roleType))) } catch {}
+      }
+
+      // (2) Greenhouse / Lever / Ashby with slug variants derived from name +
+      // careers_url + website.
+      const slugs = new Set()
+      const addSlug = (s) => { if (s) slugs.add(s.toLowerCase().replace(/[^a-z0-9-]/g, '')) }
+      addSlug(name.toLowerCase().replace(/[^a-z0-9]/g, ''))
+      addSlug(name.toLowerCase().replace(/\s+/g, '-'))
+      addSlug(name.toLowerCase().split(/\s+/)[0])
+      for (const url of [company.careers_url, company.website].filter(Boolean)) {
+        const m = url.match(/(?:greenhouse\.io|lever\.co|ashbyhq\.com)\/([^/?#]+)/)
+        if (m?.[1]) addSlug(m[1])
+      }
+      for (const slug of slugs) {
+        if (collected.length) break
+        const ats = await fetchAtsRoles(slug, roleType)
+        collected.push(...ats)
+      }
+
+      // (3) Workday — try wd1 / wd5 / wd12 / wd3 / wd2 subdomains with the slug.
+      if (!collected.length) {
+        const wdSlug = name.toLowerCase().replace(/[^a-z0-9]/g, '')
+        collected.push(...(await fetchWorkdayRoles(wdSlug, roleType)))
+      }
+
+      // Dedupe + US-first + save.
+      const seen = new Set()
+      const unique = collected.filter(r => {
+        const k = r.apply_url || r.title
+        if (seen.has(k)) return false
+        seen.add(k); return true
+      }).slice(0, 25)
+
+      if (unique.length) {
+        const rows = unique.map(r => ({
+          source: r.source || 'career-scrape',
+          title: r.title,
+          company_name: name,
+          url: r.apply_url,
+          category: company.category || 'startup',
+          status: 'new',
+          location: r.location || null,
+          remote_policy: /remote/i.test(r.location || '') ? 'remote' : null,
+        })).filter(r => r.url)
+        if (rows.length) {
+          await sb.from('jobs').upsert(rows, { onConflict: 'url', ignoreDuplicates: true })
+        }
+      }
+
+      const { data: finalRoles } = await sb.from('jobs').select('*').eq('company_name', name).order('created_at', { ascending: false })
+      return res.json({
+        roles: finalRoles || [],
+        added: unique.length,
+        found: collected.length,
+        careersPageUrl: company.careers_url || null,
       })
     }
 

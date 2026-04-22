@@ -275,16 +275,9 @@ export const api = {
       const { data } = await supabase.from('job_contacts').select('*').in('job_id', jobIds)
       return data || []
     },
-    // Click-time handlers — stubs so callers get a useful error message instead of a TypeError.
-    scrapeRoles: async (companyId, roleType = 'intern') => {
-      const { data: company } = await supabase.from('companies').select('name, category').eq('id', companyId).maybeSingle()
-      if (!company) throw new Error('Company not found')
-      const r = await apiCall('/companies/scrape', { method: 'POST', body: {
-        category: company.category || '',
-        subcategory: `${company.name} ${roleType === 'fulltime' ? 'software engineer' : 'intern'} 2026`,
-      } })
-      return { roles: [], added: r.added || 0, found: r.deduped || 0 }
-    },
+    // Per-company scrape across Greenhouse / Lever / Ashby / Workday / Apple.
+    scrapeRoles: (companyId, roleType = 'intern') =>
+      careerAction('company-scrape-roles', { companyId, roleType }),
     findEmails:           () => Promise.reject(new Error('Email finding not available in this deployment')),
     findEmailForContact:  () => Promise.reject(new Error('Email finding not available in this deployment')),
     generate:             () => Promise.reject(new Error('Contact-level generation not available in this deployment')),
