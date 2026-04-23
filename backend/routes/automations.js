@@ -4,7 +4,7 @@
  */
 
 import { Router } from 'express';
-import db from '../db.js';
+import { one, run } from '../db.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { scrapeAllSources } from '../services/scraper.js';
 import { evaluateJob } from '../services/jobEvaluator.js';
@@ -13,59 +13,67 @@ import { fetchJobFromUrl } from '../services/jobEvaluator.js';
 const router = Router();
 
 // ── Automation log helpers ────────────────────────────────────────────────────
-function logEntry(automationId, message) {
+async function logEntry(automationId, message) {
   const ts = new Date().toTimeString().slice(0, 8);
-  const line = `[${ts}] ${message}`;
   try {
-    const cur = db.prepare("SELECT value FROM meta WHERE key = ?").get(`log_${automationId}`)?.value;
+    const cur = (await one("SELECT value FROM meta WHERE key = $1", [`log_${automationId}`]))?.value;
     const prev = cur ? JSON.parse(cur) : [];
     prev.unshift({ ts: new Date().toISOString(), msg: message });
     if (prev.length > 200) prev.length = 200;
-    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(`log_${automationId}`, JSON.stringify(prev));
+    await run(
+      "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      [`log_${automationId}`, JSON.stringify(prev)]
+    );
   } catch (_) {}
   console.log(`[auto:${automationId}]`, message);
 }
 
 // ── GET /api/automations/logs/:id ─────────────────────────────────────────────
-router.get('/logs/:id', (req, res) => {
+router.get('/logs/:id', async (req, res) => {
   try {
-    const raw = db.prepare("SELECT value FROM meta WHERE key = ?").get(`log_${req.params.id}`)?.value;
-    res.json(raw ? JSON.parse(raw) : []);
+    const row = await one("SELECT value FROM meta WHERE key = $1", [`log_${req.params.id}`]);
+    res.json(row?.value ? JSON.parse(row.value) : []);
   } catch (err) {
     res.json([]);
   }
 });
 
 // ── GET /api/automations/scheduled ───────────────────────────────────────────
-router.get('/scheduled', (req, res) => {
+router.get('/scheduled', async (req, res) => {
   try {
-    const raw = db.prepare("SELECT value FROM meta WHERE key = 'scheduled_automations'").get()?.value;
-    res.json(raw ? JSON.parse(raw) : []);
+    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    res.json(row?.value ? JSON.parse(row.value) : []);
   } catch (err) { res.json([]); }
 });
 
 // ── POST /api/automations/scheduled ──────────────────────────────────────────
-router.post('/scheduled', (req, res) => {
+router.post('/scheduled', async (req, res) => {
   try {
     const { automationId, label, cronTime, params } = req.body;
-    const raw = db.prepare("SELECT value FROM meta WHERE key = 'scheduled_automations'").get()?.value;
-    const list = raw ? JSON.parse(raw) : [];
+    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    const list = row?.value ? JSON.parse(row.value) : [];
     const existing = list.findIndex(s => s.automationId === automationId);
     const entry = { automationId, label, cronTime, params, createdAt: new Date().toISOString(), lastRun: null, lastResult: null };
     if (existing >= 0) list[existing] = entry;
     else list.push(entry);
-    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run('scheduled_automations', JSON.stringify(list));
+    await run(
+      "INSERT INTO meta (key, value) VALUES ('scheduled_automations', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      [JSON.stringify(list)]
+    );
     res.json({ ok: true, list });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── DELETE /api/automations/scheduled/:id ────────────────────────────────────
-router.delete('/scheduled/:id', (req, res) => {
+router.delete('/scheduled/:id', async (req, res) => {
   try {
-    const raw = db.prepare("SELECT value FROM meta WHERE key = 'scheduled_automations'").get()?.value;
-    const list = raw ? JSON.parse(raw) : [];
+    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    const list = row?.value ? JSON.parse(row.value) : [];
     const filtered = list.filter(s => s.automationId !== req.params.id);
-    db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run('scheduled_automations', JSON.stringify(filtered));
+    await run(
+      "INSERT INTO meta (key, value) VALUES ('scheduled_automations', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+      [JSON.stringify(filtered)]
+    );
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -89,19 +97,15 @@ router.post('/linkedin-finder', async (req, res) => {
 
   const id = 'linkedin-finder';
   try {
-    logEntry(id, `Starting LinkedIn Job Finder — "${jobTitle}" in ${location}`);
+    await logEntry(id, `Starting LinkedIn Job Finder — "${jobTitle}" in ${location}`);
     emit('log', { msg: `Searching LinkedIn for "${jobTitle}" in ${location}…` });
 
-    // Use Apify LinkedIn scraper via scrapeAllSources with the query as subcategory
     const query = `${jobTitle} ${jobType}`.trim();
     const { results } = await scrapeAllSources(query, 'Tech & Software');
 
-    logEntry(id, `Found ${results.length} results for "${query}"`);
+    await logEntry(id, `Found ${results.length} results for "${query}"`);
     emit('log', { msg: `Found ${results.length} results` });
 
-    // Filter to matching job title
-    const titleRe = new RegExp(jobTitle.split(' ').join('|'), 'i');
-    const filtered = results.filter(r => titleRe.test(r.name) || titleRe.test(r.role || ''));
     const jobs = results.slice(0, 50).map(r => ({
       title: r.role || jobTitle,
       company: r.name,
@@ -111,12 +115,12 @@ router.post('/linkedin-finder', async (req, res) => {
       source: 'linkedin_finder',
     }));
 
-    logEntry(id, `Returning ${jobs.length} jobs to UI`);
+    await logEntry(id, `Returning ${jobs.length} jobs to UI`);
     emit('results', { jobs, total: jobs.length });
     emit('done', { msg: `Done — ${jobs.length} jobs found` });
     if (!closed) res.end();
   } catch (err) {
-    logEntry(id, `Error: ${err.message}`);
+    await logEntry(id, `Error: ${err.message}`);
     emit('error', { error: err.message });
     if (!closed) res.end();
   }
@@ -140,9 +144,8 @@ router.post('/ai-search', async (req, res) => {
 
   const id = 'ai-search';
   try {
-    // Step 1: Generate search queries via AI
     emit('log', { msg: 'Generating optimized search queries from your description…' });
-    logEntry(id, `AI search started: "${description}"`);
+    await logEntry(id, `AI search started: "${description}"`);
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
@@ -164,15 +167,14 @@ router.post('/ai-search', async (req, res) => {
     }
 
     emit('log', { msg: `Generated ${queries.length} search queries — running across all sources…` });
-    logEntry(id, `Generated queries: ${queries.join(' | ')}`);
+    await logEntry(id, `Generated queries: ${queries.join(' | ')}`);
 
-    // Step 2: Run searches
     const allJobs = [];
     for (const q of queries.slice(0, 3)) {
       if (closed) break;
       try {
         emit('log', { msg: `Searching: "${q}"` });
-        logEntry(id, `Searching: "${q}"`);
+        await logEntry(id, `Searching: "${q}"`);
         const { results } = await scrapeAllSources(q, 'Tech & Software');
         const jobs = results.slice(0, 20).map(r => ({
           title: r.role || q,
@@ -190,7 +192,6 @@ router.post('/ai-search', async (req, res) => {
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    // Dedupe by company name
     const seen = new Set();
     const unique = allJobs.filter(j => {
       if (seen.has(j.company.toLowerCase())) return false;
@@ -198,20 +199,18 @@ router.post('/ai-search', async (req, res) => {
       return true;
     });
 
-    logEntry(id, `AI search complete — ${unique.length} unique results`);
+    await logEntry(id, `AI search complete — ${unique.length} unique results`);
     emit('results', { jobs: unique, total: unique.length });
     emit('done', { msg: `Done — ${unique.length} unique jobs found` });
     if (!closed) res.end();
   } catch (err) {
-    logEntry(id, `Error: ${err.message}`);
+    await logEntry(id, `Error: ${err.message}`);
     emit('error', { error: err.message });
     if (!closed) res.end();
   }
 });
 
 // ── POST /api/automations/auto-apply ─────────────────────────────────────────
-// mode: 'review' (default) | 'auto'
-// For now implements LinkedIn Easy Apply + Greenhouse/Lever detection
 router.post('/auto-apply', async (req, res) => {
   const { jobs, mode = 'review' } = req.body;
 
@@ -228,14 +227,15 @@ router.post('/auto-apply', async (req, res) => {
   }
 
   const id = 'auto-apply';
-  const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+  const resumeRow = await one("SELECT value FROM meta WHERE key = 'user_resume_text'");
+  const resumeText = resumeRow?.value;
   if (!resumeText) {
     emit('error', { error: 'No resume uploaded. Upload your resume in Career Ops first.' });
     if (!closed) res.end();
     return;
   }
 
-  logEntry(id, `Auto-apply started — ${jobs.length} jobs — mode: ${mode}`);
+  await logEntry(id, `Auto-apply started — ${jobs.length} jobs — mode: ${mode}`);
   emit('log', { msg: `Starting ${mode === 'auto' ? 'Auto' : 'Review'} Mode for ${jobs.length} jobs…` });
 
   const results = [];
@@ -244,10 +244,9 @@ router.post('/auto-apply', async (req, res) => {
     if (closed) break;
     const applyUrl = job.applyUrl || '';
 
-    logEntry(id, `Processing: ${job.title} at ${job.company}`);
+    await logEntry(id, `Processing: ${job.title} at ${job.company}`);
     emit('log', { msg: `Checking: ${job.title} at ${job.company}` });
 
-    // Detect apply type
     let applyType = 'unknown';
     if (applyUrl.includes('linkedin.com/jobs') || applyUrl.includes('linkedin.com/easy')) {
       applyType = 'linkedin_easy_apply';
@@ -260,23 +259,20 @@ router.post('/auto-apply', async (req, res) => {
     }
 
     emit('log', { msg: `  → Detected: ${applyType}` });
-    logEntry(id, `Apply type: ${applyType} for ${applyUrl}`);
+    await logEntry(id, `Apply type: ${applyType} for ${applyUrl}`);
 
     if (mode === 'review') {
-      // In review mode: emit each job for user review, don't auto-submit
       emit('review', {
         job: { ...job, applyType },
         msg: `Review required: ${job.title} at ${job.company}`,
       });
       results.push({ job, status: 'pending_review', applyType });
     } else {
-      // Auto mode: attempt apply based on type
       try {
         let status = 'skipped';
         let note = '';
 
         if (applyType === 'linkedin_easy_apply') {
-          // LinkedIn Easy Apply via Playwright
           const result = await applyLinkedIn(job, resumeText);
           status = result.status;
           note = result.note;
@@ -289,18 +285,17 @@ router.post('/auto-apply', async (req, res) => {
           note = 'Unknown apply type — manual application required';
         }
 
-        logEntry(id, `${job.company}: ${status} — ${note}`);
+        await logEntry(id, `${job.company}: ${status} — ${note}`);
         emit('log', { msg: `  → ${status}: ${note}` });
         results.push({ job, status, note, applyType });
 
-        // Log to DB
-        db.prepare(`
-          INSERT OR IGNORE INTO evaluations (job_url, job_title, company_name, grade, score, source)
-          VALUES (?, ?, ?, 'N/A', 0, 'auto_apply')
-        `).run(applyUrl, job.title, job.company);
+        await run(`
+          INSERT INTO evaluations (job_url, job_title, company_name, grade, score, source)
+          VALUES ($1, $2, $3, 'N/A', 0, 'auto_apply')
+        `, [applyUrl, job.title, job.company]);
 
       } catch (err) {
-        logEntry(id, `${job.company}: failed — ${err.message}`);
+        await logEntry(id, `${job.company}: failed — ${err.message}`);
         emit('log', { msg: `  → Failed: ${err.message}` });
         results.push({ job, status: 'failed', note: err.message, applyType });
       }
@@ -311,7 +306,7 @@ router.post('/auto-apply', async (req, res) => {
 
   emit('results', { results, total: results.length, mode });
   emit('done', { msg: `${mode === 'review' ? 'Review mode complete' : 'Auto-apply complete'} — ${results.length} jobs processed` });
-  logEntry(id, `Done — ${results.length} processed`);
+  await logEntry(id, `Done — ${results.length} processed`);
   if (!closed) res.end();
 });
 
@@ -331,29 +326,24 @@ async function applyLinkedIn(job, resumeText) {
       await page.goto(job.applyUrl, { timeout: 15000 });
       await page.waitForTimeout(2000);
 
-      // Look for Easy Apply button
       const easyApplyBtn = page.locator('button:has-text("Easy Apply"), .jobs-apply-button').first();
       if (!(await easyApplyBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
         return { status: 'skipped', note: 'No Easy Apply button found — requires manual application' };
       }
 
-      // In review mode this won't be called, in auto mode we click
       await easyApplyBtn.click();
       await page.waitForTimeout(1500);
 
-      // Check if multi-step modal opened
       const modal = page.locator('.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"]');
       if (!(await modal.isVisible({ timeout: 5000 }).catch(() => false))) {
         return { status: 'skipped', note: 'Easy Apply modal did not open' };
       }
 
-      // Fill contact info if prompted
       const phoneInput = page.locator('input[id*="phone"], input[name*="phone"]').first();
       if (await phoneInput.isVisible({ timeout: 2000 }).catch(() => false)) {
         await phoneInput.fill(process.env.CANDIDATE_PHONE || '');
       }
 
-      // Try to submit (click through steps)
       for (let step = 0; step < 5; step++) {
         const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), button:has-text("Review")').first();
         const submitBtn = page.locator('button:has-text("Submit application")').first();
@@ -394,7 +384,6 @@ async function applyATS(job, applyUrl, type, resumeText) {
       await page.goto(applyUrl, { timeout: 15000 });
       await page.waitForTimeout(2000);
 
-      // Fill common fields
       const nameInput = page.locator('input[name*="name"], input[id*="first_name"], input[placeholder*="First name"]').first();
       if (await nameInput.isVisible({ timeout: 2000 }).catch(() => false)) {
         await nameInput.fill('Sravya');

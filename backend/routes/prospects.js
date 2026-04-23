@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { one, all, run, tx } from '../db.js';
 import * as apollo from '../services/apollo.js';
 import * as apify from '../services/apify.js';
 import { generateOutreach } from '../services/ai.js';
@@ -8,25 +8,17 @@ const router = Router();
 
 // ── Curated target companies ────────────────────────────────────────────────
 
-// ── US-only curated companies ─────────────────────────────────────────────────
-
 const STARTUP_COMPANIES = [
-  // AI / ML — all US-headquartered
   'Perplexity AI', 'Together AI', 'Anyscale', 'Modal', 'Character AI',
   'LangChain', 'Weights & Biases', 'Scale AI', 'Hugging Face', 'Replicate',
-  // Dev tools — US-based
   'Cursor', 'Replit', 'Supabase', 'Neon', 'PlanetScale',
   'Temporal', 'Buf', 'Redpanda', 'Fly.io', 'Railway',
-  // Productivity / SaaS — US-based
   'Linear', 'Loom', 'Coda', 'Superhuman', 'Superblocks',
-  // Fintech — US-based
   'Ramp', 'Brex', 'Mercury', 'Pilot', 'Deel',
-  // Infrastructure — US-based
   'Retool', 'Render', 'Clerk', 'Doppler', 'WorkOS',
 ];
 
 const MIDCAP_COMPANIES = [
-  // All US-headquartered
   'Stripe', 'Databricks', 'Cloudflare', 'Confluent', 'Sentry',
   'Airtable', 'MongoDB', 'Elastic', 'Amplitude', 'Mixpanel',
   'Notion', 'Figma', 'Vercel', 'Twilio', 'Datadog',
@@ -34,46 +26,55 @@ const MIDCAP_COMPANIES = [
   'HashiCorp', 'Segment', 'Netlify', 'LaunchDarkly', 'Postman',
 ];
 
-const STARTUP_TITLES  = ['founder','co-founder','ceo','cto','head of engineering','vp of engineering'];
-const MIDCAP_TITLES   = ['vp of engineering','director of engineering','head of engineering','engineering manager','vp product','technical recruiter'];
+const STARTUP_TITLES = ['founder','co-founder','ceo','cto','head of engineering','vp of engineering'];
+const MIDCAP_TITLES  = ['vp of engineering','director of engineering','head of engineering','engineering manager','vp product','technical recruiter'];
 
 // ── Routes ──────────────────────────────────────────────────────────────────
 
 // List all prospects (with filters)
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { type, status, search } = req.query;
     let sql = 'SELECT * FROM prospects WHERE 1=1';
     const params = [];
-    if (type)   { sql += ' AND company_type = ?'; params.push(type); }
-    if (status) { sql += ' AND status = ?';        params.push(status); }
+    let i = 1;
+    if (type)   { sql += ` AND company_type = $${i++}`; params.push(type); }
+    if (status) { sql += ` AND status = $${i++}`;        params.push(status); }
     if (search) {
-      sql += ' AND (name LIKE ? OR company_name LIKE ? OR title LIKE ?)';
+      sql += ` AND (name ILIKE $${i} OR company_name ILIKE $${i+1} OR title ILIKE $${i+2})`;
+      i += 3;
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     sql += ' ORDER BY created_at DESC';
-    res.json(db.prepare(sql).all(...params));
+    res.json(await all(sql, params));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Stats for the dashboard header
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const total     = db.prepare("SELECT COUNT(*) as n FROM prospects").get().n;
-    const verified  = db.prepare("SELECT COUNT(*) as n FROM prospects WHERE email_status IN ('verified','likely')").get().n;
-    const generated = db.prepare("SELECT COUNT(*) as n FROM prospects WHERE status = 'generated'").get().n;
-    const sent      = db.prepare("SELECT COUNT(*) as n FROM prospects WHERE status = 'sent'").get().n;
-    const replied   = db.prepare("SELECT COUNT(*) as n FROM prospects WHERE status = 'replied'").get().n;
-    res.json({ total, verified, generated, sent, replied });
+    const [t, v, g, s, r] = await Promise.all([
+      one("SELECT COUNT(*)::int AS n FROM prospects"),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE email_status IN ('verified','likely')"),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'generated'"),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'sent'"),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'replied'"),
+    ]);
+    res.json({
+      total: t?.n || 0,
+      verified: v?.n || 0,
+      generated: g?.n || 0,
+      sent: s?.n || 0,
+      replied: r?.n || 0,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Auto-discover prospects for a company type
-// Streams progress via JSON lines
 router.post('/discover', async (req, res) => {
   const { mode = 'startup', limit = 10 } = req.body;
   const companies = mode === 'startup' ? STARTUP_COMPANIES : MIDCAP_COMPANIES;
@@ -83,8 +84,8 @@ router.post('/discover', async (req, res) => {
   const results = { added: 0, skipped: 0, companies: [] };
 
   for (const companyName of batch) {
-    // Skip if we already have prospects for this company
-    const existing = db.prepare("SELECT COUNT(*) as n FROM prospects WHERE company_name = ?").get(companyName).n;
+    const existingRow = await one("SELECT COUNT(*)::int AS n FROM prospects WHERE company_name = $1", [companyName]);
+    const existing = existingRow?.n || 0;
     if (existing > 0) {
       results.skipped++;
       results.companies.push({ company: companyName, status: 'already_exists', count: existing });
@@ -92,52 +93,40 @@ router.post('/discover', async (req, res) => {
     }
 
     let people = [];
-
-    // Apollo first
     try {
       const apolloRes = await apollo.searchPeople(companyName, titles);
       people.push(...apolloRes.map(p => ({
-        name:         p.name,
-        title:        p.title,
-        linkedin_url: p.linkedin_url,
-        email:        p.email,
-        email_status: p.email_status,
+        name: p.name, title: p.title, linkedin_url: p.linkedin_url,
+        email: p.email, email_status: p.email_status,
       })));
     } catch (err) {
       console.error(`Apollo failed for ${companyName}:`, err.message);
     }
 
-    // Apify Google → LinkedIn if Apollo returned nothing
     if (people.length === 0) {
       try {
         const apifyRes = await apify.findLinkedInDecisionMakers(companyName, mode);
         people.push(...apifyRes.map(p => ({
-          name:         p.name,
-          title:        p.title,
-          linkedin_url: p.linkedin_url,
-          email:        '',
-          email_status: 'unknown',
+          name: p.name, title: p.title, linkedin_url: p.linkedin_url,
+          email: '', email_status: 'unknown',
         })));
       } catch (err) {
         console.error(`Apify failed for ${companyName}:`, err.message);
       }
     }
 
-    // Save top 3 people per company
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO prospects
-        (name, title, linkedin_url, email, email_status, company_name, company_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
     let saved = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const p of people.slice(0, 3)) {
         if (!p.name || p.name === 'Unknown') continue;
-        const r = insert.run(p.name, p.title, p.linkedin_url, p.email || null, p.email_status || 'unknown', companyName, mode);
-        if (r.changes > 0) { results.added++; saved++; }
+        const r = await client.query(`
+          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (name, company_name) DO NOTHING
+        `, [p.name, p.title, p.linkedin_url, p.email || null, p.email_status || 'unknown', companyName, mode]);
+        if (r.rowCount > 0) { results.added++; saved++; }
       }
-    })();
+    });
 
     results.companies.push({ company: companyName, status: 'done', count: saved });
     console.log(`${companyName}: ${saved} prospects saved`);
@@ -167,21 +156,21 @@ router.post('/add-company', async (req, res) => {
       } catch (err) { console.error('Apify:', err.message); }
     }
 
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
-
     let added = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const p of people) {
         if (!p.name || p.name === 'Unknown') continue;
-        const r = insert.run(p.name, p.title || '', p.linkedin_url || null, p.email || null, p.email_status || 'unknown', companyName, companyType);
-        if (r.changes > 0) added++;
+        const r = await client.query(`
+          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          ON CONFLICT (name, company_name) DO NOTHING
+        `, [p.name, p.title || '', p.linkedin_url || null, p.email || null, p.email_status || 'unknown', companyName, companyType]);
+        if (r.rowCount > 0) added++;
       }
-    })();
+    });
 
-    res.json({ added, people: db.prepare('SELECT * FROM prospects WHERE company_name = ?').all(companyName) });
+    const saved = await all('SELECT * FROM prospects WHERE company_name = $1', [companyName]);
+    res.json({ added, people: saved });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -190,7 +179,7 @@ router.post('/add-company', async (req, res) => {
 // Generate cold email + LinkedIn DM for a prospect
 router.post('/:id/generate', async (req, res) => {
   try {
-    const prospect = db.prepare('SELECT * FROM prospects WHERE id = ?').get(req.params.id);
+    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
     if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
 
     const { extraContext = '' } = req.body;
@@ -207,11 +196,11 @@ router.post('/:id/generate', async (req, res) => {
       generateOutreach({ ...params, type: 'linkedin' }),
     ]);
 
-    db.prepare(`
+    await run(`
       UPDATE prospects
-      SET email_subject = ?, email_body = ?, linkedin_dm = ?, status = 'generated', updated_at = datetime('now')
-      WHERE id = ?
-    `).run(email.subject, email.body, linkedin.message || linkedin.body, prospect.id);
+      SET email_subject = $1, email_body = $2, linkedin_dm = $3, status = 'generated', updated_at = NOW()
+      WHERE id = $4
+    `, [email.subject, email.body, linkedin.message || linkedin.body, prospect.id]);
 
     res.json({ email, linkedin });
   } catch (err) {
@@ -223,22 +212,20 @@ router.post('/:id/generate', async (req, res) => {
 // Find / verify email for a prospect
 router.post('/:id/find-email', async (req, res) => {
   try {
-    const prospect = db.prepare('SELECT * FROM prospects WHERE id = ?').get(req.params.id);
+    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
     if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
 
-    // Try Apollo enrichment if we have a LinkedIn URL
     if (prospect.linkedin_url) {
       try {
         const enriched = await apollo.enrichPerson(prospect.linkedin_url);
         if (enriched.email) {
-          db.prepare("UPDATE prospects SET email = ?, email_status = ?, updated_at = datetime('now') WHERE id = ?")
-            .run(enriched.email, enriched.email_status, prospect.id);
+          await run("UPDATE prospects SET email = $1, email_status = $2, updated_at = NOW() WHERE id = $3",
+            [enriched.email, enriched.email_status, prospect.id]);
           return res.json({ email: enriched.email, email_status: enriched.email_status });
         }
       } catch (err) { console.error('Enrich failed:', err.message); }
     }
 
-    // Fall back to email pattern guesses
     const nameParts = prospect.name.toLowerCase().split(/\s+/);
     const first = nameParts[0] || '';
     const last  = nameParts[nameParts.length - 1] || '';
@@ -263,12 +250,12 @@ router.post('/:id/find-email', async (req, res) => {
 // Verify existing email
 router.post('/:id/verify-email', async (req, res) => {
   try {
-    const prospect = db.prepare('SELECT * FROM prospects WHERE id = ?').get(req.params.id);
+    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
     if (!prospect?.email) return res.status(400).json({ error: 'No email to verify' });
 
     const result = await apollo.verifyEmail(prospect.email);
-    db.prepare("UPDATE prospects SET email_status = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(result.status, prospect.id);
+    await run("UPDATE prospects SET email_status = $1, updated_at = NOW() WHERE id = $2",
+      [result.status, prospect.id]);
 
     res.json({ email: prospect.email, ...result });
   } catch (err) {
@@ -277,34 +264,34 @@ router.post('/:id/verify-email', async (req, res) => {
 });
 
 // Update status / notes
-router.put('/:id', (req, res) => {
+router.put('/:id', async (req, res) => {
   try {
     const { status, notes, email, email_subject, email_body, linkedin_dm } = req.body;
-    const prospect = db.prepare('SELECT * FROM prospects WHERE id = ?').get(req.params.id);
+    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
     if (!prospect) return res.status(404).json({ error: 'Not found' });
 
-    db.prepare(`
+    await run(`
       UPDATE prospects SET
-        status        = COALESCE(?, status),
-        notes         = COALESCE(?, notes),
-        email         = COALESCE(?, email),
-        email_subject = COALESCE(?, email_subject),
-        email_body    = COALESCE(?, email_body),
-        linkedin_dm   = COALESCE(?, linkedin_dm),
-        updated_at    = datetime('now')
-      WHERE id = ?
-    `).run(status || null, notes || null, email || null, email_subject || null, email_body || null, linkedin_dm || null, prospect.id);
+        status        = COALESCE($1, status),
+        notes         = COALESCE($2, notes),
+        email         = COALESCE($3, email),
+        email_subject = COALESCE($4, email_subject),
+        email_body    = COALESCE($5, email_body),
+        linkedin_dm   = COALESCE($6, linkedin_dm),
+        updated_at    = NOW()
+      WHERE id = $7
+    `, [status || null, notes || null, email || null, email_subject || null, email_body || null, linkedin_dm || null, prospect.id]);
 
-    res.json(db.prepare('SELECT * FROM prospects WHERE id = ?').get(prospect.id));
+    res.json(await one('SELECT * FROM prospects WHERE id = $1', [prospect.id]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 // Delete a prospect
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM prospects WHERE id = ?').run(req.params.id);
+    await run('DELETE FROM prospects WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
