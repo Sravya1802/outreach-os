@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { one, all, run, tx } from '../db.js';
 import * as apify from '../services/apify.js';
 import { findEmailsWithFallback, findDomainByCompany, extractDomain, findWorkingDomain, findEmailForPerson } from '../services/hunter.js';
 import { findEmailsMultiSource } from '../services/emailfinders.js';
