@@ -20,6 +20,17 @@ backend/data/
 logs/
 .DS_Store
 
+# Local databases (never commit DB files — real data lives in Supabase)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Generated tailored resumes / report renders (contain PII)
+backend/output/
+backend/resumes/
+/home/ubuntu/outreach/resumes/
+
 # IDE
 .vscode/
 .idea/
