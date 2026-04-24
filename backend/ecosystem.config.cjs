@@ -5,14 +5,17 @@
 // Started by deploy/oracle-setup.sh via:
 //   pm2 start ecosystem.config.cjs
 //
-// The backend's server.js loads /home/ubuntu/outreach/.env itself via dotenv,
-// so we don't duplicate env vars here. All config comes from that file.
+// Env vars are loaded via `node --env-file=...` (node 20.6+) so they are
+// populated BEFORE any ES module import runs. This matters because db.js
+// reads DATABASE_URL at import time — a server.js-level dotenv.config()
+// call would run after the import graph has already evaluated.
 
 module.exports = {
   apps: [
     {
       name: 'outreach-backend',
       script: 'server.js',
+      node_args: '--env-file=/home/ubuntu/outreach/.env',
       cwd: '/home/ubuntu/outreach/backend',
       instances: 1,
       exec_mode: 'fork',
