@@ -81,11 +81,22 @@ function RefreshBadge() {
   const [lastRefresh, setLastRefresh] = useState(null)
   const [refreshing, setRefreshing]   = useState(false)
   const [progress, setProgress]       = useState('')
-  const [now, setNow] = useState(Date.now())
+  // Lazy initializer is allowed for impure values (React calls it once on
+  // mount, not on every render). Direct `useState(Date.now())` is flagged
+  // by react-hooks/purity because it re-evaluates Date.now() every render.
+  const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60000)
     return () => clearInterval(timer)
+  }, [])
+
+  // Pull the true last-refresh timestamp from the backend on mount (the badge
+  // previously rendered 'never' because setLastRefresh was never wired).
+  useEffect(() => {
+    api.jobs.lastRefresh()
+      .then(d => setLastRefresh(d?.lastRefresh || d?.timestamp || null))
+      .catch(() => {})
   }, [])
 
   // Bulk refresh isn't available on the serverless deployment; keep badge read-only.

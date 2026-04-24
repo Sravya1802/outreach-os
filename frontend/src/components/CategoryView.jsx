@@ -216,11 +216,21 @@ function YCCategoryView() {
   )
 }
 
-// ── Regular Category View ─────────────────────────────────────────────────────
+// ── Thin wrapper ──────────────────────────────────────────────────────────────
+// Routes to YC-specific view for the 'yc-startups' slug, otherwise the regular
+// category view. Splitting this way ensures the regular view's hooks run
+// unconditionally — previously the YC early-return sat between hook calls,
+// which violates React's rules-of-hooks and made the hook order unstable.
 export default function CategoryView() {
   const { name: encodedName } = useParams()
-  const navigate = useNavigate()
   const categoryName = decodeURIComponent(encodedName)
+  if (categoryName === 'yc-startups') return <YCCategoryView />
+  return <RegularCategoryView categoryName={categoryName} />
+}
+
+// ── Regular Category View ─────────────────────────────────────────────────────
+function RegularCategoryView({ categoryName }) {
+  const navigate = useNavigate()
 
   const [companies, setCompanies] = useState([])
   const [total, setTotal]         = useState(0)
@@ -233,8 +243,6 @@ export default function CategoryView() {
   const [scraping, setScraping]   = useState(null)
   const [scrapeMsg, setScrapeMsg] = useState(null)
   const debounce = useRef(null)
-
-  if (categoryName === 'yc-startups') return <YCCategoryView />
 
   const load = useCallback(async (pg = 0, q = search, src = source, st = status) => {
     setLoading(true)
