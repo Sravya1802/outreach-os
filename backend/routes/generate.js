@@ -4,16 +4,16 @@ import { generateOutreach, generateWaaSMessage, generateCoverLetter } from '../s
 
 const router = Router();
 
-async function getContactInfo(contactId) {
+async function getContactInfo(contactId, userId) {
   return one(`
     SELECT contacts.*,
            COALESCE(companies.name, contacts.name) as company_name,
            COALESCE(companies.role, '') as company_role,
            COALESCE(companies.stage, 'startup') as company_stage
     FROM contacts
-    LEFT JOIN companies ON contacts.company_id = companies.id
-    WHERE contacts.id = $1
-  `, [contactId]);
+    LEFT JOIN companies ON contacts.company_id = companies.id AND companies.user_id = $2
+    WHERE contacts.id = $1 AND contacts.user_id = $2
+  `, [contactId, userId]);
 }
 
 // Generate cold email
@@ -24,7 +24,7 @@ router.post('/email', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = await getContactInfo(contactId);
+      const contact = await getContactInfo(contactId, req.user.id);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
       name = contact.name; title = contact.title; company = contact.company_name;
       stage = contact.company_stage; role = contact.company_role;
@@ -42,9 +42,9 @@ router.post('/email', async (req, res) => {
 
     if (contactId) {
       await run(`
-        INSERT INTO outreach (contact_id, type, subject, body, status)
-        VALUES ($1, 'email', $2, $3, 'draft')
-      `, [contactId, result.subject, result.body]);
+        INSERT INTO outreach (contact_id, type, subject, body, status, user_id)
+        VALUES ($1, 'email', $2, $3, 'draft', $4)
+      `, [contactId, result.subject, result.body, req.user.id]);
     }
 
     res.json(result);
@@ -62,7 +62,7 @@ router.post('/linkedin', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = await getContactInfo(contactId);
+      const contact = await getContactInfo(contactId, req.user.id);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
       name = contact.name; title = contact.title; company = contact.company_name;
       stage = contact.company_stage; role = contact.company_role;
@@ -80,9 +80,9 @@ router.post('/linkedin', async (req, res) => {
 
     if (contactId) {
       await run(`
-        INSERT INTO outreach (contact_id, type, subject, body, status)
-        VALUES ($1, 'linkedin', NULL, $2, 'draft')
-      `, [contactId, result.message || result.body]);
+        INSERT INTO outreach (contact_id, type, subject, body, status, user_id)
+        VALUES ($1, 'linkedin', NULL, $2, 'draft', $3)
+      `, [contactId, result.message || result.body, req.user.id]);
     }
 
     res.json(result);
@@ -100,7 +100,7 @@ router.post('/both', async (req, res) => {
     let name, title, company, stage, role;
 
     if (contactId) {
-      const contact = await getContactInfo(contactId);
+      const contact = await getContactInfo(contactId, req.user.id);
       if (!contact) return res.status(404).json({ error: 'Contact not found' });
       name = contact.name; title = contact.title; company = contact.company_name;
       stage = contact.company_stage; role = contact.company_role;
@@ -117,8 +117,8 @@ router.post('/both', async (req, res) => {
     ]);
 
     if (contactId) {
-      await run(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES ($1, 'email', $2, $3, 'draft')`, [contactId, email.subject, email.body]);
-      await run(`INSERT INTO outreach (contact_id, type, subject, body, status) VALUES ($1, 'linkedin', NULL, $2, 'draft')`, [contactId, linkedin.message || linkedin.body]);
+      await run(`INSERT INTO outreach (contact_id, type, subject, body, status, user_id) VALUES ($1, 'email', $2, $3, 'draft', $4)`, [contactId, email.subject, email.body, req.user.id]);
+      await run(`INSERT INTO outreach (contact_id, type, subject, body, status, user_id) VALUES ($1, 'linkedin', NULL, $2, 'draft', $3)`, [contactId, linkedin.message || linkedin.body, req.user.id]);
     }
 
     res.json({ email, linkedin });
@@ -138,8 +138,10 @@ router.post('/waas', async (req, res) => {
 
     if (req.body.contactId) {
       try {
-        await run("INSERT INTO outreach (contact_id, type, body, status) VALUES ($1, 'waas', $2, 'draft')",
-          [req.body.contactId, result.message]);
+        await run(
+          "INSERT INTO outreach (contact_id, type, body, status, user_id) VALUES ($1, 'waas', $2, 'draft', $3)",
+          [req.body.contactId, result.message, req.user.id]
+        );
       } catch (_) {}
     }
 
@@ -158,7 +160,10 @@ router.post('/cover-letter', async (req, res) => {
     let companyDescription = '';
 
     if (companyId) {
-      const company = await one('SELECT * FROM jobs WHERE id = $1', [companyId]);
+      const company = await one(
+        'SELECT * FROM jobs WHERE id = $1 AND user_id = $2',
+        [companyId, req.user.id]
+      );
       if (company) {
         companyName = company.name;
         companyDescription = company.description || company.wikipedia_summary || '';

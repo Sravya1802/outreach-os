@@ -32,14 +32,16 @@ router.post('/scrape', async (req, res) => {
   let existingMap = new Map();
   if (nameList.length > 0) {
     const placeholders = nameList.map((_, i) => `$${i + 1}`).join(',');
+    const userIdx = nameList.length + 1;
     const rows = await all(`
       SELECT name, category, subcategory, confidence, classified_at
       FROM jobs
-      WHERE name IN (${placeholders})
+      WHERE user_id = $${userIdx}
+        AND name IN (${placeholders})
         AND confidence >= 0.40
         AND category IS NOT NULL AND category != 'Unclassified'
         AND classified_at IS NOT NULL
-    `, nameList);
+    `, [...nameList, req.user.id]);
     existingMap = new Map(rows.map(r => [r.name.toLowerCase(), r]));
   }
 
@@ -53,8 +55,8 @@ router.post('/scrape', async (req, res) => {
   const insertSql = `
     INSERT INTO jobs
       (name, category, subcategory, confidence, classified_at, wikipedia_summary,
-       roles, location, city, state, country, url, tag, domain, is_hiring, source)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15)
+       roles, location, city, state, country, url, tag, domain, is_hiring, source, user_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16)
     ON CONFLICT (name) DO NOTHING
   `;
 
@@ -71,7 +73,7 @@ router.post('/scrape', async (req, res) => {
       confidence      = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $6 ELSE confidence END,
       classified_at   = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $7 ELSE classified_at END,
       wikipedia_summary = COALESCE(wikipedia_summary, $8)
-    WHERE name = $9
+    WHERE name = $9 AND user_id = $10
   `;
 
   let added = 0, classified = 0, unclassified = 0;
@@ -101,7 +103,8 @@ router.post('/scrape', async (req, res) => {
         entry.jobTitle || 'SWE Intern', entry.location || 'USA',
         entry.city || null, entry.state || null, entry.country || 'US',
         entry.careersUrl || '', entry.source || 'scrape', domain,
-        entry.source || 'scrape'
+        entry.source || 'scrape',
+        req.user.id
       ]);
 
       if (r.rowCount > 0) {
@@ -112,7 +115,8 @@ router.post('/scrape', async (req, res) => {
         await client.query(updateSql, [
           firstSrc, firstSrc, firstSrc,
           cls.category, cls.subcategory, cls.confidence, cls.classified_at, wikiSummary,
-          entry.name
+          entry.name,
+          req.user.id
         ]);
       }
     }
@@ -121,11 +125,12 @@ router.post('/scrape', async (req, res) => {
   // Log category breakdown
   const breakdown = await all(`
     SELECT category, subcategory, COUNT(*) as n FROM jobs
+    WHERE user_id = $1
     GROUP BY category, subcategory ORDER BY n DESC LIMIT 10
-  `);
+  `, [req.user.id]);
   console.log('[scrape] top categories:', breakdown.map(r => `${r.category}/${r.subcategory}:${r.n}`).join(', '));
 
-  const total = (await one('SELECT COUNT(*) as n FROM jobs')).n;
+  const total = (await one('SELECT COUNT(*) as n FROM jobs WHERE user_id = $1', [req.user.id])).n;
   console.log(`[scrape] done — added=${added} total=${total} classified=${classified} unclassified=${unclassified}`);
 
   res.json({ added, total, succeeded, failedSrc, classified, unclassified, bySource, errors: scrapeErrors, newCompanies });
@@ -139,9 +144,9 @@ router.get('/search', async (req, res) => {
     if (!q?.trim()) return res.json([]);
     const rows = await all(`
       SELECT id, name, category, subcategory, location, source, status, website, description, yc_batch, tags, team_size
-      FROM jobs WHERE name ILIKE $1
+      FROM jobs WHERE user_id = $1 AND name ILIKE $2
       ORDER BY name LIMIT 8
-    `, [`%${q.trim()}%`]);
+    `, [req.user.id, `%${q.trim()}%`]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -152,10 +157,10 @@ router.get('/search', async (req, res) => {
 
 router.get('/:id/detail', async (req, res) => {
   try {
-    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const company = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!company) return res.status(404).json({ error: 'Company not found' });
-    const contacts = await all('SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY seniority_score DESC, created_at DESC', [req.params.id]);
-    const roles    = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [req.params.id]);
+    const contacts = await all('SELECT * FROM job_contacts WHERE job_id = $1 AND user_id = $2 ORDER BY seniority_score DESC, created_at DESC', [req.params.id, req.user.id]);
+    const roles    = await all('SELECT * FROM roles WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC', [req.params.id, req.user.id]);
     res.json({ company, contacts, roles });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -169,7 +174,7 @@ router.put('/:id/status', async (req, res) => {
     const { status } = req.body;
     const valid = ['new','researching','contacted','responded','skip'];
     if (!status || !valid.includes(status.toLowerCase())) return res.status(400).json({ error: 'invalid status' });
-    await run('UPDATE jobs SET status = $1 WHERE id = $2', [status, req.params.id]);
+    await run('UPDATE jobs SET status = $1 WHERE id = $2 AND user_id = $3', [status, req.params.id, req.user.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -180,7 +185,7 @@ router.put('/:id/status', async (req, res) => {
 
 router.get('/:id/roles', async (req, res) => {
   try {
-    const roles = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [req.params.id]);
+    const roles = await all('SELECT * FROM roles WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC', [req.params.id, req.user.id]);
     res.json(roles);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -191,7 +196,7 @@ router.get('/:id/roles', async (req, res) => {
 
 router.get('/:id/careers-url', async (req, res) => {
   try {
-    const c = await one('SELECT name, url FROM jobs WHERE id = $1', [req.params.id]);
+    const c = await one('SELECT name, url FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!c) return res.status(404).json({ error: 'Company not found' });
     const known = knownCareersFor(c.name);
     if (known?.root) return res.json({ url: known.root + (known.internQuery || ''), source: 'known' });
@@ -550,7 +555,7 @@ async function fetchAtsRoles(slug, companyName, companyLocation, roleType = 'int
 
 router.post('/:id/scrape-roles', async (req, res) => {
   try {
-    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const company = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!company) return res.status(404).json({ error: 'Company not found' });
     const name = company.name;
     const roleType = req.body?.roleType || 'intern'; // 'intern' or 'fulltime'
@@ -808,19 +813,19 @@ router.post('/:id/scrape-roles', async (req, res) => {
     if (foundRoles.length > 0) {
       await tx(async (client) => {
         // Clear existing roles for this company matching the roleType — allows keeping intern + fulltime roles separately
-        await client.query(`DELETE FROM roles WHERE company_id = $1 AND role_type = $2`, [company.id, roleType]);
+        await client.query(`DELETE FROM roles WHERE company_id = $1 AND role_type = $2 AND user_id = $3`, [company.id, roleType, req.user.id]);
         const usRoles = foundRoles.filter(r => isUsLocation(r.location));
         for (const role of usRoles.slice(0, 20)) {
           const r = await client.query(
-            `INSERT INTO roles (company_id, title, location, source, apply_url, posted_at, role_type) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (company_id, title, apply_url) DO NOTHING`,
-            [company.id, role.title, role.location || null, role.source, role.apply_url, role.posted_at, role.role_type || roleType]
+            `INSERT INTO roles (company_id, title, location, source, apply_url, posted_at, role_type, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (company_id, title, apply_url) DO NOTHING`,
+            [company.id, role.title, role.location || null, role.source, role.apply_url, role.posted_at, role.role_type || roleType, req.user.id]
           );
           if (r.rowCount > 0) added++;
         }
       });
     }
 
-    const allRoles = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [company.id]);
+    const allRoles = await all('SELECT * FROM roles WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC', [company.id, req.user.id]);
 
     // Build a canonical "careers search" URL for the "Check Careers Page" button.
     // Priority: known big-company search URL → derive from company.url origin → company.url as-is.
@@ -865,6 +870,9 @@ router.get('/scraper-health', async (req, res) => {
 
 // ── Reclassify unclassified companies (exported for server startup) ────────────
 
+// TODO(auth): pass userId through from caller — this function is invoked from server
+// startup (no request context) as well as the HTTP handler below, so it can't read
+// req.user.id directly. Leaving queries un-scoped here; the HTTP wrapper is scoped.
 export async function runReclassifyUnclassified() {
   const rows = await all(`
     SELECT name, roles as jobTitle, '' as jobDescription
@@ -901,7 +909,7 @@ export async function runReclassifyUnclassified() {
 router.post('/reclassify-unclassified', async (req, res) => {
   try {
     const result = await runReclassifyUnclassified();
-    const breakdown = await all('SELECT category, COUNT(*) as n FROM jobs GROUP BY category ORDER BY n DESC');
+    const breakdown = await all('SELECT category, COUNT(*) as n FROM jobs WHERE user_id = $1 GROUP BY category ORDER BY n DESC', [req.user.id]);
     res.json({ ...result, breakdown });
   } catch (err) {
     console.error('reclassify-unclassified error:', err.message);
@@ -916,10 +924,11 @@ router.get('/debug/categories', async (req, res) => {
     const rows = await all(`
       SELECT category, subcategory, COUNT(*) as n
       FROM jobs
+      WHERE user_id = $1
       GROUP BY category, subcategory
       ORDER BY n DESC
-    `);
-    res.json({ rows, total: (await one('SELECT COUNT(*) as n FROM jobs')).n });
+    `, [req.user.id]);
+    res.json({ rows, total: (await one('SELECT COUNT(*) as n FROM jobs WHERE user_id = $1', [req.user.id])).n });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -932,9 +941,9 @@ router.post('/reclassify-all', async (req, res) => {
     const rows = await all(`
       SELECT name, roles as jobTitle, '' as jobDescription
       FROM jobs
-      WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40
+      WHERE user_id = $1 AND (category = 'Unclassified' OR category IS NULL OR confidence < 0.40)
       ORDER BY name
-    `);
+    `, [req.user.id]);
 
     console.log(`[reclassify] ${rows.length} companies to reclassify`);
     if (rows.length === 0) return res.json({ reclassified: 0, message: 'Nothing to reclassify' });
@@ -945,7 +954,7 @@ router.post('/reclassify-all', async (req, res) => {
       UPDATE jobs SET
         category = $1, subcategory = $2, confidence = $3,
         classified_at = $4, wikipedia_summary = COALESCE(wikipedia_summary, $5)
-      WHERE name = $6
+      WHERE name = $6 AND user_id = $7
     `;
 
     let reclassified = 0;
@@ -956,15 +965,16 @@ router.post('/reclassify-all', async (req, res) => {
         await client.query(updateSql, [
           cls.category, cls.subcategory, cls.confidence,
           cls.classified_at, cls.wikipedia || '',
-          row.name
+          row.name,
+          req.user.id
         ]);
         reclassified++;
       }
     });
 
     const breakdown = await all(`
-      SELECT category, COUNT(*) as n FROM jobs GROUP BY category ORDER BY n DESC
-    `);
+      SELECT category, COUNT(*) as n FROM jobs WHERE user_id = $1 GROUP BY category ORDER BY n DESC
+    `, [req.user.id]);
     console.log('[reclassify] done —', breakdown.map(r => `${r.category}:${r.n}`).join(', '));
 
     res.json({ reclassified, breakdown });
@@ -979,9 +989,9 @@ router.post('/reclassify-all', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { category, search } = req.query;
-    let sql = 'SELECT * FROM jobs WHERE 1=1';
-    const params = [];
-    let i = 1;
+    let sql = 'SELECT * FROM jobs WHERE user_id = $1';
+    const params = [req.user.id];
+    let i = 2;
     if (category && category !== 'All') {
       sql += ` AND category = $${i++}`;
       params.push(category);
@@ -995,15 +1005,15 @@ router.get('/', async (req, res) => {
     const jobs = await all(sql, params);
 
     // Attach contact counts
-    const countSql = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1";
-    const liSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND source = 'linkedin'";
-    const emSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND source = 'hunter'";
+    const countSql = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2";
+    const liSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2 AND source = 'linkedin'";
+    const emSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2 AND source = 'hunter'";
 
     const enriched = await Promise.all(jobs.map(async (j) => ({
       ...j,
-      contact_count:  Number((await one(countSql, [j.id])).n),
-      linkedin_count: Number((await one(liSql, [j.id])).n),
-      email_count:    Number((await one(emSql, [j.id])).n),
+      contact_count:  Number((await one(countSql, [j.id, req.user.id])).n),
+      linkedin_count: Number((await one(liSql, [j.id, req.user.id])).n),
+      email_count:    Number((await one(emSql, [j.id, req.user.id])).n),
     })));
     res.json(enriched);
   } catch (err) {
@@ -1016,9 +1026,9 @@ router.get('/', async (req, res) => {
 router.get('/:id/contacts', async (req, res) => {
   try {
     const { source } = req.query; // 'linkedin' | 'hunter' | undefined (all)
-    let sql = 'SELECT * FROM job_contacts WHERE job_id = $1';
-    const params = [req.params.id];
-    let i = 2;
+    let sql = 'SELECT * FROM job_contacts WHERE user_id = $1 AND job_id = $2';
+    const params = [req.user.id, req.params.id];
+    let i = 3;
     if (source) { sql += ` AND source = $${i++}`; params.push(source); }
     sql += ' ORDER BY created_at DESC';
     res.json(await all(sql, params));
@@ -1031,7 +1041,7 @@ router.get('/:id/contacts', async (req, res) => {
 // Emits: start | source | complete | error events as Server-Sent Events
 
 router.get('/:id/find-people-stream', async (req, res) => {
-  const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+  const job = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
   if (!job) { res.status(404).json({ error: 'Company not found' }); return; }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1060,15 +1070,15 @@ router.get('/:id/find-people-stream', async (req, res) => {
 
     // Save contacts (preserve their individual source tags)
     const insertSql = `
-      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (job_id, name) DO NOTHING
     `;
     let added = 0;
     await tx(async (client) => {
       for (const p of people.slice(0, 10)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin', req.user.id]);
         if (r.rowCount > 0) added++;
       }
     });
@@ -1088,7 +1098,7 @@ router.get('/:id/find-people-stream', async (req, res) => {
 
 router.post('/:id/find-linkedin', async (req, res) => {
   try {
-    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const job = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const people = await apify.findPeopleAtLinkedInCompany(
@@ -1099,8 +1109,8 @@ router.post('/:id/find-linkedin', async (req, res) => {
     );
 
     const insertSql = `
-      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (job_id, name) DO NOTHING
     `;
 
@@ -1108,14 +1118,14 @@ router.post('/:id/find-linkedin', async (req, res) => {
     await tx(async (client) => {
       for (const p of people.slice(0, 8)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin', req.user.id]);
         if (r.rowCount > 0) added++;
       }
     });
 
     const contacts = await all(
-      'SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY created_at DESC',
-      [job.id]
+      'SELECT * FROM job_contacts WHERE job_id = $1 AND user_id = $2 ORDER BY created_at DESC',
+      [job.id, req.user.id]
     );
 
     res.json({ added, contacts });
@@ -1188,7 +1198,7 @@ function isEngineeringContact(title = '') {
 
 router.post('/:id/find-emails', async (req, res) => {
   try {
-    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const job = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const { domain: domainOverride } = req.body || {};
@@ -1232,7 +1242,7 @@ router.post('/:id/find-emails', async (req, res) => {
     }
 
     // Save resolved domain back to DB (only if it's a real company domain)
-    await run('UPDATE jobs SET domain = $1 WHERE id = $2', [domain, job.id]);
+    await run('UPDATE jobs SET domain = $1 WHERE id = $2 AND user_id = $3', [domain, job.id, req.user.id]);
 
     // Search with fallback to .com/.io/.co variants
     let { domain: usedDomain, emails } = await findEmailsWithFallback(domain, 10);
@@ -1253,7 +1263,7 @@ router.post('/:id/find-emails', async (req, res) => {
             emails = retry.emails;
             domain = hunterDomain;
             console.log(`[Hunter] retry succeeded: ${emails.length} emails for ${usedDomain}`);
-            await run('UPDATE jobs SET domain = $1 WHERE id = $2', [usedDomain, job.id]);
+            await run('UPDATE jobs SET domain = $1 WHERE id = $2 AND user_id = $3', [usedDomain, job.id, req.user.id]);
           }
         } else {
           console.log(`[Hunter] rejected "${hunterDomain}" — doesn't match company "${job.name}"`);
@@ -1286,8 +1296,8 @@ router.post('/:id/find-emails', async (req, res) => {
     }
 
     const insertSql = `
-      INSERT INTO job_contacts (job_id, name, title, linkedin_url, email, source)
-      VALUES ($1, $2, $3, $4, $5, $6)
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, email, source, user_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
       ON CONFLICT (job_id, name) DO NOTHING
     `;
 
@@ -1296,14 +1306,14 @@ router.post('/:id/find-emails', async (req, res) => {
       for (const e of engEmails) {
         if (!e.email) continue;
         const src = e.source || emailSource || 'hunter';
-        const r = await client.query(insertSql, [job.id, e.name || 'Unknown', e.title || '', e.linkedin_url || '', e.email, src]);
+        const r = await client.query(insertSql, [job.id, e.name || 'Unknown', e.title || '', e.linkedin_url || '', e.email, src, req.user.id]);
         if (r.rowCount > 0) added++;
       }
     });
 
     const contacts = await all(
-      "SELECT * FROM job_contacts WHERE job_id = $1 AND email IS NOT NULL AND email != '' ORDER BY created_at DESC",
-      [job.id]
+      "SELECT * FROM job_contacts WHERE job_id = $1 AND user_id = $2 AND email IS NOT NULL AND email != '' ORDER BY created_at DESC",
+      [job.id, req.user.id]
     );
 
     // When all sources found contacts but all were non-engineering, surface a clear message
@@ -1328,8 +1338,8 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
   try {
     const contact = await one(`
       SELECT jc.*, j.id AS job_id, j.name AS company_name, j.domain AS job_domain, j.url AS job_url
-      FROM job_contacts jc JOIN jobs j ON j.id = jc.job_id WHERE jc.id = $1
-    `, [req.params.contactId]);
+      FROM job_contacts jc JOIN jobs j ON j.id = jc.job_id WHERE jc.id = $1 AND jc.user_id = $2
+    `, [req.params.contactId, req.user.id]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (contact.email) return res.json({ email: contact.email, cached: true });
     if (!contact.name) return res.status(400).json({ error: 'Contact has no name to search' });
@@ -1352,7 +1362,7 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
     }
     if (!domain) return res.status(400).json({ error: `Could not resolve domain for ${contact.company_name}` });
 
-    await run('UPDATE jobs SET domain = $1 WHERE id = $2', [domain, contact.job_id]);
+    await run('UPDATE jobs SET domain = $1 WHERE id = $2 AND user_id = $3', [domain, contact.job_id, req.user.id]);
 
     const found = await findEmailForPerson(domain, firstName, lastName);
     if (!found?.email) {
@@ -1365,11 +1375,11 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
                  : found.confidence >= 50 ? 'risky' : null;
 
     await run(
-      "UPDATE job_contacts SET email = $1, email_status = $2, source = COALESCE(NULLIF(source, ''), $3) WHERE id = $4",
-      [found.email, status, 'hunter', contact.id]
+      "UPDATE job_contacts SET email = $1, email_status = $2, source = COALESCE(NULLIF(source, ''), $3) WHERE id = $4 AND user_id = $5",
+      [found.email, status, 'hunter', contact.id, req.user.id]
     );
 
-    const updated = await one('SELECT * FROM job_contacts WHERE id = $1', [contact.id]);
+    const updated = await one('SELECT * FROM job_contacts WHERE id = $1 AND user_id = $2', [contact.id, req.user.id]);
     res.json({ email: found.email, email_status: status, contact: updated, domain, confidence: found.confidence });
   } catch (err) {
     console.error('contacts/find-email error:', err.message);
@@ -1385,8 +1395,8 @@ router.post('/contacts/:contactId/generate', async (req, res) => {
       SELECT jc.*, j.name as company_name, j.category as company_type
       FROM job_contacts jc
       JOIN jobs j ON j.id = jc.job_id
-      WHERE jc.id = $1
-    `, [req.params.contactId]);
+      WHERE jc.id = $1 AND jc.user_id = $2
+    `, [req.params.contactId, req.user.id]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     const { type = 'email', extraContext = '' } = req.body;
@@ -1402,13 +1412,13 @@ router.post('/contacts/:contactId/generate', async (req, res) => {
     if (type === 'linkedin') {
       const result = await generateOutreach({ ...params, type: 'linkedin' });
       const dm = result.message || result.body || '';
-      await run("UPDATE job_contacts SET generated_dm = $1, status = 'generated' WHERE id = $2", [dm, contact.id]);
+      await run("UPDATE job_contacts SET generated_dm = $1, status = 'generated' WHERE id = $2 AND user_id = $3", [dm, contact.id, req.user.id]);
       return res.json({ message: dm, dm });
     } else {
       const result = await generateOutreach({ ...params, type: 'cold_email' });
       await run(
-        "UPDATE job_contacts SET generated_subject = $1, generated_body = $2, status = 'generated' WHERE id = $3",
-        [result.subject, result.body, contact.id]
+        "UPDATE job_contacts SET generated_subject = $1, generated_body = $2, status = 'generated' WHERE id = $3 AND user_id = $4",
+        [result.subject, result.body, contact.id, req.user.id]
       );
       return res.json({ subject: result.subject, body: result.body });
     }
@@ -1430,13 +1440,13 @@ router.put('/contacts/:contactId', async (req, res) => {
         generated_subject = COALESCE($3, generated_subject),
         generated_body    = COALESCE($4, generated_body),
         email             = COALESCE($5, email)
-      WHERE id = $6
+      WHERE id = $6 AND user_id = $7
     `, [
       status || null, generated_dm || null,
       generated_subject || null, generated_body || null,
-      email || null, req.params.contactId
+      email || null, req.params.contactId, req.user.id
     ]);
-    res.json(await one('SELECT * FROM job_contacts WHERE id = $1', [req.params.contactId]));
+    res.json(await one('SELECT * FROM job_contacts WHERE id = $1 AND user_id = $2', [req.params.contactId, req.user.id]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1446,7 +1456,7 @@ router.put('/contacts/:contactId', async (req, res) => {
 
 router.delete('/contacts/:contactId', async (req, res) => {
   try {
-    await run('DELETE FROM job_contacts WHERE id = $1', [req.params.contactId]);
+    await run('DELETE FROM job_contacts WHERE id = $1 AND user_id = $2', [req.params.contactId, req.user.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1457,14 +1467,14 @@ router.delete('/contacts/:contactId', async (req, res) => {
 
 router.post('/:id/scrape-linkedin-company', async (req, res) => {
   try {
-    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const job = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const { linkedinUrl } = req.body;
 
     // Save the LinkedIn company URL if provided
     if (linkedinUrl) {
-      await run('UPDATE jobs SET linkedin_company_url = $1 WHERE id = $2', [linkedinUrl, job.id]);
+      await run('UPDATE jobs SET linkedin_company_url = $1 WHERE id = $2 AND user_id = $3', [linkedinUrl, job.id, req.user.id]);
     }
 
     const urlToUse = linkedinUrl || job.linkedin_company_url || null;
@@ -1473,8 +1483,8 @@ router.post('/:id/scrape-linkedin-company', async (req, res) => {
     const people = await apify.findPeopleAtLinkedInCompany(job.name, urlToUse, job.domain || null, null);
 
     const insertSql = `
-      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
+      VALUES ($1, $2, $3, $4, $5, $6)
       ON CONFLICT (job_id, name) DO NOTHING
     `;
 
@@ -1482,14 +1492,14 @@ router.post('/:id/scrape-linkedin-company', async (req, res) => {
     await tx(async (client) => {
       for (const p of people.slice(0, 8)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin', req.user.id]);
         if (r.rowCount > 0) added++;
       }
     });
 
     const contacts = await all(
-      'SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY created_at DESC',
-      [job.id]
+      'SELECT * FROM job_contacts WHERE job_id = $1 AND user_id = $2 ORDER BY created_at DESC',
+      [job.id, req.user.id]
     );
 
     res.json({ added, contacts, linkedinUrl: urlToUse });

@@ -168,7 +168,7 @@ router.post('/:id/check-intern-roles', async (req, res) => {
   const jobId = parseInt(req.params.id, 10);
   if (isNaN(jobId)) return res.status(400).json({ error: 'Invalid id' });
 
-  const job = await one('SELECT * FROM jobs WHERE id = $1', [jobId]);
+  const job = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [jobId, req.user.id]);
   if (!job) return res.status(404).json({ error: 'Company not found' });
 
   // 24-hour cache
@@ -241,8 +241,8 @@ router.post('/:id/check-intern-roles', async (req, res) => {
   await run(`
     UPDATE jobs
     SET intern_roles_json=$1, intern_roles_checked_at=$2, intern_roles_source=$3, intern_roles_count=$4
-    WHERE id=$5
-  `, [JSON.stringify(internRoles), checkedAt, source, internRoles.length, jobId]);
+    WHERE id=$5 AND user_id=$6
+  `, [JSON.stringify(internRoles), checkedAt, source, internRoles.length, jobId, req.user.id]);
 
   res.json({
     companyId: jobId,

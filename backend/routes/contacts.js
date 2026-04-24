@@ -13,12 +13,15 @@ router.post('/search', async (req, res) => {
 
     // Upsert company into DB
     await run(
-      `INSERT INTO companies (name, source, status) VALUES ($1, 'manual', 'researching')
+      `INSERT INTO companies (name, source, status, user_id) VALUES ($1, 'manual', 'researching', $2)
        ON CONFLICT (name, role) DO NOTHING`,
-      [companyName]
+      [companyName, req.user.id]
     );
 
-    const company = await one('SELECT * FROM companies WHERE name = $1 ORDER BY id DESC LIMIT 1', [companyName]);
+    const company = await one(
+      'SELECT * FROM companies WHERE name = $1 AND user_id = $2 ORDER BY id DESC LIMIT 1',
+      [companyName, req.user.id]
+    );
 
     const stage = company?.stage || 'mid-cap';
     const titles = apollo.getTitlesForStage(stage);
@@ -62,16 +65,16 @@ router.post('/search', async (req, res) => {
     await tx(async (client) => {
       for (const c of contacts) {
         await client.query(`
-          INSERT INTO contacts (company_id, name, title, linkedin_url, email, email_status)
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `, [company.id, c.name || null, c.title || null, c.linkedin_url || null, c.email || null, c.email_status || null]);
+          INSERT INTO contacts (company_id, name, title, linkedin_url, email, email_status, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [company.id, c.name || null, c.title || null, c.linkedin_url || null, c.email || null, c.email_status || null, req.user.id]);
       }
     });
 
     const saved = await all(`
       SELECT contacts.*, $1::text AS company_name, $2::text AS company_stage
-      FROM contacts WHERE company_id = $3
-    `, [companyName, stage, company.id]);
+      FROM contacts WHERE company_id = $3 AND user_id = $4
+    `, [companyName, stage, company.id, req.user.id]);
 
     res.json({ contacts: saved, companyId: company.id, companyName });
   } catch (err) {
@@ -89,11 +92,13 @@ router.get('/', async (req, res) => {
              COALESCE(companies.name, '') as company_name,
              COALESCE(companies.stage, '') as company_stage
       FROM contacts
-      LEFT JOIN companies ON contacts.company_id = companies.id
+      LEFT JOIN companies ON contacts.company_id = companies.id AND companies.user_id = $1
+      WHERE contacts.user_id = $1
     `;
-    const params = [];
+    const params = [req.user.id];
+    let i = 2;
     if (company_id) {
-      sql += ' WHERE contacts.company_id = $1';
+      sql += ` AND contacts.company_id = $${i++}`;
       params.push(company_id);
     }
     sql += ' ORDER BY contacts.created_at DESC LIMIT 200';
@@ -112,9 +117,9 @@ router.get('/:id', async (req, res) => {
              COALESCE(companies.role, '') as company_role,
              COALESCE(companies.stage, '') as company_stage
       FROM contacts
-      LEFT JOIN companies ON contacts.company_id = companies.id
-      WHERE contacts.id = $1
-    `, [req.params.id]);
+      LEFT JOIN companies ON contacts.company_id = companies.id AND companies.user_id = $2
+      WHERE contacts.id = $1 AND contacts.user_id = $2
+    `, [req.params.id, req.user.id]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     res.json(contact);
   } catch (err) {
@@ -125,7 +130,10 @@ router.get('/:id', async (req, res) => {
 // Find decision makers for a company already in DB
 router.post('/find/:company_id', async (req, res) => {
   try {
-    const company = await one('SELECT * FROM companies WHERE id = $1', [req.params.company_id]);
+    const company = await one(
+      'SELECT * FROM companies WHERE id = $1 AND user_id = $2',
+      [req.params.company_id, req.user.id]
+    );
     if (!company) return res.status(404).json({ error: 'Company not found' });
 
     const titles = apollo.getTitlesForStage(company.stage || 'mid-cap');
@@ -153,13 +161,16 @@ router.post('/find/:company_id', async (req, res) => {
     await tx(async (client) => {
       for (const c of contacts) {
         await client.query(`
-          INSERT INTO contacts (company_id, name, title, linkedin_url, email, email_status)
-          VALUES ($1, $2, $3, $4, $5, $6)
-        `, [company.id, c.name, c.title, c.linkedin_url, c.email || null, c.email_status || null]);
+          INSERT INTO contacts (company_id, name, title, linkedin_url, email, email_status, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `, [company.id, c.name, c.title, c.linkedin_url, c.email || null, c.email_status || null, req.user.id]);
       }
     });
 
-    res.json(await all('SELECT * FROM contacts WHERE company_id = $1', [company.id]));
+    res.json(await all(
+      'SELECT * FROM contacts WHERE company_id = $1 AND user_id = $2',
+      [company.id, req.user.id]
+    ));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -168,17 +179,23 @@ router.post('/find/:company_id', async (req, res) => {
 // Enrich contact — get email via Apollo
 router.post('/enrich/:id', async (req, res) => {
   try {
-    const contact = await one('SELECT * FROM contacts WHERE id = $1', [req.params.id]);
+    const contact = await one(
+      'SELECT * FROM contacts WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (!contact.linkedin_url) return res.status(400).json({ error: 'No LinkedIn URL' });
 
     const enriched = await apollo.enrichPerson(contact.linkedin_url);
     await run(`
       UPDATE contacts SET email = COALESCE($1, email), email_status = COALESCE($2, email_status), phone = COALESCE($3, phone)
-      WHERE id = $4
-    `, [enriched.email || null, enriched.email_status || null, enriched.phone || null, contact.id]);
+      WHERE id = $4 AND user_id = $5
+    `, [enriched.email || null, enriched.email_status || null, enriched.phone || null, contact.id, req.user.id]);
 
-    res.json(await one('SELECT * FROM contacts WHERE id = $1', [contact.id]));
+    res.json(await one(
+      'SELECT * FROM contacts WHERE id = $1 AND user_id = $2',
+      [contact.id, req.user.id]
+    ));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -187,7 +204,10 @@ router.post('/enrich/:id', async (req, res) => {
 // Delete contact
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM contacts WHERE id = $1', [req.params.id]);
+    await run(
+      'DELETE FROM contacts WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

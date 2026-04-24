@@ -56,10 +56,10 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
         const rawText = result?.pages ? result.pages.map(p => p.text || '').join('\n') : String(result || '');
         const text = rawText.trim();
         if (text && text.length > 50) {
-          const upsertSql = "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
-          await run(upsertSql, ['user_resume_text', text]);
-          await run(upsertSql, ['user_resume_name', req.file.originalname]);
-          await run(upsertSql, ['user_resume_date', new Date().toISOString()]);
+          const upsertSql = "INSERT INTO meta (key, value, user_id) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
+          await run(upsertSql, ['user_resume_text', text, req.user.id]);
+          await run(upsertSql, ['user_resume_name', req.file.originalname, req.user.id]);
+          await run(upsertSql, ['user_resume_date', new Date().toISOString(), req.user.id]);
           console.log(`[companies] Parsed resume text: ${text.length} chars`);
         }
       } catch (parseErr) {
@@ -68,16 +68,16 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
     }
 
     await run(`
-      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at)
-      VALUES ($1, 'interested', $2, $3, $4, NOW())
+      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
+      VALUES ($1, 'interested', $2, $3, $4, NOW(), $5)
       ON CONFLICT(company_id) DO UPDATE SET
         resume_path = EXCLUDED.resume_path,
         resume_original_name = EXCLUDED.resume_original_name,
         resume_size = EXCLUDED.resume_size,
         updated_at = NOW()
-    `, [req.params.id, req.file.path, req.file.originalname, req.file.size]);
+    `, [req.params.id, req.file.path, req.file.originalname, req.file.size, req.user.id]);
 
-    const app = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const app = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json({ resume: { original_name: app.resume_original_name, size: app.resume_size, resume_path: app.resume_path }, application: app });
   } catch (err) {
     console.error('[companies] career-ops resume upload failed:', err.message);
@@ -88,13 +88,13 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
 // DELETE /api/companies/:id/career-ops/resume
 router.delete('/:id/career-ops/resume', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row?.resume_path) return res.status(404).json({ error: 'Resume not found' });
     try { fs.unlinkSync(row.resume_path); } catch (_) {}
     await run(`
       UPDATE company_applications SET resume_path = NULL, resume_original_name = NULL, resume_size = NULL, updated_at = NOW()
-      WHERE company_id = $1
-    `, [req.params.id]);
+      WHERE company_id = $1 AND user_id = $2
+    `, [req.params.id, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     console.error('[companies] career-ops resume delete failed:', err.message);
@@ -108,10 +108,10 @@ router.get('/categories', async (req, res) => {
     const rows = await all(`
       SELECT category as name, COUNT(*)::int as count
       FROM jobs
-      WHERE category IS NOT NULL AND category != 'Unclassified' AND category != ''
+      WHERE user_id = $1 AND category IS NOT NULL AND category != 'Unclassified' AND category != ''
       GROUP BY category
       ORDER BY count DESC
-    `);
+    `, [req.user.id]);
     res.json({ categories: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -122,9 +122,9 @@ router.get('/categories', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     const { source, status, search, limit = 200, offset = 0 } = req.query;
-    let sql = 'SELECT * FROM companies WHERE 1=1';
-    const params = [];
-    let i = 1;
+    let sql = 'SELECT * FROM companies WHERE user_id = $1';
+    const params = [req.user.id];
+    let i = 2;
     if (source) { sql += ` AND source = $${i++}`; params.push(source); }
     if (status) { sql += ` AND status = $${i++}`; params.push(status); }
     if (search) {
@@ -150,7 +150,7 @@ router.post('/search-by-name', async (req, res) => {
     if (!companyName?.trim()) return res.status(400).json({ error: 'companyName required' });
     const name = companyName.trim();
 
-    const existing = await one("SELECT * FROM jobs WHERE name ILIKE $1 LIMIT 1", [`%${name}%`]);
+    const existing = await one("SELECT * FROM jobs WHERE user_id = $1 AND name ILIKE $2 LIMIT 1", [req.user.id, `%${name}%`]);
     const already_existed = !!existing;
 
     let ycData    = null;
@@ -233,23 +233,23 @@ router.post('/search-by-name', async (req, res) => {
         const stage    = ycData?.batch || (ycData ? 'YC' : 'startup');
 
         await run(`
-          INSERT INTO jobs (name, roles, location, source, url, tag, category)
-          VALUES ($1, $2, $3, 'manual_search', $4, $5, $6)
+          INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id)
+          VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7)
           ON CONFLICT (name) DO NOTHING
-        `, [name, roleText, location || 'USA', applyUrl, name.toLowerCase().replace(/\s+/g, '-'), category]);
+        `, [name, roleText, location || 'USA', applyUrl, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
 
         // Insert additional roles — but jobs table has UNIQUE(name), so only the first
         // unique name goes in. These are just role variations of the same company name
         // → noop via ON CONFLICT.
         for (const role of roles.slice(1, 5)) {
           try {
-            await run(`INSERT INTO jobs (name, roles, location, source, url, tag, category) VALUES ($1, $2, $3, 'manual_search', $4, $5, $6) ON CONFLICT (name) DO NOTHING`,
-              [name, role.title, role.location || 'USA', role.apply_url, name.toLowerCase().replace(/\s+/g, '-'), category]);
+            await run(`INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id) VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7) ON CONFLICT (name) DO NOTHING`,
+              [name, role.title, role.location || 'USA', role.apply_url, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
           } catch (_) {}
         }
 
-        await run("INSERT INTO activity_log (action, details) VALUES ('company_search', $1)",
-          [`Searched and added: ${name}`]);
+        await run("INSERT INTO activity_log (action, details, user_id) VALUES ('company_search', $1, $2)",
+          [`Searched and added: ${name}`, req.user.id]);
       } catch (err) {
         console.log(`[company-search] DB insert failed: ${err.message}`);
       }
@@ -315,10 +315,10 @@ router.post('/scrape', async (req, res) => {
     await tx(async (client) => {
       for (const item of allResults) {
         const r = await client.query(`
-          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
+        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }
     });
@@ -364,10 +364,10 @@ router.post('/scrape/:src', async (req, res) => {
     await tx(async (client) => {
       for (const item of cleaned) {
         const r = await client.query(`
-          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
+        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }
     });
@@ -385,7 +385,7 @@ router.put('/:id/status', async (req, res) => {
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: 'status required' });
 
-    const r = await run('UPDATE companies SET status = $1 WHERE id = $2', [status, req.params.id]);
+    const r = await run('UPDATE companies SET status = $1 WHERE id = $2 AND user_id = $3', [status, req.params.id, req.user.id]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Company not found' });
 
     res.json({ success: true });
@@ -398,7 +398,7 @@ router.put('/:id/status', async (req, res) => {
 // Delete company
 router.delete('/:id', async (req, res) => {
   try {
-    const r = await run('DELETE FROM companies WHERE id = $1', [req.params.id]);
+    const r = await run('DELETE FROM companies WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (r.rowCount === 0) return res.status(404).json({ error: 'Company not found' });
     res.json({ success: true });
   } catch (err) {

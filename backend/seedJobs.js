@@ -188,30 +188,41 @@ function getDomain(url) {
 
 import { one, tx } from './db.js';
 
-export async function seedJobs() {
-  const row = await one('SELECT COUNT(*)::int AS n FROM jobs');
-  if (row && row.n > 0) return; // already seeded
+export async function seedJobs(userId) {
+  if (!userId) throw new Error('seedJobs requires a userId (pass USER_ID env var or first CLI arg)');
+  const row = await one(
+    'SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1',
+    [userId]
+  );
+  if (row && row.n > 0) return; // already seeded for this user
 
   const INSERT_SQL = `
-    INSERT INTO jobs (name, category, pay, roles, location, url, tag, domain)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    INSERT INTO jobs (name, category, pay, roles, location, url, tag, domain, user_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     ON CONFLICT (name) DO NOTHING
   `;
 
   await tx(async (client) => {
     for (const [name, category, pay, roles, location, url, tag] of COMPANIES) {
-      await client.query(INSERT_SQL, [name, category, pay, roles, location, url, tag || '', getDomain(url)]);
+      await client.query(INSERT_SQL, [name, category, pay, roles, location, url, tag || '', getDomain(url), userId]);
     }
   });
 
-  console.log(`Seeded ${COMPANIES.length} companies into jobs table`);
+  console.log(`Seeded ${COMPANIES.length} companies into jobs table for user ${userId}`);
 }
 
-// Standalone invocation: `node seedJobs.js`
+// Standalone invocation: `node seedJobs.js <USER_ID>` or `USER_ID=... node seedJobs.js`
 if (import.meta.url === `file://${process.argv[1]}`) {
   (async () => {
     try {
-      await seedJobs();
+      const userId = process.argv[2] || process.env.USER_ID;
+      if (!userId) {
+        console.error('[seedJobs] ERROR: USER_ID is required. Usage:');
+        console.error('  node seedJobs.js <USER_ID>');
+        console.error('  USER_ID=<uuid> node seedJobs.js');
+        process.exit(2);
+      }
+      await seedJobs(userId);
       process.exit(0);
     } catch (err) {
       console.error('[seedJobs] Failed:', err);

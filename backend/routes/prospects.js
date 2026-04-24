@@ -35,9 +35,9 @@ const MIDCAP_TITLES  = ['vp of engineering','director of engineering','head of e
 router.get('/', async (req, res) => {
   try {
     const { type, status, search } = req.query;
-    let sql = 'SELECT * FROM prospects WHERE 1=1';
-    const params = [];
-    let i = 1;
+    let sql = 'SELECT * FROM prospects WHERE user_id = $1';
+    const params = [req.user.id];
+    let i = 2;
     if (type)   { sql += ` AND company_type = $${i++}`; params.push(type); }
     if (status) { sql += ` AND status = $${i++}`;        params.push(status); }
     if (search) {
@@ -56,11 +56,11 @@ router.get('/', async (req, res) => {
 router.get('/stats', async (req, res) => {
   try {
     const [t, v, g, s, r] = await Promise.all([
-      one("SELECT COUNT(*)::int AS n FROM prospects"),
-      one("SELECT COUNT(*)::int AS n FROM prospects WHERE email_status IN ('verified','likely')"),
-      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'generated'"),
-      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'sent'"),
-      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'replied'"),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE email_status IN ('verified','likely') AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'generated' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'sent' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM prospects WHERE status = 'replied' AND user_id = $1", [req.user.id]),
     ]);
     res.json({
       total: t?.n || 0,
@@ -84,7 +84,10 @@ router.post('/discover', async (req, res) => {
   const results = { added: 0, skipped: 0, companies: [] };
 
   for (const companyName of batch) {
-    const existingRow = await one("SELECT COUNT(*)::int AS n FROM prospects WHERE company_name = $1", [companyName]);
+    const existingRow = await one(
+      "SELECT COUNT(*)::int AS n FROM prospects WHERE company_name = $1 AND user_id = $2",
+      [companyName, req.user.id]
+    );
     const existing = existingRow?.n || 0;
     if (existing > 0) {
       results.skipped++;
@@ -120,10 +123,10 @@ router.post('/discover', async (req, res) => {
       for (const p of people.slice(0, 3)) {
         if (!p.name || p.name === 'Unknown') continue;
         const r = await client.query(`
-          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, company_name) DO NOTHING
-        `, [p.name, p.title, p.linkedin_url, p.email || null, p.email_status || 'unknown', companyName, mode]);
+        `, [p.name, p.title, p.linkedin_url, p.email || null, p.email_status || 'unknown', companyName, mode, req.user.id]);
         if (r.rowCount > 0) { results.added++; saved++; }
       }
     });
@@ -161,15 +164,18 @@ router.post('/add-company', async (req, res) => {
       for (const p of people) {
         if (!p.name || p.name === 'Unknown') continue;
         const r = await client.query(`
-          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, company_name) DO NOTHING
-        `, [p.name, p.title || '', p.linkedin_url || null, p.email || null, p.email_status || 'unknown', companyName, companyType]);
+        `, [p.name, p.title || '', p.linkedin_url || null, p.email || null, p.email_status || 'unknown', companyName, companyType, req.user.id]);
         if (r.rowCount > 0) added++;
       }
     });
 
-    const saved = await all('SELECT * FROM prospects WHERE company_name = $1', [companyName]);
+    const saved = await all(
+      'SELECT * FROM prospects WHERE company_name = $1 AND user_id = $2',
+      [companyName, req.user.id]
+    );
     res.json({ added, people: saved });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -179,7 +185,10 @@ router.post('/add-company', async (req, res) => {
 // Generate cold email + LinkedIn DM for a prospect
 router.post('/:id/generate', async (req, res) => {
   try {
-    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
+    const prospect = await one(
+      'SELECT * FROM prospects WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
 
     const { extraContext = '' } = req.body;
@@ -199,8 +208,8 @@ router.post('/:id/generate', async (req, res) => {
     await run(`
       UPDATE prospects
       SET email_subject = $1, email_body = $2, linkedin_dm = $3, status = 'generated', updated_at = NOW()
-      WHERE id = $4
-    `, [email.subject, email.body, linkedin.message || linkedin.body, prospect.id]);
+      WHERE id = $4 AND user_id = $5
+    `, [email.subject, email.body, linkedin.message || linkedin.body, prospect.id, req.user.id]);
 
     res.json({ email, linkedin });
   } catch (err) {
@@ -212,15 +221,20 @@ router.post('/:id/generate', async (req, res) => {
 // Find / verify email for a prospect
 router.post('/:id/find-email', async (req, res) => {
   try {
-    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
+    const prospect = await one(
+      'SELECT * FROM prospects WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!prospect) return res.status(404).json({ error: 'Prospect not found' });
 
     if (prospect.linkedin_url) {
       try {
         const enriched = await apollo.enrichPerson(prospect.linkedin_url);
         if (enriched.email) {
-          await run("UPDATE prospects SET email = $1, email_status = $2, updated_at = NOW() WHERE id = $3",
-            [enriched.email, enriched.email_status, prospect.id]);
+          await run(
+            "UPDATE prospects SET email = $1, email_status = $2, updated_at = NOW() WHERE id = $3 AND user_id = $4",
+            [enriched.email, enriched.email_status, prospect.id, req.user.id]
+          );
           return res.json({ email: enriched.email, email_status: enriched.email_status });
         }
       } catch (err) { console.error('Enrich failed:', err.message); }
@@ -250,12 +264,17 @@ router.post('/:id/find-email', async (req, res) => {
 // Verify existing email
 router.post('/:id/verify-email', async (req, res) => {
   try {
-    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
+    const prospect = await one(
+      'SELECT * FROM prospects WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!prospect?.email) return res.status(400).json({ error: 'No email to verify' });
 
     const result = await apollo.verifyEmail(prospect.email);
-    await run("UPDATE prospects SET email_status = $1, updated_at = NOW() WHERE id = $2",
-      [result.status, prospect.id]);
+    await run(
+      "UPDATE prospects SET email_status = $1, updated_at = NOW() WHERE id = $2 AND user_id = $3",
+      [result.status, prospect.id, req.user.id]
+    );
 
     res.json({ email: prospect.email, ...result });
   } catch (err) {
@@ -267,7 +286,10 @@ router.post('/:id/verify-email', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { status, notes, email, email_subject, email_body, linkedin_dm } = req.body;
-    const prospect = await one('SELECT * FROM prospects WHERE id = $1', [req.params.id]);
+    const prospect = await one(
+      'SELECT * FROM prospects WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     if (!prospect) return res.status(404).json({ error: 'Not found' });
 
     await run(`
@@ -279,10 +301,13 @@ router.put('/:id', async (req, res) => {
         email_body    = COALESCE($5, email_body),
         linkedin_dm   = COALESCE($6, linkedin_dm),
         updated_at    = NOW()
-      WHERE id = $7
-    `, [status || null, notes || null, email || null, email_subject || null, email_body || null, linkedin_dm || null, prospect.id]);
+      WHERE id = $7 AND user_id = $8
+    `, [status || null, notes || null, email || null, email_subject || null, email_body || null, linkedin_dm || null, prospect.id, req.user.id]);
 
-    res.json(await one('SELECT * FROM prospects WHERE id = $1', [prospect.id]));
+    res.json(await one(
+      'SELECT * FROM prospects WHERE id = $1 AND user_id = $2',
+      [prospect.id, req.user.id]
+    ));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -291,7 +316,10 @@ router.put('/:id', async (req, res) => {
 // Delete a prospect
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM prospects WHERE id = $1', [req.params.id]);
+    await run(
+      'DELETE FROM prospects WHERE id = $1 AND user_id = $2',
+      [req.params.id, req.user.id]
+    );
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

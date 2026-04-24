@@ -7,7 +7,10 @@ const router = Router();
 // Find email for a contact via Apollo enrichment
 router.post('/find/:contact_id', async (req, res) => {
   try {
-    const contact = await one('SELECT * FROM contacts WHERE id = $1', [req.params.contact_id]);
+    const contact = await one(
+      'SELECT * FROM contacts WHERE id = $1 AND user_id = $2',
+      [req.params.contact_id, req.user.id]
+    );
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     if (contact.email && contact.email_status === 'verified') {
@@ -21,8 +24,10 @@ router.post('/find/:contact_id', async (req, res) => {
     const enriched = await apollo.enrichPerson(contact.linkedin_url);
 
     if (enriched.email) {
-      await run('UPDATE contacts SET email = $1, email_status = $2 WHERE id = $3',
-        [enriched.email, enriched.email_status, contact.id]);
+      await run(
+        'UPDATE contacts SET email = $1, email_status = $2 WHERE id = $3 AND user_id = $4',
+        [enriched.email, enriched.email_status, contact.id, req.user.id]
+      );
     }
 
     res.json({ email: enriched.email || null, email_status: enriched.email_status || 'unknown', cached: false });
@@ -35,13 +40,19 @@ router.post('/find/:contact_id', async (req, res) => {
 // Verify existing email
 router.post('/verify/:contact_id', async (req, res) => {
   try {
-    const contact = await one('SELECT * FROM contacts WHERE id = $1', [req.params.contact_id]);
+    const contact = await one(
+      'SELECT * FROM contacts WHERE id = $1 AND user_id = $2',
+      [req.params.contact_id, req.user.id]
+    );
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (!contact.email) return res.status(400).json({ error: 'No email to verify' });
 
     const result = await apollo.verifyEmail(contact.email);
 
-    await run('UPDATE contacts SET email_status = $1 WHERE id = $2', [result.status, contact.id]);
+    await run(
+      'UPDATE contacts SET email_status = $1 WHERE id = $2 AND user_id = $3',
+      [result.status, contact.id, req.user.id]
+    );
 
     res.json({ email: contact.email, ...result });
   } catch (err) {
@@ -55,9 +66,9 @@ router.get('/guess/:contact_id', async (req, res) => {
   try {
     const contact = await one(`
       SELECT contacts.*, companies.name as company_name
-      FROM contacts LEFT JOIN companies ON contacts.company_id = companies.id
-      WHERE contacts.id = $1
-    `, [req.params.contact_id]);
+      FROM contacts LEFT JOIN companies ON contacts.company_id = companies.id AND companies.user_id = $2
+      WHERE contacts.id = $1 AND contacts.user_id = $2
+    `, [req.params.contact_id, req.user.id]);
 
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (!contact.name) return res.status(400).json({ error: 'Contact has no name' });

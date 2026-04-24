@@ -49,9 +49,9 @@ const upload = multer({
 // ── GET /api/career/resume — get current resume info ─────────────────────────
 router.get('/resume', async (req, res) => {
   try {
-    const text = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
-    const name = (await one("SELECT value FROM meta WHERE key = 'user_resume_name'"))?.value;
-    const date = (await one("SELECT value FROM meta WHERE key = 'user_resume_date'"))?.value;
+    const text = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
+    const name = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value;
+    const date = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_date']))?.value;
     res.json({ hasResume: !!text, name, date, textPreview: text?.slice(0, 300) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -76,10 +76,10 @@ router.post('/resume', upload.single('resume'), async (req, res) => {
     fs.unlinkSync(req.file.path); // remove temp
 
     // Store in DB meta table
-    const upsertSql = "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
-    await run(upsertSql, ['user_resume_text', text]);
-    await run(upsertSql, ['user_resume_name', req.file.originalname]);
-    await run(upsertSql, ['user_resume_date', new Date().toISOString()]);
+    const upsertSql = "INSERT INTO meta (user_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
+    await run(upsertSql, [req.user.id, 'user_resume_text', text]);
+    await run(upsertSql, [req.user.id, 'user_resume_name', req.file.originalname]);
+    await run(upsertSql, [req.user.id, 'user_resume_date', new Date().toISOString()]);
 
     console.log(`[careerOps] Resume uploaded: ${req.file.originalname}, ${text.length} chars`);
     res.json({ ok: true, name: req.file.originalname, chars: text.length, preview: text.slice(0, 300) });
@@ -98,7 +98,7 @@ router.post('/evaluate', async (req, res) => {
     }
 
     // Get resume
-    const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
+    const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume uploaded. Please upload your resume first.' });
 
     // If URL given, fetch job content
@@ -118,10 +118,11 @@ router.post('/evaluate', async (req, res) => {
     // Save to DB
     const result = await run(`
       INSERT INTO evaluations
-        (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'career_ops')
+        (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'career_ops')
       RETURNING id
     `, [
+      req.user.id,
       sourceUrl || null,
       evaluation.jobTitle || 'Unknown Role',
       evaluation.companyName || 'Unknown Company',
@@ -140,7 +141,7 @@ router.post('/evaluate', async (req, res) => {
         evaluation.companyName,
         evaluation.jobTitle
       );
-      await run("UPDATE evaluations SET report_path = $1 WHERE id = $2", [mdPath, evalId]);
+      await run("UPDATE evaluations SET report_path = $1 WHERE id = $2 AND user_id = $3", [mdPath, evalId, req.user.id]);
     } catch (err) {
       console.error('[careerOps] report save failed:', err.message);
     }
@@ -157,8 +158,8 @@ router.get('/evaluations', async (req, res) => {
   try {
     const rows = await all(`
       SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at
-      FROM evaluations ORDER BY created_at DESC LIMIT 50
-    `);
+      FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50
+    `, [req.user.id]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -168,7 +169,7 @@ router.get('/evaluations', async (req, res) => {
 // ── GET /api/career/evaluations/:id — get single evaluation ──────────────────
 router.get('/evaluations/:id', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json({ ...row, evaluation: row.report_json ? JSON.parse(row.report_json) : null });
   } catch (err) {
@@ -180,7 +181,7 @@ router.get('/evaluations/:id', async (req, res) => {
 
 router.get('/profile', async (req, res) => {
   try {
-    const row = (await one('SELECT * FROM user_profile WHERE id = 1')) || {};
+    const row = (await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id])) || {};
     res.json(row);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -189,22 +190,36 @@ router.put('/profile', async (req, res) => {
   try {
     const ALLOWED = ['first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url','location','work_authorization','needs_sponsorship','gender','race','veteran_status','disability_status','resume_dir'];
     const data = req.body || {};
-    const sets = [], args = [];
+    const cols = [], placeholders = [], updates = [], args = [];
     let i = 1;
+    // user_id is always first param for both INSERT + UPDATE WHERE
+    args.push(req.user.id);
+    const userIdPos = i++;
     for (const k of ALLOWED) {
-      if (Object.prototype.hasOwnProperty.call(data, k)) { sets.push(`${k} = $${i++}`); args.push(data[k]); }
+      if (Object.prototype.hasOwnProperty.call(data, k)) {
+        cols.push(k);
+        placeholders.push(`$${i}`);
+        updates.push(`${k} = $${i}`);
+        args.push(data[k]);
+        i++;
+      }
     }
-    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    sets.push("updated_at = NOW()");
-    await run(`UPDATE user_profile SET ${sets.join(', ')} WHERE id = 1`, args);
-    res.json(await one('SELECT * FROM user_profile WHERE id = 1'));
+    if (!cols.length) return res.status(400).json({ error: 'No fields to update' });
+    // Upsert on user_id (one row per user). user_id stays out of the SET clause.
+    const sql = `
+      INSERT INTO user_profile (user_id, ${cols.join(', ')}, updated_at)
+      VALUES ($${userIdPos}, ${placeholders.join(', ')}, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET ${updates.join(', ')}, updated_at = NOW()
+    `;
+    await run(sql, args);
+    res.json(await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Resume registry — list available resumes in the configured folder ────────
 router.get('/resumes-library', async (req, res) => {
   try {
-    const profile = await one('SELECT resume_dir FROM user_profile WHERE id = 1');
+    const profile = await one('SELECT resume_dir FROM user_profile WHERE user_id = $1', [req.user.id]);
     const resumes = scanResumes(profile?.resume_dir);
     res.json({ resumeDir: profile?.resume_dir, resumes });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -217,7 +232,7 @@ router.get('/resumes-library', async (req, res) => {
 router.post('/auto-apply/run', async (req, res) => {
   try {
     const { dryRun = false, headless = true, limit = 10 } = req.body || {};
-    const summary = await runQueueOnce({ dryRun, headless, limit });
+    const summary = await runQueueOnce({ dryRun, headless, limit, userId: req.user.id });
     res.json(summary);
   } catch (err) {
     console.error('[auto-apply/run]', err);
@@ -236,7 +251,7 @@ router.post('/auto-apply/run', async (req, res) => {
 router.get('/bulk-queue/preview', async (req, res) => {
   try {
     const { minGrade, minScore } = req.query;
-    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore });
+    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore, userId: req.user.id });
     const rows = await all(
       `SELECT id, job_title, company_name, grade, score FROM evaluations WHERE ${sql} ORDER BY score DESC NULLS LAST LIMIT 500`,
       params
@@ -253,7 +268,7 @@ router.get('/bulk-queue/preview', async (req, res) => {
 router.post('/bulk-queue', async (req, res) => {
   try {
     const { minGrade, minScore } = req.body || {};
-    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore });
+    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore, userId: req.user.id });
     const r = await run(
       `UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE ${sql}`,
       params
@@ -267,12 +282,15 @@ router.post('/bulk-queue', async (req, res) => {
 
 // Build the shared WHERE fragment for bulk-queue preview + apply.
 // Excludes rows that are already queued or past "not_started" (don't clobber
-// in-flight applications).
-function buildBulkQueueFilter({ minGrade, minScore }) {
+// in-flight applications). Scoped to the caller's user_id.
+function buildBulkQueueFilter({ minGrade, minScore, userId }) {
   const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F'];
-  const parts = ["(apply_status IS NULL OR apply_status = 'not_started')"];
   const params = [];
   let i = 1;
+  // user_id scope comes first — ahead of the grade/score clauses.
+  const parts = [`user_id = $${i++}`];
+  params.push(userId);
+  parts.push("(apply_status IS NULL OR apply_status = 'not_started')");
 
   if (minGrade && GRADE_ORDER.includes(String(minGrade).toUpperCase())) {
     const allowed = GRADE_ORDER.slice(0, GRADE_ORDER.indexOf(String(minGrade).toUpperCase()) + 1);
@@ -302,10 +320,10 @@ router.post('/auto-apply/resume-preview', async (req, res) => {
       const ev = await one(`
         SELECT id, pdf_path, job_description, report_json
         FROM evaluations
-        WHERE job_url = $1
+        WHERE job_url = $1 AND user_id = $2
         ORDER BY id DESC
         LIMIT 1
-      `, [url]);
+      `, [url, req.user.id]);
       if (!ev) {
         previews[url] = { source: 'fallback', label: 'Will use common-folder resume (no evaluation yet)' };
         continue;
@@ -345,21 +363,21 @@ router.post('/auto-apply-direct', async (req, res) => {
     if (!companyName || !jobTitle) return res.status(400).json({ error: 'companyName and jobTitle are required' });
 
     // Deduplicate: if we've already seen this URL, reuse the existing evaluation
-    let row = await one('SELECT * FROM evaluations WHERE job_url = $1 ORDER BY id DESC LIMIT 1', [jobUrl]);
+    let row = await one('SELECT * FROM evaluations WHERE job_url = $1 AND user_id = $2 ORDER BY id DESC LIMIT 1', [jobUrl, req.user.id]);
     if (!row) {
       const r = await run(`
-        INSERT INTO evaluations (job_url, job_title, company_name, apply_mode, apply_status, source)
-        VALUES ($1, $2, $3, 'auto', 'queued', 'auto_apply_direct')
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, apply_mode, apply_status, source)
+        VALUES ($1, $2, $3, $4, 'auto', 'queued', 'auto_apply_direct')
         RETURNING id
-      `, [jobUrl, jobTitle, companyName]);
-      row = await one('SELECT * FROM evaluations WHERE id = $1', [r.insertId]);
+      `, [req.user.id, jobUrl, jobTitle, companyName]);
+      row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [r.insertId, req.user.id]);
     } else {
       // Re-queue for another attempt
-      await run("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = $1", [row.id]);
+      await run("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
     }
 
-    const result = await processOneEvaluation(row.id, { dryRun, headless });
-    const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1', [row.id]);
+    const result = await processOneEvaluation(req.user.id, row.id, { dryRun, headless });
+    const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1 AND user_id = $2', [row.id, req.user.id]);
     res.json({ ok: !!result.ok, evalId: row.id, ...updated, ...result });
   } catch (err) {
     console.error('[auto-apply-direct]', err);
@@ -372,7 +390,7 @@ router.post('/auto-apply-direct', async (req, res) => {
 router.post('/auto-apply/:id', async (req, res) => {
   try {
     const { dryRun = false, headless = true } = req.body || {};
-    const r = await processOneEvaluation(Number(req.params.id), { dryRun, headless });
+    const r = await processOneEvaluation(req.user.id, Number(req.params.id), { dryRun, headless });
     res.json(r);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -387,8 +405,9 @@ router.get('/pipeline', async (req, res) => {
       SELECT id, job_title, company_name, job_url, grade, score,
              apply_mode, apply_status, applied_at, created_at
       FROM evaluations
+      WHERE user_id = $1
       ORDER BY COALESCE(applied_at, created_at::text) DESC
-    `);
+    `, [req.user.id]);
 
     const columns = {
       evaluated:  { label: 'Evaluated',     hint: 'Scored but not yet applied',            items: [] },
@@ -432,9 +451,9 @@ router.patch('/evaluations/:id/apply-status', async (req, res) => {
     const VALID = ['not_started', 'opened', 'queued', 'submitted', 'responded', 'interview', 'offer', 'rejected'];
     const { status } = req.body || {};
     if (!VALID.includes(status)) return res.status(400).json({ error: `status must be one of ${VALID.join(', ')}` });
-    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    await run('UPDATE evaluations SET apply_status = $1 WHERE id = $2', [status, req.params.id]);
+    await run('UPDATE evaluations SET apply_status = $1 WHERE id = $2 AND user_id = $3', [status, req.params.id, req.user.id]);
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -448,9 +467,9 @@ router.patch('/evaluations/:id/apply-mode', async (req, res) => {
     if (!['manual', 'auto'].includes(mode)) {
       return res.status(400).json({ error: 'mode must be "manual" or "auto"' });
     }
-    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    await run('UPDATE evaluations SET apply_mode = $1 WHERE id = $2', [mode, req.params.id]);
+    await run('UPDATE evaluations SET apply_mode = $1 WHERE id = $2 AND user_id = $3', [mode, req.params.id, req.user.id]);
     res.json({ ok: true, applyMode: mode });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -463,7 +482,7 @@ router.patch('/evaluations/:id/apply-mode', async (req, res) => {
 // auto mode:   enqueues a Playwright worker (stub for now — real submit lands in #9).
 router.post('/evaluations/:id/apply', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
     if (!row.job_url) return res.status(400).json({ error: 'This evaluation has no job URL to apply to' });
 
@@ -472,16 +491,16 @@ router.post('/evaluations/:id/apply', async (req, res) => {
     if (mode === 'manual') {
       // Nothing to do server-side — frontend opens URL. Just mark as "opened" so
       // the user can later confirm submission via updateStatus.
-      await run("UPDATE evaluations SET apply_status = 'opened', applied_at = NOW() WHERE id = $1", [row.id]);
+      await run("UPDATE evaluations SET apply_status = 'opened', applied_at = NOW() WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
       return res.json({ ok: true, mode, url: row.job_url, status: 'opened' });
     }
 
     // auto mode — mark queued, then run the Playwright worker synchronously for
     // immediate feedback. Long-running so we return once the worker finishes.
-    await run("UPDATE evaluations SET apply_status = 'queued' WHERE id = $1", [row.id]);
+    await run("UPDATE evaluations SET apply_status = 'queued' WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
     try {
-      const result = await processOneEvaluation(row.id, { headless: true });
-      const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1', [row.id]);
+      const result = await processOneEvaluation(req.user.id, row.id, { headless: true });
+      const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1 AND user_id = $2', [row.id, req.user.id]);
       return res.json({
         ok: !!result.ok,
         mode,
@@ -503,9 +522,9 @@ router.post('/evaluations/:id/apply', async (req, res) => {
 // ── POST /api/career/evaluations/:id/mark-applied — user confirms manual submit ─
 router.post('/evaluations/:id/mark-applied', async (req, res) => {
   try {
-    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()::text) WHERE id = $1", [req.params.id]);
+    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()::text) WHERE id = $1 AND user_id = $2", [req.params.id, req.user.id]);
     res.json({ ok: true, status: 'submitted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -515,7 +534,7 @@ router.post('/evaluations/:id/mark-applied', async (req, res) => {
 // ── DELETE /api/career/evaluations/:id ───────────────────────────────────────
 router.delete('/evaluations/:id', async (req, res) => {
   try {
-    await run('DELETE FROM evaluations WHERE id = $1', [req.params.id]);
+    await run('DELETE FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -525,13 +544,13 @@ router.delete('/evaluations/:id', async (req, res) => {
 // ── POST /api/career/tailored-resume/:id — generate tailored resume PDF ──────
 router.post('/tailored-resume/:id', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
 
-    const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
+    const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume found' });
 
-    const candidateName = (await one("SELECT value FROM meta WHERE key = 'user_resume_name'"))?.value?.replace('.pdf','') || 'Candidate';
+    const candidateName = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value?.replace('.pdf','') || 'Candidate';
 
     console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title}`);
 
@@ -542,7 +561,7 @@ router.post('/tailored-resume/:id', async (req, res) => {
     const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
 
     // Update DB
-    await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2', [pdfPath, row.id]);
+    await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3', [pdfPath, row.id, req.user.id]);
 
     res.json({ ok: true, pdfPath: relativePath, downloadUrl: `/api/career/download/${row.id}` });
   } catch (err) {
@@ -554,7 +573,7 @@ router.post('/tailored-resume/:id', async (req, res) => {
 // ── GET /api/career/download/:id — download PDF ──────────────────────────────
 router.get('/download/:id', async (req, res) => {
   try {
-    const row = await one('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row || !row.pdf_path) return res.status(404).json({ error: 'PDF not found. Generate it first.' });
     if (!fs.existsSync(row.pdf_path)) return res.status(404).json({ error: 'PDF file missing from disk.' });
 
@@ -735,7 +754,7 @@ router.post('/batch-evaluate', async (req, res) => {
     return res.status(400).json({ error: 'Provide an array of URLs' });
   }
 
-  const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
+  const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
   if (!resumeText) return res.status(400).json({ error: 'No resume uploaded' });
 
   const batch = urls.slice(0, 10); // max 10
@@ -751,10 +770,10 @@ router.post('/batch-evaluate', async (req, res) => {
 
       // Save to DB
       const r = await run(`
-        INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'career_ops_batch')
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'career_ops_batch')
         RETURNING id
-      `, [url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation)]);
+      `, [req.user.id, url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation)]);
 
       return { url, evalId: r.insertId, evaluation, status: 'done' };
     }));
@@ -799,10 +818,10 @@ const docUpload = multer({
 // ── GET /api/career/stats — career ops summary ─────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {
-    const total    = Number((await one("SELECT COUNT(*) as n FROM company_applications")).n);
-    const avgRow   = await one("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL");
-    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL ORDER BY ca.fit_score DESC LIMIT 1");
-    const applyCount = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2")).n);
+    const total    = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE user_id = $1", [req.user.id])).n);
+    const avgRow   = await one("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL AND user_id = $1", [req.user.id]);
+    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL AND ca.user_id = $1 ORDER BY ca.fit_score DESC LIMIT 1", [req.user.id]);
+    const applyCount = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2 AND user_id = $1", [req.user.id])).n);
     res.json({ total, avgScore: avgRow?.avg ? Number(avgRow.avg).toFixed(1) : null, topPick: topRow, applyCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -816,8 +835,9 @@ router.get('/ranked', async (req, res) => {
       SELECT ca.*, j.name as company_name, j.category, j.location, j.website
       FROM company_applications ca
       JOIN jobs j ON j.id = ca.company_id
+      WHERE ca.user_id = $1
       ORDER BY ca.fit_score DESC NULLS LAST, ca.updated_at DESC
-    `);
+    `, [req.user.id]);
     res.json({ applications: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -827,7 +847,7 @@ router.get('/ranked', async (req, res) => {
 // ── GET /api/career/:companyId/documents — list documents ─────────────────────
 router.get('/:companyId/documents', async (req, res) => {
   try {
-    const rows = await all("SELECT * FROM documents WHERE company_id = $1 ORDER BY created_at DESC", [req.params.companyId]);
+    const rows = await all("SELECT * FROM documents WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC", [req.params.companyId, req.user.id]);
     res.json({ documents: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -839,11 +859,11 @@ router.post('/:companyId/documents', docUpload.single('file'), async (req, res) 
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await run(`
-      INSERT INTO documents (company_id, filename, original_name, mime_type, size)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO documents (user_id, company_id, filename, original_name, mime_type, size)
+      VALUES ($1, $2, $3, $4, $5, $6)
       RETURNING id
-    `, [req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size]);
-    const doc = await one("SELECT * FROM documents WHERE id = $1", [result.insertId]);
+    `, [req.user.id, req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size]);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND user_id = $2", [result.insertId, req.user.id]);
     res.json({ document: doc });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -853,11 +873,11 @@ router.post('/:companyId/documents', docUpload.single('file'), async (req, res) 
 // ── DELETE /api/career/:companyId/documents/:docId ────────────────────────────
 router.delete('/:companyId/documents/:docId', async (req, res) => {
   try {
-    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2", [req.params.docId, req.params.companyId]);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2 AND user_id = $3", [req.params.docId, req.params.companyId, req.user.id]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     try { fs.unlinkSync(filePath); } catch (_) {}
-    await run("DELETE FROM documents WHERE id = $1", [req.params.docId]);
+    await run("DELETE FROM documents WHERE id = $1 AND user_id = $2", [req.params.docId, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -867,7 +887,7 @@ router.delete('/:companyId/documents/:docId', async (req, res) => {
 // ── GET /api/career/:companyId/documents/:docId/download ──────────────────────
 router.get('/:companyId/documents/:docId/download', async (req, res) => {
   try {
-    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2", [req.params.docId, req.params.companyId]);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2 AND user_id = $3", [req.params.docId, req.params.companyId, req.user.id]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     res.setHeader('Content-Disposition', `inline; filename="${doc.original_name}"`);
@@ -881,7 +901,7 @@ router.get('/:companyId/documents/:docId/download', async (req, res) => {
 // ── GET /api/career/company/:id — get application tracking for a company ───────
 router.get('/company/:id', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json(row || {
       company_id: req.params.id,
       status: 'interested',
@@ -912,13 +932,13 @@ router.put('/company/:id', async (req, res) => {
     } = req.body;
     await run(`
       INSERT INTO company_applications (
-        company_id, status, applied_date, follow_up_date, notes, fit_score,
+        user_id, company_id, status, applied_date, follow_up_date, notes, fit_score,
         salary, location_type, start_date, end_date, fit_assessment,
         resume_path, resume_original_name, resume_size,
         job_title, job_url, job_source, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
-      ON CONFLICT(company_id) DO UPDATE SET
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
         status = EXCLUDED.status,
         applied_date = EXCLUDED.applied_date,
         follow_up_date = EXCLUDED.follow_up_date,
@@ -937,6 +957,7 @@ router.put('/company/:id', async (req, res) => {
         job_source = COALESCE(EXCLUDED.job_source, company_applications.job_source),
         updated_at = NOW()
     `, [
+      req.user.id,
       req.params.id,
       status || 'interested',
       applied_date || null,
@@ -955,7 +976,7 @@ router.put('/company/:id', async (req, res) => {
       job_url || null,
       job_source || null,
     ]);
-    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -970,24 +991,24 @@ router.post('/company/:id/score-fit', async (req, res) => {
   }, 90000);
 
   try {
-    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
-    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    const company = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!company) { clearTimeout(timeout); return res.status(404).json({ error: 'Company not found' }); }
     if (!row?.job_title) {
       clearTimeout(timeout); return res.status(400).json({ error: 'No tracked role found. Track a role from Job Scraper first.' });
     }
 
-    let resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
+    let resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) {
       // Check if resume file exists on disk and parse it on-the-fly
       if (row?.resume_path) {
         try {
           const text = await extractPdfText(row.resume_path);
           if (text && text.length > 50) {
-            const upsertSql = "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
-            await run(upsertSql, ['user_resume_text', text]);
-            await run(upsertSql, ['user_resume_name', row.resume_original_name || 'resume.pdf']);
-            await run(upsertSql, ['user_resume_date', new Date().toISOString()]);
+            const upsertSql = "INSERT INTO meta (user_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
+            await run(upsertSql, [req.user.id, 'user_resume_text', text]);
+            await run(upsertSql, [req.user.id, 'user_resume_name', row.resume_original_name || 'resume.pdf']);
+            await run(upsertSql, [req.user.id, 'user_resume_date', new Date().toISOString()]);
             resumeText = text;
             console.log(`[score-fit] Parsed resume on-the-fly: ${text.length} chars`);
           } else {
@@ -1032,17 +1053,18 @@ router.post('/company/:id/score-fit', async (req, res) => {
     const evaluation = await evaluateJob({ jobDescription, resumeText, jobUrl: row.job_url || null });
     const fitScore = Math.max(1, Math.min(5, Number((evaluation.overallScore / 20).toFixed(1))));
 
-    await run("UPDATE company_applications SET fit_score = $1, fit_assessment = $2, updated_at = NOW() WHERE company_id = $3",
-      [fitScore, JSON.stringify(evaluation), req.params.id]);
+    await run("UPDATE company_applications SET fit_score = $1, fit_assessment = $2, updated_at = NOW() WHERE company_id = $3 AND user_id = $4",
+      [fitScore, JSON.stringify(evaluation), req.params.id, req.user.id]);
 
     // Save to evaluations table so PDF generation can reference it
     let evalId = null;
     try {
       const r = await run(`
-        INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, 'score_fit')
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'score_fit')
         RETURNING id
       `, [
+        req.user.id,
         row.job_url || null,
         row.job_title,
         company.name,
@@ -1071,7 +1093,7 @@ router.post('/company/:id/score-fit', async (req, res) => {
       console.error('[careerOps] report/tracker save failed:', rErr.message);
     }
 
-    const updated = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const updated = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     clearTimeout(timeout);
     if (!res.headersSent) res.json({ fit_score: updated.fit_score, evaluation, reportFile, evalId });
   } catch (err) {
@@ -1106,7 +1128,7 @@ router.get('/tracker/raw', (req, res) => {
 // raw .md report the user was seeing before.
 router.get('/evaluations/:id/report.html', async (req, res) => {
   try {
-    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).send('<h1>Report not found</h1>');
     const e = row.report_json ? JSON.parse(row.report_json) : null;
     if (!e) return res.status(404).send('<h1>No evaluation data for this report</h1>');

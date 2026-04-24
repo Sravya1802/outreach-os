@@ -111,7 +111,8 @@ async function fetchCSRoles(ats, token) {
   return [];
 }
 
-export async function importStartupSheet(onProgress = null) {
+export async function importStartupSheet(userId, onProgress = null) {
+  if (!userId) throw new Error('importStartupSheet requires userId (caller must pass req.user.id)');
   const sheetUrl = process.env.STARTUP_SHEET_URL;
   if (!sheetUrl) throw new Error('STARTUP_SHEET_URL not set in .env');
 
@@ -157,8 +158,8 @@ export async function importStartupSheet(onProgress = null) {
   let withRoles = 0, noRoles = 0, errors = 0;
 
   const INSERT_SQL = `
-    INSERT INTO jobs (name, domain, url, category, subcategory, source, is_hiring)
-    VALUES ($1, $2, $3, 'Startups', $4, 'startup_sheet', $5)
+    INSERT INTO jobs (name, domain, url, category, subcategory, source, is_hiring, user_id)
+    VALUES ($1, $2, $3, 'Startups', $4, 'startup_sheet', $5, $6)
     ON CONFLICT (name) DO NOTHING
   `;
 
@@ -181,7 +182,7 @@ export async function importStartupSheet(onProgress = null) {
         const careersUrl = csRoles[0]?.url || company.careersUrl || '';
         const subcategory = company.category || 'Series A';
 
-        await run(INSERT_SQL, [company.name, company.domain, careersUrl, subcategory, isHiring]);
+        await run(INSERT_SQL, [company.name, company.domain, careersUrl, subcategory, isHiring, userId]);
 
         if (isHiring) withRoles++;
         else noRoles++;

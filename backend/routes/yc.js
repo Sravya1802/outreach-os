@@ -97,8 +97,8 @@ router.post('/import', async (req, res) => {
       for (const c of toImport) {
         const r = ycToJobRow(c);
         const result = await client.query(`
-          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, description, website, team_size)
-          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9, $10, $11)
+          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, description, website, team_size, user_id)
+          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (name) DO NOTHING
           RETURNING id, name
         `, [
@@ -108,6 +108,7 @@ router.post('/import', async (req, res) => {
           c.one_liner || c.long_description?.slice(0, 300) || null,
           c.website || null,
           c.team_size || null,
+          req.user.id,
         ]);
         if (result.rowCount > 0) {
           imported++;
@@ -115,7 +116,10 @@ router.post('/import', async (req, res) => {
           console.log(`[yc] Inserted ${r.name} with id ${result.rows[0].id}`);
         } else {
           // Already exists — get its id
-          const existing = await client.query("SELECT id, name FROM jobs WHERE name = $1", [r.name]);
+          const existing = await client.query(
+            "SELECT id, name FROM jobs WHERE name = $1 AND user_id = $2",
+            [r.name, req.user.id]
+          );
           if (existing.rows[0]) {
             importedRows.push(existing.rows[0]);
             console.log(`[yc] ${r.name} already exists with id ${existing.rows[0].id}`);
@@ -126,8 +130,10 @@ router.post('/import', async (req, res) => {
     });
 
     try {
-      await run("INSERT INTO activity_log (action, details) VALUES ('yc_import', $1)",
-        [`Imported ${imported} YC companies`]);
+      await run(
+        "INSERT INTO activity_log (action, details, user_id) VALUES ('yc_import', $1, $2)",
+        [`Imported ${imported} YC companies`, req.user.id]
+      );
     } catch (_) {}
 
     const first = importedRows[0] || null;
@@ -150,17 +156,19 @@ router.post('/import-all', async (req, res) => {
       for (const c of toImport) {
         const r = ycToJobRow(c);
         const result = await client.query(`
-          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch)
-          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8)
+          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, user_id)
+          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9)
           ON CONFLICT (name) DO NOTHING
-        `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null]);
+        `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null, req.user.id]);
         if (result.rowCount > 0) imported++; else skipped++;
       }
     });
 
     try {
-      await run("INSERT INTO activity_log (action, details) VALUES ('yc_import_all', $1)",
-        [`Bulk imported ${imported} YC companies (${skipped} skipped)`]);
+      await run(
+        "INSERT INTO activity_log (action, details, user_id) VALUES ('yc_import_all', $1, $2)",
+        [`Bulk imported ${imported} YC companies (${skipped} skipped)`, req.user.id]
+      );
     } catch (_) {}
 
     res.json({ imported, skipped, total: toImport.length });
@@ -181,17 +189,19 @@ router.post('/scrape-waas', async (req, res) => {
       for (const c of usFilter.slice(0, 500)) {
         const r = ycToJobRow(c);
         const result = await client.query(`
-          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch)
-          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8)
+          INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, user_id)
+          VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9)
           ON CONFLICT (name) DO NOTHING
-        `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null]);
+        `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null, req.user.id]);
         if (result.rowCount > 0) imported++; else skipped++;
       }
     });
 
     try {
-      await run("INSERT INTO activity_log (action, details) VALUES ('yc_waas_scrape', $1)",
-        [`Scraped WaaS: ${imported} new YC companies imported`]);
+      await run(
+        "INSERT INTO activity_log (action, details, user_id) VALUES ('yc_waas_scrape', $1, $2)",
+        [`Scraped WaaS: ${imported} new YC companies imported`, req.user.id]
+      );
     } catch (_) {}
 
     res.json({ imported, skipped, total: usFilter.length, source: 'yc-oss-api' });

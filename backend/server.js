@@ -107,7 +107,7 @@ app.post('/api/jobs/refresh-all', async (req, res) => {
 
   try {
     emit('progress', { message: 'Starting full refresh...' });
-    await runDailyRefresh(msg => emit('progress', { message: msg }));
+    await runDailyRefresh(req.user.id, msg => emit('progress', { message: msg }));
     emit('complete', { message: 'Refresh complete!' });
     if (!closed) res.end();
   } catch (err) {
@@ -119,7 +119,10 @@ app.post('/api/jobs/refresh-all', async (req, res) => {
 // ── Last refresh time endpoint ────────────────────────────────────────────────
 app.get('/api/jobs/last-refresh', async (req, res) => {
   try {
-    const row = await one("SELECT value FROM meta WHERE key = 'lastRefresh'");
+    const row = await one(
+      "SELECT value FROM meta WHERE key = 'lastRefresh' AND user_id = $1",
+      [req.user.id]
+    );
     res.json({ lastRefresh: row?.value || null });
   } catch (err) {
     res.json({ lastRefresh: null });
@@ -132,17 +135,20 @@ app.get('/api/stats', async (req, res) => {
     const [
       c1, c2, c3, c4, c5, c6, c7,
     ] = await Promise.all([
-      one("SELECT COUNT(*)::int AS n FROM jobs"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != ''"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != ''"),
-      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'sent'"),
-      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'replied'"),
-      one("SELECT COUNT(DISTINCT source)::int AS n FROM jobs WHERE source IS NOT NULL AND source != ''"),
-      one("SELECT COUNT(*)::int AS n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != ''"),
+      one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'sent' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'replied' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(DISTINCT source)::int AS n FROM jobs WHERE source IS NOT NULL AND source != '' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != '' AND user_id = $1", [req.user.id]),
     ]);
     let totalApplications = 0;
     try {
-      const r = await one("SELECT COUNT(*)::int AS n FROM company_applications WHERE status != 'interested'");
+      const r = await one(
+        "SELECT COUNT(*)::int AS n FROM company_applications WHERE status != 'interested' AND user_id = $1",
+        [req.user.id]
+      );
       totalApplications = r?.n || 0;
     } catch (_) {}
     const totalSent = c4?.n || 0;
@@ -166,6 +172,7 @@ app.get('/api/stats', async (req, res) => {
 // ── Job Dashboard aggregate metrics ───────────────────────────────────────────
 app.get('/api/dashboard/job-metrics', async (req, res) => {
   try {
+    const uid = req.user.id;
     const [
       totalCompaniesR, totalEvaluationsR, totalContactsR,
       contactsWithEmailR, contactsWithLinkedInR,
@@ -175,43 +182,44 @@ app.get('/api/dashboard/job-metrics', async (req, res) => {
       modeManualR, modeAutoR,
       gradeDistRows, topOutreachCompanies, recentEvals, recentApplied,
     ] = await Promise.all([
-      one("SELECT COUNT(*)::int AS n FROM jobs"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != ''"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != ''"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE generated_subject IS NOT NULL OR generated_dm IS NOT NULL"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status IN ('sent','dm_sent','email_sent')"),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status = 'replied'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status IS NULL OR apply_status = 'not_started'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status IN ('opened','queued','submitted')"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'submitted'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'responded'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'interview'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'offer'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'rejected'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'manual' AND apply_status IS NOT NULL AND apply_status != 'not_started'"),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'auto'   AND apply_status IS NOT NULL AND apply_status != 'not_started'"),
-      all("SELECT grade, COUNT(*)::int AS n FROM evaluations WHERE grade IS NOT NULL GROUP BY grade"),
+      one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE (generated_subject IS NOT NULL OR generated_dm IS NOT NULL) AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status IN ('sent','dm_sent','email_sent') AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status = 'replied' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE (apply_status IS NULL OR apply_status = 'not_started') AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status IN ('opened','queued','submitted') AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'submitted' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'responded' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'interview' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'offer' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'rejected' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'manual' AND apply_status IS NOT NULL AND apply_status != 'not_started' AND user_id = $1", [uid]),
+      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'auto'   AND apply_status IS NOT NULL AND apply_status != 'not_started' AND user_id = $1", [uid]),
+      all("SELECT grade, COUNT(*)::int AS n FROM evaluations WHERE grade IS NOT NULL AND user_id = $1 GROUP BY grade", [uid]),
       all(`
         SELECT j.name, j.category,
                COUNT(jc.id)::int AS contact_count,
                SUM(CASE WHEN jc.email IS NOT NULL AND jc.email != '' THEN 1 ELSE 0 END)::int AS email_count,
                SUM(CASE WHEN jc.status IN ('sent','dm_sent','email_sent') THEN 1 ELSE 0 END)::int AS sent_count,
                SUM(CASE WHEN jc.status = 'replied' THEN 1 ELSE 0 END)::int AS replied_count
-        FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id
+        FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id AND jc.user_id = $1
+        WHERE j.user_id = $1
         GROUP BY j.id, j.name, j.category
         HAVING COUNT(jc.id) > 0
         ORDER BY contact_count DESC LIMIT 10
-      `),
+      `, [uid]),
       all(`
         SELECT 'evaluation' AS kind, id, company_name, job_title, grade, created_at
-        FROM evaluations ORDER BY created_at DESC LIMIT 10
-      `),
+        FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10
+      `, [uid]),
       all(`
         SELECT 'applied' AS kind, id, company_name, job_title, apply_status, applied_at
-        FROM evaluations WHERE applied_at IS NOT NULL ORDER BY applied_at DESC LIMIT 10
-      `),
+        FROM evaluations WHERE applied_at IS NOT NULL AND user_id = $1 ORDER BY applied_at DESC LIMIT 10
+      `, [uid]),
     ]);
 
     const appFunnel = {
@@ -267,7 +275,10 @@ app.get('/api/dashboard/job-metrics', async (req, res) => {
 // ── Activity feed endpoint ────────────────────────────────────────────────────
 app.get('/api/activity', async (req, res) => {
   try {
-    const rows = await all('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10');
+    const rows = await all(
+      'SELECT * FROM activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [req.user.id]
+    );
     res.json({ activity: rows });
   } catch (err) {
     res.json({ activity: [] });
@@ -280,7 +291,9 @@ app.use((err, req, res, next) => {
 });
 
 // ── Daily refresh logic ───────────────────────────────────────────────────────
-async function runDailyRefresh(onProgress = null) {
+// userId scopes the per-user state reads/writes (subcategory list, meta upsert,
+// startup-sheet import). Cron passes null for now — see TODO below.
+async function runDailyRefresh(userId, onProgress = null) {
   function log(msg) {
     console.log('[DailyRefresh]', msg);
     if (onProgress) onProgress(msg);
@@ -290,14 +303,27 @@ async function runDailyRefresh(onProgress = null) {
 
   // 1. Re-scrape previously-scraped subcategories
   try {
-    const subs = await all(`
-      SELECT category, subcategory, COUNT(*)::int AS count
-      FROM jobs
-      WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL
-      GROUP BY category, subcategory
-      HAVING COUNT(*) > 2
-      LIMIT 20
-    `);
+    // TODO(auth): source of userId — cron has none; when userId is null we
+    // fall back to a union across all users' jobs so the scraper still picks
+    // up representative subcategories. Once a multi-tenant scheduler exists
+    // this should iterate per user instead.
+    const subs = userId
+      ? await all(`
+          SELECT category, subcategory, COUNT(*)::int AS count
+          FROM jobs
+          WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL AND user_id = $1
+          GROUP BY category, subcategory
+          HAVING COUNT(*) > 2
+          LIMIT 20
+        `, [userId])
+      : await all(`
+          SELECT category, subcategory, COUNT(*)::int AS count
+          FROM jobs
+          WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL
+          GROUP BY category, subcategory
+          HAVING COUNT(*) > 2
+          LIMIT 20
+        `);
 
     log(`Refreshing ${subs.length} subcategories...`);
     for (const sub of subs) {
@@ -314,13 +340,17 @@ async function runDailyRefresh(onProgress = null) {
   }
 
   // 2. Re-import startup sheet
-  if (process.env.STARTUP_SHEET_URL) {
+  if (process.env.STARTUP_SHEET_URL && userId) {
     try {
       log('Refreshing startup sheet...');
-      await importStartupSheet(msg => log(msg));
+      await importStartupSheet(userId, msg => log(msg));
     } catch (err) {
       log('Startup sheet refresh failed: ' + err.message);
     }
+  } else if (process.env.STARTUP_SHEET_URL) {
+    // TODO(auth): source of userId — cron-triggered refresh skips the startup
+    // sheet import until we have a way to attribute new rows to a user.
+    log('Skipping startup sheet refresh: no userId in cron context');
   }
 
   // 3. Reclassify unclassified companies
@@ -339,20 +369,27 @@ async function runDailyRefresh(onProgress = null) {
     log('Credit check failed: ' + err.message);
   }
 
-  // 5. Record last refresh time (upsert)
-  await run(
-    "INSERT INTO meta (key, value) VALUES ('lastRefresh', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-    [new Date().toISOString()],
-  );
+  // 5. Record last refresh time (upsert) — user-scoped meta key
+  if (userId) {
+    await run(
+      "INSERT INTO meta (key, value, user_id) VALUES ('lastRefresh', $1, $2) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
+      [new Date().toISOString(), userId],
+    );
+  }
   log('Daily refresh complete — ' + new Date().toISOString());
 }
 
 // ── Cron: run every day at 6 AM UTC ──────────────────────────────────────────
+// TODO(auth): source of userId — the cron has no request context. For now we
+// call runDailyRefresh(null) which skips per-user writes; a multi-tenant
+// scheduler should iterate over active users and invoke this once per user.
 cron.schedule('0 6 * * *', () => {
-  runDailyRefresh().catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
+  runDailyRefresh(null).catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
 });
 
 // ── DB wipe on start (one-shot, auto-disables itself) ────────────────────────
+// NOTE: wipe is a dev-only bootstrap; it intentionally clears all rows across
+// all users and is gated by WIPE_DB_ON_START=true.
 async function maybeWipeDb() {
   if (process.env.WIPE_DB_ON_START !== 'true') return;
   try {

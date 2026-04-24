@@ -13,16 +13,19 @@ import { fetchJobFromUrl } from '../services/jobEvaluator.js';
 const router = Router();
 
 // ── Automation log helpers ────────────────────────────────────────────────────
-async function logEntry(automationId, message) {
+async function logEntry(automationId, message, userId) {
   const ts = new Date().toTimeString().slice(0, 8);
   try {
-    const cur = (await one("SELECT value FROM meta WHERE key = $1", [`log_${automationId}`]))?.value;
+    const cur = (await one(
+      "SELECT value FROM meta WHERE key = $1 AND user_id = $2",
+      [`log_${automationId}`, userId]
+    ))?.value;
     const prev = cur ? JSON.parse(cur) : [];
     prev.unshift({ ts: new Date().toISOString(), msg: message });
     if (prev.length > 200) prev.length = 200;
     await run(
-      "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-      [`log_${automationId}`, JSON.stringify(prev)]
+      "INSERT INTO meta (key, value, user_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
+      [`log_${automationId}`, JSON.stringify(prev), userId]
     );
   } catch (_) {}
   console.log(`[auto:${automationId}]`, message);
@@ -31,7 +34,10 @@ async function logEntry(automationId, message) {
 // ── GET /api/automations/logs/:id ─────────────────────────────────────────────
 router.get('/logs/:id', async (req, res) => {
   try {
-    const row = await one("SELECT value FROM meta WHERE key = $1", [`log_${req.params.id}`]);
+    const row = await one(
+      "SELECT value FROM meta WHERE key = $1 AND user_id = $2",
+      [`log_${req.params.id}`, req.user.id]
+    );
     res.json(row?.value ? JSON.parse(row.value) : []);
   } catch (err) {
     res.json([]);
@@ -41,7 +47,10 @@ router.get('/logs/:id', async (req, res) => {
 // ── GET /api/automations/scheduled ───────────────────────────────────────────
 router.get('/scheduled', async (req, res) => {
   try {
-    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    const row = await one(
+      "SELECT value FROM meta WHERE key = 'scheduled_automations' AND user_id = $1",
+      [req.user.id]
+    );
     res.json(row?.value ? JSON.parse(row.value) : []);
   } catch (err) { res.json([]); }
 });
@@ -50,15 +59,18 @@ router.get('/scheduled', async (req, res) => {
 router.post('/scheduled', async (req, res) => {
   try {
     const { automationId, label, cronTime, params } = req.body;
-    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    const row = await one(
+      "SELECT value FROM meta WHERE key = 'scheduled_automations' AND user_id = $1",
+      [req.user.id]
+    );
     const list = row?.value ? JSON.parse(row.value) : [];
     const existing = list.findIndex(s => s.automationId === automationId);
     const entry = { automationId, label, cronTime, params, createdAt: new Date().toISOString(), lastRun: null, lastResult: null };
     if (existing >= 0) list[existing] = entry;
     else list.push(entry);
     await run(
-      "INSERT INTO meta (key, value) VALUES ('scheduled_automations', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-      [JSON.stringify(list)]
+      "INSERT INTO meta (key, value, user_id) VALUES ('scheduled_automations', $1, $2) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
+      [JSON.stringify(list), req.user.id]
     );
     res.json({ ok: true, list });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -67,12 +79,15 @@ router.post('/scheduled', async (req, res) => {
 // ── DELETE /api/automations/scheduled/:id ────────────────────────────────────
 router.delete('/scheduled/:id', async (req, res) => {
   try {
-    const row = await one("SELECT value FROM meta WHERE key = 'scheduled_automations'");
+    const row = await one(
+      "SELECT value FROM meta WHERE key = 'scheduled_automations' AND user_id = $1",
+      [req.user.id]
+    );
     const list = row?.value ? JSON.parse(row.value) : [];
     const filtered = list.filter(s => s.automationId !== req.params.id);
     await run(
-      "INSERT INTO meta (key, value) VALUES ('scheduled_automations', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-      [JSON.stringify(filtered)]
+      "INSERT INTO meta (key, value, user_id) VALUES ('scheduled_automations', $1, $2) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
+      [JSON.stringify(filtered), req.user.id]
     );
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -97,13 +112,13 @@ router.post('/linkedin-finder', async (req, res) => {
 
   const id = 'linkedin-finder';
   try {
-    await logEntry(id, `Starting LinkedIn Job Finder — "${jobTitle}" in ${location}`);
+    await logEntry(id, `Starting LinkedIn Job Finder — "${jobTitle}" in ${location}`, req.user.id);
     emit('log', { msg: `Searching LinkedIn for "${jobTitle}" in ${location}…` });
 
     const query = `${jobTitle} ${jobType}`.trim();
     const { results } = await scrapeAllSources(query, 'Tech & Software');
 
-    await logEntry(id, `Found ${results.length} results for "${query}"`);
+    await logEntry(id, `Found ${results.length} results for "${query}"`, req.user.id);
     emit('log', { msg: `Found ${results.length} results` });
 
     const jobs = results.slice(0, 50).map(r => ({
@@ -115,12 +130,12 @@ router.post('/linkedin-finder', async (req, res) => {
       source: 'linkedin_finder',
     }));
 
-    await logEntry(id, `Returning ${jobs.length} jobs to UI`);
+    await logEntry(id, `Returning ${jobs.length} jobs to UI`, req.user.id);
     emit('results', { jobs, total: jobs.length });
     emit('done', { msg: `Done — ${jobs.length} jobs found` });
     if (!closed) res.end();
   } catch (err) {
-    await logEntry(id, `Error: ${err.message}`);
+    await logEntry(id, `Error: ${err.message}`, req.user.id);
     emit('error', { error: err.message });
     if (!closed) res.end();
   }
@@ -145,7 +160,7 @@ router.post('/ai-search', async (req, res) => {
   const id = 'ai-search';
   try {
     emit('log', { msg: 'Generating optimized search queries from your description…' });
-    await logEntry(id, `AI search started: "${description}"`);
+    await logEntry(id, `AI search started: "${description}"`, req.user.id);
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
@@ -167,14 +182,14 @@ router.post('/ai-search', async (req, res) => {
     }
 
     emit('log', { msg: `Generated ${queries.length} search queries — running across all sources…` });
-    await logEntry(id, `Generated queries: ${queries.join(' | ')}`);
+    await logEntry(id, `Generated queries: ${queries.join(' | ')}`, req.user.id);
 
     const allJobs = [];
     for (const q of queries.slice(0, 3)) {
       if (closed) break;
       try {
         emit('log', { msg: `Searching: "${q}"` });
-        await logEntry(id, `Searching: "${q}"`);
+        await logEntry(id, `Searching: "${q}"`, req.user.id);
         const { results } = await scrapeAllSources(q, 'Tech & Software');
         const jobs = results.slice(0, 20).map(r => ({
           title: r.role || q,
@@ -199,12 +214,12 @@ router.post('/ai-search', async (req, res) => {
       return true;
     });
 
-    await logEntry(id, `AI search complete — ${unique.length} unique results`);
+    await logEntry(id, `AI search complete — ${unique.length} unique results`, req.user.id);
     emit('results', { jobs: unique, total: unique.length });
     emit('done', { msg: `Done — ${unique.length} unique jobs found` });
     if (!closed) res.end();
   } catch (err) {
-    await logEntry(id, `Error: ${err.message}`);
+    await logEntry(id, `Error: ${err.message}`, req.user.id);
     emit('error', { error: err.message });
     if (!closed) res.end();
   }
@@ -227,7 +242,10 @@ router.post('/auto-apply', async (req, res) => {
   }
 
   const id = 'auto-apply';
-  const resumeRow = await one("SELECT value FROM meta WHERE key = 'user_resume_text'");
+  const resumeRow = await one(
+    "SELECT value FROM meta WHERE key = 'user_resume_text' AND user_id = $1",
+    [req.user.id]
+  );
   const resumeText = resumeRow?.value;
   if (!resumeText) {
     emit('error', { error: 'No resume uploaded. Upload your resume in Career Ops first.' });
@@ -235,7 +253,7 @@ router.post('/auto-apply', async (req, res) => {
     return;
   }
 
-  await logEntry(id, `Auto-apply started — ${jobs.length} jobs — mode: ${mode}`);
+  await logEntry(id, `Auto-apply started — ${jobs.length} jobs — mode: ${mode}`, req.user.id);
   emit('log', { msg: `Starting ${mode === 'auto' ? 'Auto' : 'Review'} Mode for ${jobs.length} jobs…` });
 
   const results = [];
@@ -244,7 +262,7 @@ router.post('/auto-apply', async (req, res) => {
     if (closed) break;
     const applyUrl = job.applyUrl || '';
 
-    await logEntry(id, `Processing: ${job.title} at ${job.company}`);
+    await logEntry(id, `Processing: ${job.title} at ${job.company}`, req.user.id);
     emit('log', { msg: `Checking: ${job.title} at ${job.company}` });
 
     let applyType = 'unknown';
@@ -259,7 +277,7 @@ router.post('/auto-apply', async (req, res) => {
     }
 
     emit('log', { msg: `  → Detected: ${applyType}` });
-    await logEntry(id, `Apply type: ${applyType} for ${applyUrl}`);
+    await logEntry(id, `Apply type: ${applyType} for ${applyUrl}`, req.user.id);
 
     if (mode === 'review') {
       emit('review', {
@@ -285,17 +303,17 @@ router.post('/auto-apply', async (req, res) => {
           note = 'Unknown apply type — manual application required';
         }
 
-        await logEntry(id, `${job.company}: ${status} — ${note}`);
+        await logEntry(id, `${job.company}: ${status} — ${note}`, req.user.id);
         emit('log', { msg: `  → ${status}: ${note}` });
         results.push({ job, status, note, applyType });
 
         await run(`
-          INSERT INTO evaluations (job_url, job_title, company_name, grade, score, source)
-          VALUES ($1, $2, $3, 'N/A', 0, 'auto_apply')
-        `, [applyUrl, job.title, job.company]);
+          INSERT INTO evaluations (job_url, job_title, company_name, grade, score, source, user_id)
+          VALUES ($1, $2, $3, 'N/A', 0, 'auto_apply', $4)
+        `, [applyUrl, job.title, job.company, req.user.id]);
 
       } catch (err) {
-        await logEntry(id, `${job.company}: failed — ${err.message}`);
+        await logEntry(id, `${job.company}: failed — ${err.message}`, req.user.id);
         emit('log', { msg: `  → Failed: ${err.message}` });
         results.push({ job, status: 'failed', note: err.message, applyType });
       }
@@ -306,7 +324,7 @@ router.post('/auto-apply', async (req, res) => {
 
   emit('results', { results, total: results.length, mode });
   emit('done', { msg: `${mode === 'review' ? 'Review mode complete' : 'Auto-apply complete'} — ${results.length} jobs processed` });
-  await logEntry(id, `Done — ${results.length} processed`);
+  await logEntry(id, `Done — ${results.length} processed`, req.user.id);
   if (!closed) res.end();
 });
 

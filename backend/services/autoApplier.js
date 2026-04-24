@@ -14,6 +14,10 @@
  * Supported platforms today: greenhouse, lever, ashby (the 3 ATS that expose
  * structured, predictable forms). Workday/LinkedIn/custom are marked as
  * 'platform_unsupported' so the user can apply manually.
+ *
+ * TODO(auth): caller passes userId — every exported function takes userId as
+ * the first argument. `runQueueOnce` receives userId in its options bag and
+ * threads it to processOneEvaluation.
  */
 
 import path from 'path';
@@ -35,11 +39,14 @@ const STATUS = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-async function getProfile() {
-  return (await one('SELECT * FROM user_profile WHERE id = 1')) || {};
+async function getProfile(userId) {
+  return (await one(
+    'SELECT * FROM user_profile WHERE user_id = $1',
+    [userId]
+  )) || {};
 }
 
-async function setStatus(evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
+async function setStatus(userId, evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
   const parts = [];
   const args  = [];
   let idx = 1;
@@ -50,7 +57,11 @@ async function setStatus(evalId, status, { error = null, platform, resumeUsed, i
   if (status === STATUS.submitted) { parts.push('applied_at = NOW()'); }
   if (incrementAttempts) { parts.push('apply_attempts = COALESCE(apply_attempts, 0) + 1'); }
   args.push(evalId);
-  await run(`UPDATE evaluations SET ${parts.join(', ')} WHERE id = $${idx}`, args);
+  args.push(userId);
+  await run(
+    `UPDATE evaluations SET ${parts.join(', ')} WHERE id = $${idx} AND user_id = $${idx + 1}`,
+    args
+  );
 }
 
 // Safe wrapper around page.fill — ignores missing selectors, treats failures as skipped.
@@ -166,20 +177,24 @@ async function fillAshby(page, profile, resumePath) {
 
 // ── Main: apply to a single evaluation ───────────────────────────────────────
 
-export async function processOneEvaluation(evalId, { headless = true, dryRun = false } = {}) {
-  const row = await one('SELECT * FROM evaluations WHERE id = $1', [evalId]);
+export async function processOneEvaluation(userId, evalId, { headless = true, dryRun = false } = {}) {
+  if (!userId) return { ok: false, error: 'Missing userId — auto-apply requires an authenticated caller' };
+  const row = await one(
+    'SELECT * FROM evaluations WHERE id = $1 AND user_id = $2',
+    [evalId, userId]
+  );
   if (!row) return { ok: false, error: 'Evaluation not found' };
   if (!row.job_url) {
-    await setStatus(evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
     return { ok: false, error: 'No job URL to apply to' };
   }
 
   const platform = detectPlatform(row.job_url);
-  const profile  = await getProfile();
+  const profile  = await getProfile(userId);
 
   // Validate profile completeness before attempting auto-apply
   if (!profile.first_name || !profile.last_name || !profile.email || !profile.phone) {
-    await setStatus(evalId, STATUS.failed, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform, incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.failed, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform, incrementAttempts: true });
     return { ok: false, error: 'Profile incomplete' };
   }
 
@@ -195,13 +210,19 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     // No tailored PDF yet — generate one on the fly so auto-apply always submits
     // a role-personalized CV instead of a generic one.
     try {
-      const resumeRow = await one("SELECT value FROM meta WHERE key = 'user_resume_text'");
+      const resumeRow = await one(
+        "SELECT value FROM meta WHERE key = 'user_resume_text' AND user_id = $1",
+        [userId]
+      );
       const resumeText = resumeRow?.value;
       if (resumeText) {
         console.log(`[autoApply] generating tailored resume for eval ${evalId}…`);
         const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
         const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
-        await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2', [pdfPath, evalId]);
+        await run(
+          'UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3',
+          [pdfPath, evalId, userId]
+        );
         resume = { filename: path.basename(pdfPath), absPath: pdfPath, source: 'tailored-justnow' };
       }
     } catch (err) {
@@ -220,17 +241,17 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
   }
 
   if (!resume) {
-    await setStatus(evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
     return { ok: false, error: 'No resume found' };
   }
 
   const supported = ['greenhouse', 'lever', 'ashby'];
   if (!supported.includes(platform)) {
-    await setStatus(evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
     return { ok: false, platform, error: 'Platform not supported' };
   }
 
-  await setStatus(evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
+  await setStatus(userId, evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
 
   // Lazy import so Playwright isn't loaded for non-auto-apply requests
   const { chromium } = await import('playwright');
@@ -249,16 +270,16 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     await page.waitForTimeout(1500);
 
     if (await hasCaptcha(page)) {
-      await setStatus(evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
+      await setStatus(userId, evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Captcha present' };
     }
     if (await looksLikeLogin(page)) {
-      await setStatus(evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
+      await setStatus(userId, evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Login required' };
     }
 
     if (dryRun) {
-      await setStatus(evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
+      await setStatus(userId, evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
       return { ok: true, platform, dryRun: true };
     }
 
@@ -282,14 +303,14 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     );
 
     if (looksSubmitted) {
-      await setStatus(evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
+      await setStatus(userId, evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
       return { ok: true, platform, resume: resume.filename };
     }
     // Not obviously confirmed — mark as in_progress with note, so user can verify.
-    await setStatus(evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
+    await setStatus(userId, evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
     return { ok: false, platform, error: 'Submission unconfirmed' };
   } catch (err) {
-    await setStatus(evalId, STATUS.failed, { error: err.message, platform });
+    await setStatus(userId, evalId, STATUS.failed, { error: err.message, platform });
     return { ok: false, platform, error: err.message };
   } finally {
     if (browser) { try { await browser.close(); } catch (_) {} }
@@ -299,19 +320,24 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
 /**
  * Pull all queued evaluations and process them sequentially.
  * Returns a summary { processed, submitted, failed, skipped }.
+ *
+ * `userId` is required — caller (routes/careerOps.js) passes req.user.id via
+ * the options bag.
  */
-export async function runQueueOnce({ headless = true, dryRun = false, limit = 10 } = {}) {
+export async function runQueueOnce({ headless = true, dryRun = false, limit = 10, userId } = {}) {
+  if (!userId) throw new Error('runQueueOnce requires userId');
   const rows = await all(`
     SELECT id FROM evaluations
     WHERE apply_mode = 'auto'
       AND apply_status = 'queued'
+      AND user_id = $1
     ORDER BY created_at ASC
-    LIMIT $1
-  `, [limit]);
+    LIMIT $2
+  `, [userId, limit]);
 
   const summary = { processed: 0, submitted: 0, failed: 0, skipped: 0, results: [] };
   for (const { id } of rows) {
-    const r = await processOneEvaluation(id, { headless, dryRun });
+    const r = await processOneEvaluation(userId, id, { headless, dryRun });
     summary.processed++;
     if (r.ok) summary.submitted++;
     else if (r.error === 'Captcha present' || r.error === 'Login required' || r.error === 'Platform not supported') summary.skipped++;
