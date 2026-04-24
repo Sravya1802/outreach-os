@@ -225,6 +225,70 @@ router.post('/auto-apply/run', async (req, res) => {
   }
 });
 
+// ── Bulk queue: preview how many evaluations match a threshold ──────────────
+// Used by the slider in the Auto-Apply Setup UI to show a live count as the
+// user drags. Does NOT mutate anything.
+//
+// Query params:
+//   minGrade = 'A' | 'B' | 'C' | 'D' | 'F'   — inclusive lower bound
+//   minScore = 0..100                        — inclusive lower bound
+// Either or both may be specified. Rows already queued/applied are excluded.
+router.get('/bulk-queue/preview', async (req, res) => {
+  try {
+    const { minGrade, minScore } = req.query;
+    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore });
+    const rows = await all(
+      `SELECT id, job_title, company_name, grade, score FROM evaluations WHERE ${sql} ORDER BY score DESC NULLS LAST LIMIT 500`,
+      params
+    );
+    res.json({ count: rows.length, rows });
+  } catch (err) {
+    console.error('[bulk-queue/preview]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Bulk queue: flip matching evaluations to apply_mode='auto' + status='queued' ──
+// Same filter as /preview. Returns { queued: N } = number of rows actually updated.
+router.post('/bulk-queue', async (req, res) => {
+  try {
+    const { minGrade, minScore } = req.body || {};
+    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore });
+    const r = await run(
+      `UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE ${sql}`,
+      params
+    );
+    res.json({ queued: r.rowCount });
+  } catch (err) {
+    console.error('[bulk-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Build the shared WHERE fragment for bulk-queue preview + apply.
+// Excludes rows that are already queued or past "not_started" (don't clobber
+// in-flight applications).
+function buildBulkQueueFilter({ minGrade, minScore }) {
+  const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F'];
+  const parts = ["(apply_status IS NULL OR apply_status = 'not_started')"];
+  const params = [];
+  let i = 1;
+
+  if (minGrade && GRADE_ORDER.includes(String(minGrade).toUpperCase())) {
+    const allowed = GRADE_ORDER.slice(0, GRADE_ORDER.indexOf(String(minGrade).toUpperCase()) + 1);
+    parts.push(`grade = ANY($${i++})`);
+    params.push(allowed);
+  }
+  if (minScore !== undefined && minScore !== null && minScore !== '') {
+    const n = Number(minScore);
+    if (!Number.isNaN(n)) {
+      parts.push(`score >= $${i++}`);
+      params.push(n);
+    }
+  }
+  return { sql: parts.join(' AND '), params };
+}
+
 // ── Preview which resume a URL will use when auto-apply runs ─────────────────
 // Looks up an existing evaluation by job_url (if any) and reports whether a
 // tailored PDF already exists. Used by the Job Automation tab to show the user
