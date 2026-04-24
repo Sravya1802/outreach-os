@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { api } from '../api'
+import { api, apiUrl } from '../api'
 import { AutoApplySetup } from './CareerOps'
 
 const CD_CSS = `
@@ -276,8 +276,7 @@ function OutreachTab({ company }) {
     setFindProgress(['Searching for decision makers…'])
     setFindResultMsg(null)
     try {
-      const url = `/api/jobs/${company.id}/find-people-stream`
-      const res = await fetch(url)
+      const res = await fetch(api.jobs.findPeopleStream(company.id))
       const reader = res.body.getReader()
       const dec = new TextDecoder()
       let buf = ''
@@ -1130,12 +1129,40 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     api.career.resume().then(d => setHasGlobalResume(!!d?.hasResume)).catch(() => {})
   }, [])
 
+  // Score-fit analysis — must be declared BEFORE the auto-trigger useEffect
+  // below so that effect doesn't reference it in the temporal dead zone.
+  // Wrapped in try/finally so that an early-return (parse error, API error)
+  // never leaves `analyzing` stuck at true, which previously required a full
+  // page refresh to recover.
+  const runAnalysis = useCallback(async () => {
+    if (!app?.job_title) return
+    setAnalyzing(true)
+    setEvalErr(null)
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 95000)
+      const res  = await fetch(apiUrl(`/career/company/${company.id}/score-fit`), { method:'POST', signal: controller.signal })
+      clearTimeout(timer)
+      const text = await res.text()
+      let data
+      try { data = JSON.parse(text) } catch { setEvalErr(`Server error: ${text.slice(0, 200)}`); return }
+      if (data.error) { setEvalErr(data.error); return }
+      if (data.fit_score != null) setApp(prev => ({ ...prev, fit_score: data.fit_score }))
+      if (data.evalId)            setEvalId(data.evalId)
+      if (data.evaluation)        { setEval(data.evaluation); setRightPanel('eval') }
+    } catch (err) {
+      setEvalErr(err.name === 'AbortError' ? 'Analysis timed out. Gemini may be rate-limited — try again in a minute.' : err.message)
+    } finally {
+      setAnalyzing(false)
+    }
+  }, [app?.job_title, company.id])
+
   useEffect(() => {
     if (autoAnalyze && app?.job_title && (app?.resume_original_name || hasGlobalResume)) {
       onAnalyzeDone?.()
       runAnalysis()
     }
-  }, [autoAnalyze, app, hasGlobalResume])
+  }, [autoAnalyze, app, hasGlobalResume, runAnalysis, onAnalyzeDone])
 
   async function save() {
     if (!app) return
@@ -1155,7 +1182,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     try {
       const fd = new FormData()
       fd.append('resume', file)
-      const res = await fetch(`/api/companies/${company.id}/career-ops/resume`, { method:'POST', body: fd })
+      const res = await fetch(apiUrl(`/companies/${company.id}/career-ops/resume`), { method:'POST', body: fd })
       const data = await res.json()
       if (data.resume && data.application) {
         setApp(data.application)
@@ -1172,33 +1199,11 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   async function deleteResume() {
     setResumeDel(true)
     try {
-      await fetch(`/api/companies/${company.id}/career-ops/resume`, { method:'DELETE' })
+      await fetch(apiUrl(`/companies/${company.id}/career-ops/resume`), { method:'DELETE' })
       setApp(prev => ({ ...prev, resume_path:null, resume_original_name:null, resume_size:null }))
       setEval(null)
     } catch (_) {}
     setResumeDel(false)
-  }
-
-  async function runAnalysis() {
-    if (!app?.job_title) return
-    setAnalyzing(true)
-    setEvalErr(null)
-    try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 95000)
-      const res  = await fetch(`/api/career/company/${company.id}/score-fit`, { method:'POST', signal: controller.signal })
-      clearTimeout(timer)
-      const text = await res.text()
-      let data
-      try { data = JSON.parse(text) } catch (_) { setEvalErr(`Server error: ${text.slice(0, 200)}`); return }
-      if (data.error) { setEvalErr(data.error); return }
-      if (data.fit_score != null) setApp(prev => ({ ...prev, fit_score: data.fit_score }))
-      if (data.evalId)            setEvalId(data.evalId)
-      if (data.evaluation)        { setEval(data.evaluation); setRightPanel('eval') }
-    } catch (err) {
-      setEvalErr(err.name === 'AbortError' ? 'Analysis timed out. Gemini may be rate-limited — try again in a minute.' : err.message)
-    }
-    setAnalyzing(false)
   }
 
   async function generatePDF() {
@@ -1208,7 +1213,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     try {
       const data = await api.career.tailoredResume(evalId)
       if (data.error) { setPdfError(data.error); return }
-      window.open(`/api/career/download/${evalId}`, '_blank')
+      window.open(api.career.downloadUrl(evalId), '_blank')
     } catch (err) {
       setPdfError(err.message)
     }
