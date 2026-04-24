@@ -1,5 +1,10 @@
 # OutreachOS - Final Summary & Deployment Status
 
+> ⚠️ **Historical snapshot — pre-Phase-4.** This summary describes the
+> Vercel-serverless + SQLite era (retired 2026-04-24). For current
+> state, see [README.md](README.md) and [PLAN.txt](PLAN.txt). Preserved
+> for context only.
+
 ## ✅ What Was Completed
 
 ### Phase 1: Code Quality (127 → 53 ESLint errors -58%)

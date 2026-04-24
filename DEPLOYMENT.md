@@ -1,6 +1,14 @@
 # OutreachOS Deployment Guide
 
-**Architecture:** React Frontend (Vercel) + Vercel Serverless Functions + Supabase PostgreSQL
+> ⚠️ **DEPRECATED — pre-Phase-4 document.** This guide describes a
+> Vercel-Serverless + Railway + SQLite architecture that is no longer in
+> use. As of 2026-04-24 the backend runs on an Oracle Cloud Always Free
+> VM against Supabase Postgres, and the Vercel `api/` directory has been
+> retired. See [PLAN.txt](PLAN.txt) and the "Architecture" section of
+> [README.md](README.md) for the current setup. Preserved for historical
+> context only — **do not follow these steps on a fresh deploy.**
+
+**Architecture (historical):** React Frontend (Vercel) + Vercel Serverless Functions + Supabase PostgreSQL
 
 ---
 

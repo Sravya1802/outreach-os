@@ -1,5 +1,11 @@
 # OutreachOS Quick Start
 
+> ⚠️ **DEPRECATED — pre-Phase-4 document.** This walkthrough points at
+> Vercel Serverless + SQLite, which was retired in Phase 6. Use the
+> "Local Development" section of [README.md](README.md) instead — it
+> reflects the current `npm run dev` → backend+frontend concurrent setup
+> against Supabase Postgres. Preserved for historical context only.
+
 Get your job search automation platform running in **20 minutes**.
 
 ## 🚀 The Fast Path

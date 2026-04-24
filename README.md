@@ -10,7 +10,7 @@
 - **Smart categorization** — 23 industry categories auto-applied
 - **Contact enrichment** — Apollo.io + Hunter.io email finding
 
-### 📋 Application Pipeline  
+### 📋 Application Pipeline
 - **Kanban board** — Visualize progress (evaluated → applied → offered)
 - **Auto-apply** — Playwright form-filling for Greenhouse, Lever, Ashby
 - **Resume tailoring** — AI keyword injection + PDF generation
@@ -25,90 +25,122 @@
 
 ---
 
-## 🚀 Quick Start
+## 🏗️ Architecture
+
+Production runs across three free-tier services:
+
+```
+┌──────────────────────────┐   HTTPS    ┌───────────────────────────┐
+│ Vercel (frontend)        │ ─────────▶ │ Oracle Cloud Always Free  │
+│ outreach-jt.vercel.app   │            │ VM, Ubuntu 22.04 ARM      │
+│ React 19 + Vite SPA      │            │ Express + pm2 + nginx     │
+└──────────────────────────┘            │ Playwright + Let's Encrypt│
+                                         └─────────────┬─────────────┘
+                                                       │ pg pool
+                                                       ▼
+                                         ┌───────────────────────────┐
+                                         │ Supabase Free             │
+                                         │ Postgres 17 + Storage     │
+                                         │ + Auth (shared workspace) │
+                                         └───────────────────────────┘
+```
+
+- **Frontend**: React 19 + Vite + Tailwind. Hosted on Vercel (static). Uses `VITE_API_URL` to point at the backend.
+- **Backend**: Express.js + node-postgres. Hosted on an Oracle Cloud Always Free ARM VM (`outreach-jt.duckdns.org`). Playwright for auto-apply. Puppeteer for PDF generation.
+- **Database**: Supabase Postgres (reached via the IPv4 session pooler — Oracle Free VMs don't have IPv6).
+- **Auth**: Supabase Auth (frontend `supabase.auth`); backend is currently unauthenticated at the HTTP layer — if you're hardening this for multi-user, see the "Known gaps" section below.
+
+**Cost**: $0/month, permanent. See [PLAN.txt](PLAN.txt) for the full migration record.
+
+---
+
+## 🚀 Local Development
 
 ```bash
-# Clone & setup
-git clone https://github.com/yourusername/outreacha-os.git
-cd outreacha-os
-bash setup.sh
+# Clone + install both workspaces
+git clone https://github.com/Sravya1802/outreach-os.git
+cd outreach-os
+npm run install:all
 
-# Update .env with API keys
-cp .env.example .env
-# Edit .env: Add GEMINI_API_KEY (free tier available)
+# Configure env — root .env is used by the backend
+cp .env.example .env  # if you have an example; otherwise author it from scratch
+# Required: OPENAI_API_KEY (or GEMINI_API_KEY) + DATABASE_URL (Supabase session pooler URI)
 
-# Start development
-cd frontend && npm run dev  # Terminal 1
-cd backend && npm run dev   # Terminal 2
+# Run backend + frontend concurrently
+npm run dev
+# → backend on :3001 (reads DATABASE_URL)
+# → frontend on :5173 (proxies /api to backend when VITE_API_URL is unset)
 
-# Open http://localhost:5173
+# Or run individually
+npm run dev:api       # backend only
+npm run dev:frontend  # frontend only
+```
+
+### Required env vars
+
+**Backend** (`/.env` or `backend/.env`):
+```
+DATABASE_URL=postgresql://postgres.<ref>:<password>@aws-1-<region>.pooler.supabase.com:5432/postgres
+AI_PROVIDER=openai
+OPENAI_API_KEY=...
+# Optional
+FRONTEND_ORIGIN=https://outreach-jt.vercel.app
+CORS_ORIGINS=https://preview-a.vercel.app,https://preview-b.vercel.app  # comma-separated
+APIFY_API_TOKEN=... SERPER_API_KEY=... APOLLO_API_KEY=... HUNTER_API_KEY=...
+LINKEDIN_SESSION_COOKIE=... PROSPEO_API_KEY=...
+```
+
+**Frontend** (Vercel project settings → Environment Variables, OR `frontend/.env.local`):
+```
+VITE_SUPABASE_URL=https://<ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=...
+VITE_API_URL=https://outreach-jt.duckdns.org  # production only — leave unset for local dev
 ```
 
 ---
 
-## 🔧 Environment Setup
+## 🧪 Tests
 
-**Required:**
-```
-PORT=3001
-AI_PROVIDER=gemini
-GEMINI_API_KEY=your_key  # Free tier available
-```
-
-**Optional (recommended):**
-```
-ANTHROPIC_API_KEY=your_key
-APOLLO_API_KEY=your_key
-APIFY_API_TOKEN=your_token
-HUNTER_API_KEY=your_key
-LINKEDIN_SESSION_COOKIE=li_at
-```
-
----
-
-## 🏗️ Tech Stack
-
-- **Frontend**: React 19 + Vite + Tailwind
-- **Backend**: Express.js + SQLite
-- **AI**: Gemini, Claude, GPT-4o
-- **Automation**: Playwright (form filling), Puppeteer (PDF generation)
-- **Integrations**: Apify, Apollo.io, Hunter.io
-
----
-
-## 📊 Recent Improvements
-
-- ✅ Fixed 58% of ESLint errors (127 → 53)
-- ✅ Removed 11 dead components
-- ✅ Extracted shared utilities
-- ✅ Added 8 database performance indexes
-- ✅ Integrated Pino logging
-- ✅ Input validation middleware ready
-- ✅ Auto-apply fully functional
-
-See **IMPROVEMENTS.md** for details.
-
----
-
-## 🚢 Deployment
-
-### Frontend (Vercel - Free)
 ```bash
-# 1. Push to GitHub
-# 2. Connect at vercel.com/new
-# 3. Select frontend directory
-# 4. Deploy (auto on every push)
+npm test  # runs node --test against tests/ (currently: tests/api-client.test.mjs)
 ```
 
-### Backend (Railway ~$7/month)
-See **DEPLOYMENT.md** for Railway, Heroku, Fly.io setup.
+Frontend build check:
+```bash
+npm run build --prefix frontend
+```
+
+Lint:
+```bash
+npm run lint --prefix frontend
+```
+
+---
+
+## 📚 Docs
+
+| File | Scope |
+|---|---|
+| **[PLAN.txt](PLAN.txt)** | Canonical migration plan (Vercel → Oracle + Supabase). Read this first for "how did we get here". |
+| [PLAN-B.txt](PLAN-B.txt) | Fallback deployment plan (Google Cloud Run), unused. |
+| [ORACLE-SETUP.txt](ORACLE-SETUP.txt) | Step-by-step Oracle Cloud account + VM bootstrap (Phase 1). |
+| [PHASE-2-CHEATSHEET.txt](PHASE-2-CHEATSHEET.txt) | `oracle-setup.sh` installer walkthrough (Phase 2). |
+| [PHASE-7-TEST-PLAN.txt](PHASE-7-TEST-PLAN.txt) | 40-feature manual end-to-end test checklist. |
+| [SUPABASE_SETUP.md](SUPABASE_SETUP.md) | Supabase project creation + schema apply. |
+| `supabase/migrations/*.sql` | Schema of record. Apply via the Supabase SQL editor. |
+| [IMPROVEMENTS.md](IMPROVEMENTS.md) | Historical refactor notes (pre-Phase-4). |
+| [BUG_REPORT.md](BUG_REPORT.md), [DEPLOYMENT.md](DEPLOYMENT.md), [FINAL_SUMMARY.md](FINAL_SUMMARY.md), [GITHUB_PUSH.md](GITHUB_PUSH.md), [QUICKSTART.md](QUICKSTART.md) | Historical — written before the Oracle migration. They describe a Vercel-serverless + SQLite + Railway architecture that **no longer applies**. Each has a deprecation banner. Preserved for context only. |
+
+---
+
+## ⚠️ Known gaps
+
+- **Backend is unauthenticated at the HTTP layer.** `/api/*` routes are open to anyone who can reach `outreach-jt.duckdns.org`. Supabase auth protects the frontend UI, but direct `curl` against the backend can mutate data, trigger scraping, and call auto-apply. If you're deploying for anyone outside a small trusted group, add JWT verification middleware (`supabase.auth.getUser(token)` server-side) before shipping.
+- **Multi-user isolation.** The 002 schema declares RLS policies for `authenticated` role, but the backend uses the Supabase service-role key, which bypasses RLS. The app is designed as a 4-user shared workspace — every user sees every other user's data. Per-user scoping would require adding `user_id` columns and scoping every query.
+- **PII in git history.** Earlier commits tracked tailored-resume PDFs under `backend/output/`. Current commits untrack them, but history still contains them. The GitHub repo is currently public — if you don't want those PDFs indexable, either run `git filter-repo` to purge, or mark the repo private.
 
 ---
 
 ## 📄 License
 
 MIT © 2026 — Free to use and modify
-
----
-
-**Pro Tip:** Evaluate jobs with AI first (A-graded roles have 3x better response rates), then auto-apply to top candidates.
