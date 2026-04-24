@@ -54,7 +54,7 @@ router.post('/scrape', async (req, res) => {
     INSERT INTO jobs
       (name, category, subcategory, confidence, classified_at, wikipedia_summary,
        roles, location, city, state, country, url, tag, domain, is_hiring, source)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, $15)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15)
     ON CONFLICT (name) DO NOTHING
   `;
 
