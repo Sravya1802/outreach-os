@@ -349,11 +349,12 @@ router.post('/scrape/:src', async (req, res) => {
     let results = [];
 
     switch (src) {
-      case 'linkedin': results = await apify.scrapeLinkedInJobs(query); break;
-      case 'wellfound': results = await apify.scrapeWellfound(); break;
-      case 'google': results = await apify.scrapeGoogleJobs(query); break;
-      case 'github': results = await apify.scrapeGitHubInternships(); break;
-      case 'yc': results = await apify.scrapeYCStartups(); break;
+      case 'linkedin':    results = await apify.scrapeLinkedInJobs(query); break;
+      case 'wellfound':   results = await apify.scrapeWellfound(); break;
+      case 'google':                                                          // frontend uses 'google_jobs' — accept both
+      case 'google_jobs': results = await apify.scrapeGoogleJobs(query); break;
+      case 'github':      results = await apify.scrapeGitHubInternships(); break;
+      case 'yc':          results = await apify.scrapeYCStartups(); break;
       default: return res.status(400).json({ error: `Unknown source: ${src}` });
     }
 
