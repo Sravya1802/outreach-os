@@ -323,7 +323,7 @@ router.get('/pipeline', async (req, res) => {
       SELECT id, job_title, company_name, job_url, grade, score,
              apply_mode, apply_status, applied_at, created_at
       FROM evaluations
-      ORDER BY COALESCE(applied_at, created_at) DESC
+      ORDER BY COALESCE(applied_at, created_at::text) DESC
     `);
 
     const columns = {
@@ -441,7 +441,7 @@ router.post('/evaluations/:id/mark-applied', async (req, res) => {
   try {
     const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()) WHERE id = $1", [req.params.id]);
+    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()::text) WHERE id = $1", [req.params.id]);
     res.json({ ok: true, status: 'submitted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
