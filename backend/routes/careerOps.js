@@ -8,7 +8,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import db from '../db.js';
+import { one, all, run, tx } from '../db.js';
 import { evaluateJob, fetchJobFromUrl } from '../services/jobEvaluator.js';
 import { tailorResume, generateResumePDF } from '../services/resumeGenerator.js';
 import { saveEvaluationReport, syncTracker, getTrackerRows } from '../services/reportManager.js';
@@ -47,11 +47,11 @@ const upload = multer({
 });
 
 // ── GET /api/career/resume — get current resume info ─────────────────────────
-router.get('/resume', (req, res) => {
+router.get('/resume', async (req, res) => {
   try {
-    const text = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
-    const name = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_name'").get()?.value;
-    const date = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_date'").get()?.value;
+    const text = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
+    const name = (await one("SELECT value FROM meta WHERE key = 'user_resume_name'"))?.value;
+    const date = (await one("SELECT value FROM meta WHERE key = 'user_resume_date'"))?.value;
     res.json({ hasResume: !!text, name, date, textPreview: text?.slice(0, 300) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -76,10 +76,10 @@ router.post('/resume', upload.single('resume'), async (req, res) => {
     fs.unlinkSync(req.file.path); // remove temp
 
     // Store in DB meta table
-    const upsert = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-    upsert.run('user_resume_text', text);
-    upsert.run('user_resume_name', req.file.originalname);
-    upsert.run('user_resume_date', new Date().toISOString());
+    const upsertSql = "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
+    await run(upsertSql, ['user_resume_text', text]);
+    await run(upsertSql, ['user_resume_name', req.file.originalname]);
+    await run(upsertSql, ['user_resume_date', new Date().toISOString()]);
 
     console.log(`[careerOps] Resume uploaded: ${req.file.originalname}, ${text.length} chars`);
     res.json({ ok: true, name: req.file.originalname, chars: text.length, preview: text.slice(0, 300) });
@@ -98,7 +98,7 @@ router.post('/evaluate', async (req, res) => {
     }
 
     // Get resume
-    const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+    const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume uploaded. Please upload your resume first.' });
 
     // If URL given, fetch job content
@@ -116,12 +116,12 @@ router.post('/evaluate', async (req, res) => {
     const evaluation = await evaluateJob({ jobDescription, resumeText, jobUrl: sourceUrl });
 
     // Save to DB
-    const insertEval = db.prepare(`
+    const result = await run(`
       INSERT INTO evaluations
         (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'career_ops')
-    `);
-    const result = insertEval.run(
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'career_ops')
+      RETURNING id
+    `, [
       sourceUrl || null,
       evaluation.jobTitle || 'Unknown Role',
       evaluation.companyName || 'Unknown Company',
@@ -129,9 +129,9 @@ router.post('/evaluate', async (req, res) => {
       evaluation.grade,
       evaluation.overallScore,
       JSON.stringify(evaluation),
-    );
+    ]);
 
-    const evalId = result.lastInsertRowid;
+    const evalId = result.insertId;
 
     // Save markdown report
     try {
@@ -140,7 +140,7 @@ router.post('/evaluate', async (req, res) => {
         evaluation.companyName,
         evaluation.jobTitle
       );
-      db.prepare("UPDATE evaluations SET report_path = ? WHERE id = ?").run(mdPath, evalId);
+      await run("UPDATE evaluations SET report_path = $1 WHERE id = $2", [mdPath, evalId]);
     } catch (err) {
       console.error('[careerOps] report save failed:', err.message);
     }
@@ -153,12 +153,12 @@ router.post('/evaluate', async (req, res) => {
 });
 
 // ── GET /api/career/evaluations — list all evaluations ───────────────────────
-router.get('/evaluations', (req, res) => {
+router.get('/evaluations', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at
       FROM evaluations ORDER BY created_at DESC LIMIT 50
-    `).all();
+    `);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -166,9 +166,9 @@ router.get('/evaluations', (req, res) => {
 });
 
 // ── GET /api/career/evaluations/:id — get single evaluation ──────────────────
-router.get('/evaluations/:id', (req, res) => {
+router.get('/evaluations/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json({ ...row, evaluation: row.report_json ? JSON.parse(row.report_json) : null });
   } catch (err) {
@@ -178,32 +178,33 @@ router.get('/evaluations/:id', (req, res) => {
 
 // ── User profile (singleton — drives auto-apply form filling) ────────────────
 
-router.get('/profile', (req, res) => {
+router.get('/profile', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM user_profile WHERE id = 1').get() || {};
+    const row = (await one('SELECT * FROM user_profile WHERE id = 1')) || {};
     res.json(row);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/profile', (req, res) => {
+router.put('/profile', async (req, res) => {
   try {
     const ALLOWED = ['first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url','location','work_authorization','needs_sponsorship','gender','race','veteran_status','disability_status','resume_dir'];
     const data = req.body || {};
     const sets = [], args = [];
+    let i = 1;
     for (const k of ALLOWED) {
-      if (Object.prototype.hasOwnProperty.call(data, k)) { sets.push(`${k} = ?`); args.push(data[k]); }
+      if (Object.prototype.hasOwnProperty.call(data, k)) { sets.push(`${k} = $${i++}`); args.push(data[k]); }
     }
     if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    sets.push("updated_at = datetime('now')");
-    db.prepare(`UPDATE user_profile SET ${sets.join(', ')} WHERE id = 1`).run(...args);
-    res.json(db.prepare('SELECT * FROM user_profile WHERE id = 1').get());
+    sets.push("updated_at = NOW()");
+    await run(`UPDATE user_profile SET ${sets.join(', ')} WHERE id = 1`, args);
+    res.json(await one('SELECT * FROM user_profile WHERE id = 1'));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Resume registry — list available resumes in the configured folder ────────
-router.get('/resumes-library', (req, res) => {
+router.get('/resumes-library', async (req, res) => {
   try {
-    const profile = db.prepare('SELECT resume_dir FROM user_profile WHERE id = 1').get();
+    const profile = await one('SELECT resume_dir FROM user_profile WHERE id = 1');
     const resumes = scanResumes(profile?.resume_dir);
     res.json({ resumeDir: profile?.resume_dir, resumes });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -228,19 +229,19 @@ router.post('/auto-apply/run', async (req, res) => {
 // Looks up an existing evaluation by job_url (if any) and reports whether a
 // tailored PDF already exists. Used by the Job Automation tab to show the user
 // which resume will fire for each role before they hit Apply.
-router.post('/auto-apply/resume-preview', (req, res) => {
+router.post('/auto-apply/resume-preview', async (req, res) => {
   try {
     const { jobUrls = [] } = req.body || {};
     if (!Array.isArray(jobUrls) || jobUrls.length === 0) return res.json({ previews: {} });
     const previews = {};
     for (const url of jobUrls) {
-      const ev = db.prepare(`
+      const ev = await one(`
         SELECT id, pdf_path, job_description, report_json
         FROM evaluations
-        WHERE job_url = ?
+        WHERE job_url = $1
         ORDER BY id DESC
         LIMIT 1
-      `).get(url);
+      `, [url]);
       if (!ev) {
         previews[url] = { source: 'fallback', label: 'Will use common-folder resume (no evaluation yet)' };
         continue;
@@ -280,20 +281,21 @@ router.post('/auto-apply-direct', async (req, res) => {
     if (!companyName || !jobTitle) return res.status(400).json({ error: 'companyName and jobTitle are required' });
 
     // Deduplicate: if we've already seen this URL, reuse the existing evaluation
-    let row = db.prepare('SELECT * FROM evaluations WHERE job_url = ? ORDER BY id DESC LIMIT 1').get(jobUrl);
+    let row = await one('SELECT * FROM evaluations WHERE job_url = $1 ORDER BY id DESC LIMIT 1', [jobUrl]);
     if (!row) {
-      const r = db.prepare(`
+      const r = await run(`
         INSERT INTO evaluations (job_url, job_title, company_name, apply_mode, apply_status, source)
-        VALUES (?, ?, ?, 'auto', 'queued', 'auto_apply_direct')
-      `).run(jobUrl, jobTitle, companyName);
-      row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(r.lastInsertRowid);
+        VALUES ($1, $2, $3, 'auto', 'queued', 'auto_apply_direct')
+        RETURNING id
+      `, [jobUrl, jobTitle, companyName]);
+      row = await one('SELECT * FROM evaluations WHERE id = $1', [r.insertId]);
     } else {
       // Re-queue for another attempt
-      db.prepare("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = ?").run(row.id);
+      await run("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = $1", [row.id]);
     }
 
     const result = await processOneEvaluation(row.id, { dryRun, headless });
-    const updated = db.prepare('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = ?').get(row.id);
+    const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1', [row.id]);
     res.json({ ok: !!result.ok, evalId: row.id, ...updated, ...result });
   } catch (err) {
     console.error('[auto-apply-direct]', err);
@@ -315,14 +317,14 @@ router.post('/auto-apply/:id', async (req, res) => {
 
 // ── GET /api/career/pipeline — job-search Kanban data ────────────────────────
 // Groups evaluations by apply_status into the columns the frontend renders.
-router.get('/pipeline', (req, res) => {
+router.get('/pipeline', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT id, job_title, company_name, job_url, grade, score,
              apply_mode, apply_status, applied_at, created_at
       FROM evaluations
-      ORDER BY datetime(COALESCE(applied_at, created_at)) DESC
-    `).all();
+      ORDER BY COALESCE(applied_at, created_at) DESC
+    `);
 
     const columns = {
       evaluated:  { label: 'Evaluated',     hint: 'Scored but not yet applied',            items: [] },
@@ -361,14 +363,14 @@ router.get('/pipeline', (req, res) => {
 });
 
 // ── PATCH /api/career/evaluations/:id/apply-status — move card in Kanban ─────
-router.patch('/evaluations/:id/apply-status', (req, res) => {
+router.patch('/evaluations/:id/apply-status', async (req, res) => {
   try {
     const VALID = ['not_started', 'opened', 'queued', 'submitted', 'responded', 'interview', 'offer', 'rejected'];
     const { status } = req.body || {};
     if (!VALID.includes(status)) return res.status(400).json({ error: `status must be one of ${VALID.join(', ')}` });
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare('UPDATE evaluations SET apply_status = ? WHERE id = ?').run(status, req.params.id);
+    await run('UPDATE evaluations SET apply_status = $1 WHERE id = $2', [status, req.params.id]);
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -376,15 +378,15 @@ router.patch('/evaluations/:id/apply-status', (req, res) => {
 });
 
 // ── PATCH /api/career/evaluations/:id/apply-mode — toggle manual | auto ──────
-router.patch('/evaluations/:id/apply-mode', (req, res) => {
+router.patch('/evaluations/:id/apply-mode', async (req, res) => {
   try {
     const { mode } = req.body || {};
     if (!['manual', 'auto'].includes(mode)) {
       return res.status(400).json({ error: 'mode must be "manual" or "auto"' });
     }
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare('UPDATE evaluations SET apply_mode = ? WHERE id = ?').run(mode, req.params.id);
+    await run('UPDATE evaluations SET apply_mode = $1 WHERE id = $2', [mode, req.params.id]);
     res.json({ ok: true, applyMode: mode });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -397,7 +399,7 @@ router.patch('/evaluations/:id/apply-mode', (req, res) => {
 // auto mode:   enqueues a Playwright worker (stub for now — real submit lands in #9).
 router.post('/evaluations/:id/apply', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
     if (!row.job_url) return res.status(400).json({ error: 'This evaluation has no job URL to apply to' });
 
@@ -406,16 +408,16 @@ router.post('/evaluations/:id/apply', async (req, res) => {
     if (mode === 'manual') {
       // Nothing to do server-side — frontend opens URL. Just mark as "opened" so
       // the user can later confirm submission via updateStatus.
-      db.prepare("UPDATE evaluations SET apply_status = 'opened', applied_at = datetime('now') WHERE id = ?").run(row.id);
+      await run("UPDATE evaluations SET apply_status = 'opened', applied_at = NOW() WHERE id = $1", [row.id]);
       return res.json({ ok: true, mode, url: row.job_url, status: 'opened' });
     }
 
     // auto mode — mark queued, then run the Playwright worker synchronously for
     // immediate feedback. Long-running so we return once the worker finishes.
-    db.prepare("UPDATE evaluations SET apply_status = 'queued' WHERE id = ?").run(row.id);
+    await run("UPDATE evaluations SET apply_status = 'queued' WHERE id = $1", [row.id]);
     try {
       const result = await processOneEvaluation(row.id, { headless: true });
-      const updated = db.prepare('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = ?').get(row.id);
+      const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1', [row.id]);
       return res.json({
         ok: !!result.ok,
         mode,
@@ -435,11 +437,11 @@ router.post('/evaluations/:id/apply', async (req, res) => {
 });
 
 // ── POST /api/career/evaluations/:id/mark-applied — user confirms manual submit ─
-router.post('/evaluations/:id/mark-applied', (req, res) => {
+router.post('/evaluations/:id/mark-applied', async (req, res) => {
   try {
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, datetime('now')) WHERE id = ?").run(req.params.id);
+    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()) WHERE id = $1", [req.params.id]);
     res.json({ ok: true, status: 'submitted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -447,9 +449,9 @@ router.post('/evaluations/:id/mark-applied', (req, res) => {
 });
 
 // ── DELETE /api/career/evaluations/:id ───────────────────────────────────────
-router.delete('/evaluations/:id', (req, res) => {
+router.delete('/evaluations/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM evaluations WHERE id = ?').run(req.params.id);
+    await run('DELETE FROM evaluations WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -459,13 +461,13 @@ router.delete('/evaluations/:id', (req, res) => {
 // ── POST /api/career/tailored-resume/:id — generate tailored resume PDF ──────
 router.post('/tailored-resume/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
 
-    const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+    const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume found' });
 
-    const candidateName = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_name'").get()?.value?.replace('.pdf','') || 'Candidate';
+    const candidateName = (await one("SELECT value FROM meta WHERE key = 'user_resume_name'"))?.value?.replace('.pdf','') || 'Candidate';
 
     console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title}`);
 
@@ -476,7 +478,7 @@ router.post('/tailored-resume/:id', async (req, res) => {
     const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
 
     // Update DB
-    db.prepare('UPDATE evaluations SET pdf_path = ? WHERE id = ?').run(pdfPath, row.id);
+    await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2', [pdfPath, row.id]);
 
     res.json({ ok: true, pdfPath: relativePath, downloadUrl: `/api/career/download/${row.id}` });
   } catch (err) {
@@ -486,9 +488,9 @@ router.post('/tailored-resume/:id', async (req, res) => {
 });
 
 // ── GET /api/career/download/:id — download PDF ──────────────────────────────
-router.get('/download/:id', (req, res) => {
+router.get('/download/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row || !row.pdf_path) return res.status(404).json({ error: 'PDF not found. Generate it first.' });
     if (!fs.existsSync(row.pdf_path)) return res.status(404).json({ error: 'PDF file missing from disk.' });
 
@@ -657,7 +659,7 @@ router.post('/batch-evaluate', async (req, res) => {
     return res.status(400).json({ error: 'Provide an array of URLs' });
   }
 
-  const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+  const resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
   if (!resumeText) return res.status(400).json({ error: 'No resume uploaded' });
 
   const batch = urls.slice(0, 10); // max 10
@@ -672,12 +674,13 @@ router.post('/batch-evaluate', async (req, res) => {
       const evaluation = await evaluateJob({ jobDescription: fetched.text, resumeText, jobUrl: url });
 
       // Save to DB
-      const r = db.prepare(`
+      const r = await run(`
         INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'career_ops_batch')
-      `).run(url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation));
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'career_ops_batch')
+        RETURNING id
+      `, [url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation)]);
 
-      return { url, evalId: r.lastInsertRowid, evaluation, status: 'done' };
+      return { url, evalId: r.insertId, evaluation, status: 'done' };
     }));
 
     for (let j = 0; j < settled.length; j++) {
@@ -718,12 +721,12 @@ const docUpload = multer({
 });
 
 // ── GET /api/career/stats — career ops summary ─────────────────────────────────
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const total    = db.prepare("SELECT COUNT(*) as n FROM company_applications").get().n;
-    const avgRow   = db.prepare("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL").get();
-    const topRow   = db.prepare("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL ORDER BY ca.fit_score DESC LIMIT 1").get();
-    const applyCount = db.prepare("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2").get().n;
+    const total    = Number((await one("SELECT COUNT(*) as n FROM company_applications")).n);
+    const avgRow   = await one("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL");
+    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL ORDER BY ca.fit_score DESC LIMIT 1");
+    const applyCount = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2")).n);
     res.json({ total, avgScore: avgRow?.avg ? Number(avgRow.avg).toFixed(1) : null, topPick: topRow, applyCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -731,14 +734,14 @@ router.get('/stats', (req, res) => {
 });
 
 // ── GET /api/career/ranked — all applications ranked by fit_score ───────────────
-router.get('/ranked', (req, res) => {
+router.get('/ranked', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT ca.*, j.name as company_name, j.category, j.location, j.website
       FROM company_applications ca
       JOIN jobs j ON j.id = ca.company_id
       ORDER BY ca.fit_score DESC NULLS LAST, ca.updated_at DESC
-    `).all();
+    `);
     res.json({ applications: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -746,9 +749,9 @@ router.get('/ranked', (req, res) => {
 });
 
 // ── GET /api/career/:companyId/documents — list documents ─────────────────────
-router.get('/:companyId/documents', (req, res) => {
+router.get('/:companyId/documents', async (req, res) => {
   try {
-    const rows = db.prepare("SELECT * FROM documents WHERE company_id = ? ORDER BY created_at DESC").all(req.params.companyId);
+    const rows = await all("SELECT * FROM documents WHERE company_id = $1 ORDER BY created_at DESC", [req.params.companyId]);
     res.json({ documents: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -756,14 +759,15 @@ router.get('/:companyId/documents', (req, res) => {
 });
 
 // ── POST /api/career/:companyId/documents — upload document ────────────────────
-router.post('/:companyId/documents', docUpload.single('file'), (req, res) => {
+router.post('/:companyId/documents', docUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const result = db.prepare(`
+    const result = await run(`
       INSERT INTO documents (company_id, filename, original_name, mime_type, size)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size);
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(result.lastInsertRowid);
+      VALUES ($1, $2, $3, $4, $5)
+      RETURNING id
+    `, [req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size]);
+    const doc = await one("SELECT * FROM documents WHERE id = $1", [result.insertId]);
     res.json({ document: doc });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -771,13 +775,13 @@ router.post('/:companyId/documents', docUpload.single('file'), (req, res) => {
 });
 
 // ── DELETE /api/career/:companyId/documents/:docId ────────────────────────────
-router.delete('/:companyId/documents/:docId', (req, res) => {
+router.delete('/:companyId/documents/:docId', async (req, res) => {
   try {
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ? AND company_id = ?").get(req.params.docId, req.params.companyId);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2", [req.params.docId, req.params.companyId]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     try { fs.unlinkSync(filePath); } catch (_) {}
-    db.prepare("DELETE FROM documents WHERE id = ?").run(req.params.docId);
+    await run("DELETE FROM documents WHERE id = $1", [req.params.docId]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -785,9 +789,9 @@ router.delete('/:companyId/documents/:docId', (req, res) => {
 });
 
 // ── GET /api/career/:companyId/documents/:docId/download ──────────────────────
-router.get('/:companyId/documents/:docId/download', (req, res) => {
+router.get('/:companyId/documents/:docId/download', async (req, res) => {
   try {
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ? AND company_id = ?").get(req.params.docId, req.params.companyId);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2", [req.params.docId, req.params.companyId]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     res.setHeader('Content-Disposition', `inline; filename="${doc.original_name}"`);
@@ -799,9 +803,9 @@ router.get('/:companyId/documents/:docId/download', (req, res) => {
 });
 
 // ── GET /api/career/company/:id — get application tracking for a company ───────
-router.get('/company/:id', (req, res) => {
+router.get('/company/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
     res.json(row || {
       company_id: req.params.id,
       status: 'interested',
@@ -822,7 +826,7 @@ router.get('/company/:id', (req, res) => {
 });
 
 // ── PUT /api/career/company/:id — upsert application tracking ─────────────────
-router.put('/company/:id', (req, res) => {
+router.put('/company/:id', async (req, res) => {
   try {
     const {
       status, applied_date, follow_up_date, notes, fit_score, salary,
@@ -830,33 +834,33 @@ router.put('/company/:id', (req, res) => {
       resume_path, resume_original_name, resume_size,
       job_title, job_url, job_source,
     } = req.body;
-    db.prepare(`
+    await run(`
       INSERT INTO company_applications (
         company_id, status, applied_date, follow_up_date, notes, fit_score,
         salary, location_type, start_date, end_date, fit_assessment,
         resume_path, resume_original_name, resume_size,
         job_title, job_url, job_source, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
       ON CONFLICT(company_id) DO UPDATE SET
-        status = excluded.status,
-        applied_date = excluded.applied_date,
-        follow_up_date = excluded.follow_up_date,
-        notes = excluded.notes,
-        fit_score = excluded.fit_score,
-        salary = excluded.salary,
-        location_type = excluded.location_type,
-        start_date = excluded.start_date,
-        end_date = excluded.end_date,
-        fit_assessment = excluded.fit_assessment,
-        resume_path = COALESCE(excluded.resume_path, company_applications.resume_path),
-        resume_original_name = COALESCE(excluded.resume_original_name, company_applications.resume_original_name),
-        resume_size = COALESCE(excluded.resume_size, company_applications.resume_size),
-        job_title = COALESCE(excluded.job_title, company_applications.job_title),
-        job_url = COALESCE(excluded.job_url, company_applications.job_url),
-        job_source = COALESCE(excluded.job_source, company_applications.job_source),
-        updated_at = datetime('now')
-    `).run(
+        status = EXCLUDED.status,
+        applied_date = EXCLUDED.applied_date,
+        follow_up_date = EXCLUDED.follow_up_date,
+        notes = EXCLUDED.notes,
+        fit_score = EXCLUDED.fit_score,
+        salary = EXCLUDED.salary,
+        location_type = EXCLUDED.location_type,
+        start_date = EXCLUDED.start_date,
+        end_date = EXCLUDED.end_date,
+        fit_assessment = EXCLUDED.fit_assessment,
+        resume_path = COALESCE(EXCLUDED.resume_path, company_applications.resume_path),
+        resume_original_name = COALESCE(EXCLUDED.resume_original_name, company_applications.resume_original_name),
+        resume_size = COALESCE(EXCLUDED.resume_size, company_applications.resume_size),
+        job_title = COALESCE(EXCLUDED.job_title, company_applications.job_title),
+        job_url = COALESCE(EXCLUDED.job_url, company_applications.job_url),
+        job_source = COALESCE(EXCLUDED.job_source, company_applications.job_source),
+        updated_at = NOW()
+    `, [
       req.params.id,
       status || 'interested',
       applied_date || null,
@@ -873,9 +877,9 @@ router.put('/company/:id', (req, res) => {
       resume_size != null ? Number(resume_size) : null,
       job_title || null,
       job_url || null,
-      job_source || null
-    );
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+      job_source || null,
+    ]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -890,24 +894,24 @@ router.post('/company/:id/score-fit', async (req, res) => {
   }, 90000);
 
   try {
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
-    const company = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
+    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!company) { clearTimeout(timeout); return res.status(404).json({ error: 'Company not found' }); }
     if (!row?.job_title) {
       clearTimeout(timeout); return res.status(400).json({ error: 'No tracked role found. Track a role from Job Scraper first.' });
     }
 
-    let resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+    let resumeText = (await one("SELECT value FROM meta WHERE key = 'user_resume_text'"))?.value;
     if (!resumeText) {
       // Check if resume file exists on disk and parse it on-the-fly
       if (row?.resume_path) {
         try {
           const text = await extractPdfText(row.resume_path);
           if (text && text.length > 50) {
-            const upsert = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-            upsert.run('user_resume_text', text);
-            upsert.run('user_resume_name', row.resume_original_name || 'resume.pdf');
-            upsert.run('user_resume_date', new Date().toISOString());
+            const upsertSql = "INSERT INTO meta (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
+            await run(upsertSql, ['user_resume_text', text]);
+            await run(upsertSql, ['user_resume_name', row.resume_original_name || 'resume.pdf']);
+            await run(upsertSql, ['user_resume_date', new Date().toISOString()]);
             resumeText = text;
             console.log(`[score-fit] Parsed resume on-the-fly: ${text.length} chars`);
           } else {
@@ -952,25 +956,26 @@ router.post('/company/:id/score-fit', async (req, res) => {
     const evaluation = await evaluateJob({ jobDescription, resumeText, jobUrl: row.job_url || null });
     const fitScore = Math.max(1, Math.min(5, Number((evaluation.overallScore / 20).toFixed(1))));
 
-    db.prepare("UPDATE company_applications SET fit_score = ?, fit_assessment = ?, updated_at = datetime('now') WHERE company_id = ?")
-      .run(fitScore, JSON.stringify(evaluation), req.params.id);
+    await run("UPDATE company_applications SET fit_score = $1, fit_assessment = $2, updated_at = NOW() WHERE company_id = $3",
+      [fitScore, JSON.stringify(evaluation), req.params.id]);
 
     // Save to evaluations table so PDF generation can reference it
     let evalId = null;
     try {
-      const r = db.prepare(`
+      const r = await run(`
         INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'score_fit')
-      `).run(
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'score_fit')
+        RETURNING id
+      `, [
         row.job_url || null,
         row.job_title,
         company.name,
         jobDescription.slice(0, 5000),
         evaluation.grade,
         evaluation.overallScore,
-        JSON.stringify(evaluation)
-      );
-      evalId = r.lastInsertRowid;
+        JSON.stringify(evaluation),
+      ]);
+      evalId = r.insertId;
     } catch (eErr) {
       console.error('[careerOps] evaluations insert failed:', eErr.message);
     }
@@ -990,7 +995,7 @@ router.post('/company/:id/score-fit', async (req, res) => {
       console.error('[careerOps] report/tracker save failed:', rErr.message);
     }
 
-    const updated = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const updated = await one('SELECT * FROM company_applications WHERE company_id = $1', [req.params.id]);
     clearTimeout(timeout);
     if (!res.headersSent) res.json({ fit_score: updated.fit_score, evaluation, reportFile, evalId });
   } catch (err) {
@@ -1023,9 +1028,9 @@ router.get('/tracker/raw', (req, res) => {
 // Renders the full A-G evaluation as a self-contained HTML page (no JS, all
 // styles inline) — suitable for saving, printing, or emailing. Replaces the
 // raw .md report the user was seeing before.
-router.get('/evaluations/:id/report.html', (req, res) => {
+router.get('/evaluations/:id/report.html', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1', [req.params.id]);
     if (!row) return res.status(404).send('<h1>Report not found</h1>');
     const e = row.report_json ? JSON.parse(row.report_json) : null;
     if (!e) return res.status(404).send('<h1>No evaluation data for this report</h1>');
