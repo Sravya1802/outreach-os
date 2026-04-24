@@ -68,7 +68,7 @@ app.get('/api/health', (req, res) => {
     has_hunter:   !!process.env.HUNTER_API_KEY,
     has_prospeo:  !!process.env.PROSPEO_API_KEY,
     has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
-    auth_mode:    process.env.AUTH_MODE || 'enforce',
+    auth_mode:    process.env.AUTH_MODE || 'log-only',
   });
 });
 
