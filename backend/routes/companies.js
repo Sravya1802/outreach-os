@@ -309,7 +309,7 @@ router.post('/scrape', async (req, res) => {
       ...(google.status === 'fulfilled' ? google.value : []),
       ...(github.status === 'fulfilled' ? github.value : []),
       ...(yc.status === 'fulfilled' ? yc.value : []),
-    ];
+    ].filter(it => it && typeof it.company === 'string' && it.company.trim());
 
     let inserted = 0;
     await tx(async (client) => {
@@ -318,7 +318,7 @@ router.post('/scrape', async (req, res) => {
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company, item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
+        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
         if (r.rowCount > 0) inserted++;
       }
     });
@@ -357,19 +357,21 @@ router.post('/scrape/:src', async (req, res) => {
       default: return res.status(400).json({ error: `Unknown source: ${src}` });
     }
 
+    const cleaned = results.filter(it => it && typeof it.company === 'string' && it.company.trim());
+
     let inserted = 0;
     await tx(async (client) => {
-      for (const item of results) {
+      for (const item of cleaned) {
         const r = await client.query(`
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company, item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
+        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null]);
         if (r.rowCount > 0) inserted++;
       }
     });
 
-    res.json({ inserted, skipped: results.length - inserted, total: results.length });
+    res.json({ inserted, skipped: cleaned.length - inserted, total: cleaned.length, rawTotal: results.length });
   } catch (err) {
     console.error(`Scrape ${req.params.src} error:`, err.message);
     res.status(500).json({ error: err.message });
