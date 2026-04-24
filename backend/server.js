@@ -33,12 +33,20 @@ import { checkAllCredits }   from './services/creditChecker.js';
 
 const app = express();
 
-// ── CORS — allow local dev + configured production frontend origin ──────────
+// ── CORS — allow local dev + configured production frontend origin(s) ──────
+// Single origin: set FRONTEND_ORIGIN=https://outreach-jt.vercel.app
+// Multiple origins (e.g. preview URLs): set CORS_ORIGINS="https://a.vercel.app,https://b.vercel.app"
 const DEFAULT_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN; // e.g. https://outreach-jt.vercel.app
-const CORS_ORIGINS = FRONTEND_ORIGIN
-  ? [...DEFAULT_ORIGINS, FRONTEND_ORIGIN]
-  : DEFAULT_ORIGINS;
+const envOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+const CORS_ORIGINS = [...new Set([
+  ...DEFAULT_ORIGINS,
+  ...envOrigins,
+  ...(FRONTEND_ORIGIN ? [FRONTEND_ORIGIN] : []),
+])];
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
