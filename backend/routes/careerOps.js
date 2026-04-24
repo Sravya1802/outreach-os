@@ -584,7 +584,17 @@ const SCAN_ASHBY = [
 ];
 
 const CS_TITLE_RE = /intern|engineer|developer|researcher|scientist|data|ml|software|swe/i;
+const INTERN_RE   = /\b(intern|internship|trainee|co-?op|working student|summer analyst)\b/i;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Filter by role-type. 'intern' keeps only intern/co-op/trainee titles,
+// 'fulltime' keeps only non-intern engineering titles, 'all' keeps both.
+function matchesRoleType(title, roleType) {
+  if (!title) return false;
+  if (roleType === 'intern')   return INTERN_RE.test(title);
+  if (roleType === 'fulltime') return CS_TITLE_RE.test(title) && !INTERN_RE.test(title);
+  return CS_TITLE_RE.test(title); // 'all' / undefined → keep any CS-ish title
+}
 
 function isRecent(timestamp) {
   if (!timestamp) return true; // no timestamp — include anyway
@@ -594,7 +604,7 @@ function isRecent(timestamp) {
   return !isNaN(posted) && (Date.now() - posted.getTime()) <= SEVEN_DAYS_MS;
 }
 
-async function scanGreenhouse() {
+async function scanGreenhouse(roleType = 'intern') {
   const jobs = [];
   for (const token of SCAN_GREENHOUSE) {
     try {
@@ -605,7 +615,7 @@ async function scanGreenhouse() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (data.jobs || [])) {
-        if (!CS_TITLE_RE.test(job.title)) continue;
+        if (!matchesRoleType(job.title, roleType)) continue;
         const ts = job.updated_at || job.created_at;
         if (!isRecent(ts)) continue;
         jobs.push({
@@ -622,7 +632,7 @@ async function scanGreenhouse() {
   return jobs;
 }
 
-async function scanLever() {
+async function scanLever(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_LEVER) {
     try {
@@ -633,7 +643,7 @@ async function scanLever() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (Array.isArray(data) ? data : [])) {
-        if (!CS_TITLE_RE.test(job.text || '')) continue;
+        if (!matchesRoleType(job.text || '', roleType)) continue;
         const ts = job.createdAt; // epoch ms
         if (!isRecent(ts)) continue;
         jobs.push({
@@ -650,7 +660,7 @@ async function scanLever() {
   return jobs;
 }
 
-async function scanAshby() {
+async function scanAshby(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_ASHBY) {
     try {
@@ -666,7 +676,7 @@ async function scanAshby() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (data.jobs || data.jobPostings || [])) {
-        if (!CS_TITLE_RE.test(job.title || '')) continue;
+        if (!matchesRoleType(job.title || '', roleType)) continue;
         const ts = job.publishedAt || job.createdAt || job.updatedAt;
         if (!isRecent(ts)) continue;
         jobs.push({
@@ -685,12 +695,14 @@ async function scanAshby() {
 
 router.post('/scan-portals', async (req, res) => {
   try {
-    console.log('[careerOps] Starting portal scan across Greenhouse / Lever / Ashby…');
+    // roleType = 'intern' (default) | 'fulltime' | 'all'
+    const roleType = ['intern', 'fulltime', 'all'].includes(req.body?.roleType) ? req.body.roleType : 'intern';
+    console.log(`[careerOps] Starting portal scan across Greenhouse / Lever / Ashby — roleType=${roleType}`);
 
     const [ghResult, lvResult, ashResult] = await Promise.allSettled([
-      scanGreenhouse(),
-      scanLever(),
-      scanAshby(),
+      scanGreenhouse(roleType),
+      scanLever(roleType),
+      scanAshby(roleType),
     ]);
 
     const ghJobs  = ghResult.status  === 'fulfilled' ? ghResult.value  : [];
