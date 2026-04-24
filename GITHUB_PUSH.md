@@ -1,5 +1,11 @@
 # GitHub Push & Vercel Deployment Instructions
 
+> ⚠️ **Historical — pre-Phase-4 initial push guide.** The repo is
+> already published at https://github.com/Sravya1802/outreach-os and
+> the Vercel-only deployment path described here is no longer accurate
+> (backend now lives on Oracle Cloud). See [README.md](README.md) and
+> [PLAN.txt](PLAN.txt). Preserved for historical reference only.
+
 ## Step 1: Create GitHub Repository
 
 1. Go to https://github.com/new
