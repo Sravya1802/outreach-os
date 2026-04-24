@@ -31,15 +31,15 @@ router.post('/scrape', async (req, res) => {
   const nameList = rawResults.map(r => r.name);
   let existingMap = new Map();
   if (nameList.length > 0) {
-    const placeholders = nameList.map(() => '?').join(',');
-    const rows = db.prepare(`
+    const placeholders = nameList.map((_, i) => `$${i + 1}`).join(',');
+    const rows = await all(`
       SELECT name, category, subcategory, confidence, classified_at
       FROM jobs
       WHERE name IN (${placeholders})
         AND confidence >= 0.40
         AND category IS NOT NULL AND category != 'Unclassified'
         AND classified_at IS NOT NULL
-    `).all(...nameList);
+    `, nameList);
     existingMap = new Map(rows.map(r => [r.name.toLowerCase(), r]));
   }
 
@@ -50,33 +50,34 @@ router.post('/scrape', async (req, res) => {
   const classifiedMap = await classifyCompanies(toClassify, { category, subcategory });
 
   // ── Insert / update DB ───────────────────────────────────────────────────
-  const insertStmt = db.prepare(`
-    INSERT OR IGNORE INTO jobs
+  const insertSql = `
+    INSERT INTO jobs
       (name, category, subcategory, confidence, classified_at, wikipedia_summary,
        roles, location, city, state, country, url, tag, domain, is_hiring, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-  `);
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, $15)
+    ON CONFLICT (name) DO NOTHING
+  `;
 
   // Duplicate update: upgrade classification only if existing row is unclassified/low confidence
-  const updateStmt = db.prepare(`
+  const updateSql = `
     UPDATE jobs SET
       source = CASE
-        WHEN source IS NULL OR source = '' THEN ?
-        WHEN source NOT LIKE '%' || ? || '%' THEN source || ',' || ?
+        WHEN source IS NULL OR source = '' THEN $1
+        WHEN source NOT LIKE '%' || $2 || '%' THEN source || ',' || $3
         ELSE source
       END,
-      category        = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN ? ELSE category END,
-      subcategory     = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN ? ELSE subcategory END,
-      confidence      = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN ? ELSE confidence END,
-      classified_at   = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN ? ELSE classified_at END,
-      wikipedia_summary = COALESCE(wikipedia_summary, ?)
-    WHERE name = ?
-  `);
+      category        = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $4 ELSE category END,
+      subcategory     = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $5 ELSE subcategory END,
+      confidence      = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $6 ELSE confidence END,
+      classified_at   = CASE WHEN (confidence IS NULL OR confidence < 0.40 OR category IS NULL OR category = 'Unclassified') THEN $7 ELSE classified_at END,
+      wikipedia_summary = COALESCE(wikipedia_summary, $8)
+    WHERE name = $9
+  `;
 
   let added = 0, classified = 0, unclassified = 0;
   const newCompanies = [];
 
-  db.transaction(() => {
+  await tx(async (client) => {
     for (const entry of rawResults) {
       const key      = entry.name.toLowerCase();
       const existing = existingMap.get(key);
@@ -94,37 +95,37 @@ router.post('/scrape', async (req, res) => {
       else unclassified++;
 
       const domain = getDomain(entry.careersUrl);
-      const r = insertStmt.run(
+      const r = await client.query(insertSql, [
         entry.name,
         dbCategory, dbSubcategory, dbConfidence, dbClassifiedAt, wikiSummary,
         entry.jobTitle || 'SWE Intern', entry.location || 'USA',
         entry.city || null, entry.state || null, entry.country || 'US',
         entry.careersUrl || '', entry.source || 'scrape', domain,
         entry.source || 'scrape'
-      );
+      ]);
 
-      if (r.changes > 0) {
+      if (r.rowCount > 0) {
         added++;
         newCompanies.push({ name: entry.name, category: dbCategory, location: entry.location || 'USA', source: entry.source || 'scrape', careersUrl: entry.careersUrl || '' });
       } else {
         const firstSrc = (entry.source || '').split(',')[0] || '';
-        updateStmt.run(
+        await client.query(updateSql, [
           firstSrc, firstSrc, firstSrc,
           cls.category, cls.subcategory, cls.confidence, cls.classified_at, wikiSummary,
           entry.name
-        );
+        ]);
       }
     }
-  })();
+  });
 
   // Log category breakdown
-  const breakdown = db.prepare(`
+  const breakdown = await all(`
     SELECT category, subcategory, COUNT(*) as n FROM jobs
     GROUP BY category, subcategory ORDER BY n DESC LIMIT 10
-  `).all();
+  `);
   console.log('[scrape] top categories:', breakdown.map(r => `${r.category}/${r.subcategory}:${r.n}`).join(', '));
 
-  const total = db.prepare('SELECT COUNT(*) as n FROM jobs').get().n;
+  const total = (await one('SELECT COUNT(*) as n FROM jobs')).n;
   console.log(`[scrape] done — added=${added} total=${total} classified=${classified} unclassified=${unclassified}`);
 
   res.json({ added, total, succeeded, failedSrc, classified, unclassified, bySource, errors: scrapeErrors, newCompanies });
@@ -132,15 +133,15 @@ router.post('/scrape', async (req, res) => {
 
 // ── Search companies by name ──────────────────────────────────────────────────
 
-router.get('/search', (req, res) => {
+router.get('/search', async (req, res) => {
   try {
     const { q } = req.query;
     if (!q?.trim()) return res.json([]);
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT id, name, category, subcategory, location, source, status, website, description, yc_batch, tags, team_size
-      FROM jobs WHERE name LIKE ?
+      FROM jobs WHERE name ILIKE $1
       ORDER BY name LIMIT 8
-    `).all(`%${q.trim()}%`);
+    `, [`%${q.trim()}%`]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -149,12 +150,12 @@ router.get('/search', (req, res) => {
 
 // ── Company detail (info + contacts + roles) ──────────────────────────────────
 
-router.get('/:id/detail', (req, res) => {
+router.get('/:id/detail', async (req, res) => {
   try {
-    const company = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!company) return res.status(404).json({ error: 'Company not found' });
-    const contacts = db.prepare('SELECT * FROM job_contacts WHERE job_id = ? ORDER BY seniority_score DESC, created_at DESC').all(req.params.id);
-    const roles    = db.prepare('SELECT * FROM roles WHERE company_id = ? ORDER BY created_at DESC').all(req.params.id);
+    const contacts = await all('SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY seniority_score DESC, created_at DESC', [req.params.id]);
+    const roles    = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [req.params.id]);
     res.json({ company, contacts, roles });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -163,12 +164,12 @@ router.get('/:id/detail', (req, res) => {
 
 // ── Update company status ─────────────────────────────────────────────────────
 
-router.put('/:id/status', (req, res) => {
+router.put('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     const valid = ['new','researching','contacted','responded','skip'];
     if (!status || !valid.includes(status.toLowerCase())) return res.status(400).json({ error: 'invalid status' });
-    db.prepare('UPDATE jobs SET status = ? WHERE id = ?').run(status, req.params.id);
+    await run('UPDATE jobs SET status = $1 WHERE id = $2', [status, req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -177,9 +178,9 @@ router.put('/:id/status', (req, res) => {
 
 // ── Get saved roles for a company ────────────────────────────────────────────
 
-router.get('/:id/roles', (req, res) => {
+router.get('/:id/roles', async (req, res) => {
   try {
-    const roles = db.prepare('SELECT * FROM roles WHERE company_id = ? ORDER BY created_at DESC').all(req.params.id);
+    const roles = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [req.params.id]);
     res.json(roles);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -188,9 +189,9 @@ router.get('/:id/roles', (req, res) => {
 
 // ── Canonical careers URL (for "Check Careers Page" button on mount) ─────────
 
-router.get('/:id/careers-url', (req, res) => {
+router.get('/:id/careers-url', async (req, res) => {
   try {
-    const c = db.prepare('SELECT name, url FROM jobs WHERE id = ?').get(req.params.id);
+    const c = await one('SELECT name, url FROM jobs WHERE id = $1', [req.params.id]);
     if (!c) return res.status(404).json({ error: 'Company not found' });
     const known = knownCareersFor(c.name);
     if (known?.root) return res.json({ url: known.root + (known.internQuery || ''), source: 'known' });
@@ -549,7 +550,7 @@ async function fetchAtsRoles(slug, companyName, companyLocation, roleType = 'int
 
 router.post('/:id/scrape-roles', async (req, res) => {
   try {
-    const company = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const company = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!company) return res.status(404).json({ error: 'Company not found' });
     const name = company.name;
     const roleType = req.body?.roleType || 'intern'; // 'intern' or 'fulltime'
@@ -805,19 +806,21 @@ router.post('/:id/scrape-roles', async (req, res) => {
     // Step 2: Replace ALL stored roles with fresh results (full refresh, no stale data)
     let added = 0;
     if (foundRoles.length > 0) {
-      db.transaction(() => {
+      await tx(async (client) => {
         // Clear existing roles for this company matching the roleType — allows keeping intern + fulltime roles separately
-        db.prepare(`DELETE FROM roles WHERE company_id = ? AND role_type = ?`).run(company.id, roleType);
-        const insert = db.prepare(`INSERT OR IGNORE INTO roles (company_id, title, location, source, apply_url, posted_at, role_type) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+        await client.query(`DELETE FROM roles WHERE company_id = $1 AND role_type = $2`, [company.id, roleType]);
         const usRoles = foundRoles.filter(r => isUsLocation(r.location));
         for (const role of usRoles.slice(0, 20)) {
-          const r = insert.run(company.id, role.title, role.location || null, role.source, role.apply_url, role.posted_at, role.role_type || roleType);
-          if (r.changes > 0) added++;
+          const r = await client.query(
+            `INSERT INTO roles (company_id, title, location, source, apply_url, posted_at, role_type) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (company_id, title, apply_url) DO NOTHING`,
+            [company.id, role.title, role.location || null, role.source, role.apply_url, role.posted_at, role.role_type || roleType]
+          );
+          if (r.rowCount > 0) added++;
         }
-      })();
+      });
     }
 
-    const allRoles = db.prepare('SELECT * FROM roles WHERE company_id = ? ORDER BY created_at DESC').all(company.id);
+    const allRoles = await all('SELECT * FROM roles WHERE company_id = $1 ORDER BY created_at DESC', [company.id]);
 
     // Build a canonical "careers search" URL for the "Check Careers Page" button.
     // Priority: known big-company search URL → derive from company.url origin → company.url as-is.
@@ -863,33 +866,33 @@ router.get('/scraper-health', async (req, res) => {
 // ── Reclassify unclassified companies (exported for server startup) ────────────
 
 export async function runReclassifyUnclassified() {
-  const rows = db.prepare(`
+  const rows = await all(`
     SELECT name, roles as jobTitle, '' as jobDescription
     FROM jobs
     WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40
     ORDER BY name
-  `).all();
+  `);
 
   if (rows.length === 0) { console.log('[reclassify] nothing to reclassify'); return { reclassified: 0 }; }
   console.log(`[reclassify] reclassifying ${rows.length} companies...`);
 
   const classifiedMap = await classifyCompanies(rows);
-  const updateStmt = db.prepare(`
+  const updateSql = `
     UPDATE jobs SET
-      category = ?, subcategory = ?, confidence = ?,
-      classified_at = ?, wikipedia_summary = COALESCE(wikipedia_summary, ?)
-    WHERE name = ?
-  `);
+      category = $1, subcategory = $2, confidence = $3,
+      classified_at = $4, wikipedia_summary = COALESCE(wikipedia_summary, $5)
+    WHERE name = $6
+  `;
 
   let reclassified = 0;
-  db.transaction(() => {
+  await tx(async (client) => {
     for (const row of rows) {
       const cls = classifiedMap.get(row.name.toLowerCase());
       if (!cls) continue;
-      updateStmt.run(cls.category, cls.subcategory, cls.confidence, cls.classified_at, cls.wikipedia || '', row.name);
+      await client.query(updateSql, [cls.category, cls.subcategory, cls.confidence, cls.classified_at, cls.wikipedia || '', row.name]);
       if (cls.category !== 'Unclassified') reclassified++;
     }
-  })();
+  });
 
   console.log(`[reclassify] done — ${reclassified}/${rows.length} newly classified`);
   return { reclassified, total: rows.length };
@@ -898,7 +901,7 @@ export async function runReclassifyUnclassified() {
 router.post('/reclassify-unclassified', async (req, res) => {
   try {
     const result = await runReclassifyUnclassified();
-    const breakdown = db.prepare('SELECT category, COUNT(*) as n FROM jobs GROUP BY category ORDER BY n DESC').all();
+    const breakdown = await all('SELECT category, COUNT(*) as n FROM jobs GROUP BY category ORDER BY n DESC');
     res.json({ ...result, breakdown });
   } catch (err) {
     console.error('reclassify-unclassified error:', err.message);
@@ -908,15 +911,15 @@ router.post('/reclassify-unclassified', async (req, res) => {
 
 // ── Debug: category breakdown ─────────────────────────────────────────────────
 
-router.get('/debug/categories', (req, res) => {
+router.get('/debug/categories', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT category, subcategory, COUNT(*) as n
       FROM jobs
       GROUP BY category, subcategory
       ORDER BY n DESC
-    `).all();
-    res.json({ rows, total: db.prepare('SELECT COUNT(*) as n FROM jobs').get().n });
+    `);
+    res.json({ rows, total: (await one('SELECT COUNT(*) as n FROM jobs')).n });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -926,42 +929,42 @@ router.get('/debug/categories', (req, res) => {
 
 router.post('/reclassify-all', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT name, roles as jobTitle, '' as jobDescription
       FROM jobs
       WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40
       ORDER BY name
-    `).all();
+    `);
 
     console.log(`[reclassify] ${rows.length} companies to reclassify`);
     if (rows.length === 0) return res.json({ reclassified: 0, message: 'Nothing to reclassify' });
 
     const classifiedMap = await classifyCompanies(rows);
 
-    const updateStmt = db.prepare(`
+    const updateSql = `
       UPDATE jobs SET
-        category = ?, subcategory = ?, confidence = ?,
-        classified_at = ?, wikipedia_summary = COALESCE(wikipedia_summary, ?)
-      WHERE name = ?
-    `);
+        category = $1, subcategory = $2, confidence = $3,
+        classified_at = $4, wikipedia_summary = COALESCE(wikipedia_summary, $5)
+      WHERE name = $6
+    `;
 
     let reclassified = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const row of rows) {
         const cls = classifiedMap.get(row.name.toLowerCase());
         if (!cls) continue;
-        updateStmt.run(
+        await client.query(updateSql, [
           cls.category, cls.subcategory, cls.confidence,
           cls.classified_at, cls.wikipedia || '',
           row.name
-        );
+        ]);
         reclassified++;
       }
-    })();
+    });
 
-    const breakdown = db.prepare(`
+    const breakdown = await all(`
       SELECT category, COUNT(*) as n FROM jobs GROUP BY category ORDER BY n DESC
-    `).all();
+    `);
     console.log('[reclassify] done —', breakdown.map(r => `${r.category}:${r.n}`).join(', '));
 
     res.json({ reclassified, breakdown });
@@ -973,33 +976,36 @@ router.post('/reclassify-all', async (req, res) => {
 
 // ── List companies ────────────────────────────────────────────────────────────
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { category, search } = req.query;
     let sql = 'SELECT * FROM jobs WHERE 1=1';
     const params = [];
+    let i = 1;
     if (category && category !== 'All') {
-      sql += ' AND category = ?';
+      sql += ` AND category = $${i++}`;
       params.push(category);
     }
     if (search) {
-      sql += ' AND (name LIKE ? OR roles LIKE ? OR location LIKE ?)';
+      sql += ` AND (name ILIKE $${i} OR roles ILIKE $${i+1} OR location ILIKE $${i+2})`;
+      i += 3;
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
     sql += ' ORDER BY pay DESC';
-    const jobs = db.prepare(sql).all(...params);
+    const jobs = await all(sql, params);
 
     // Attach contact counts
-    const countStmt = db.prepare("SELECT COUNT(*) as n FROM job_contacts WHERE job_id = ?");
-    const liStmt    = db.prepare("SELECT COUNT(*) as n FROM job_contacts WHERE job_id = ? AND source = 'linkedin'");
-    const emStmt    = db.prepare("SELECT COUNT(*) as n FROM job_contacts WHERE job_id = ? AND source = 'hunter'");
+    const countSql = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1";
+    const liSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND source = 'linkedin'";
+    const emSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND source = 'hunter'";
 
-    res.json(jobs.map(j => ({
+    const enriched = await Promise.all(jobs.map(async (j) => ({
       ...j,
-      contact_count:  countStmt.get(j.id).n,
-      linkedin_count: liStmt.get(j.id).n,
-      email_count:    emStmt.get(j.id).n,
+      contact_count:  Number((await one(countSql, [j.id])).n),
+      linkedin_count: Number((await one(liSql, [j.id])).n),
+      email_count:    Number((await one(emSql, [j.id])).n),
     })));
+    res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1007,14 +1013,15 @@ router.get('/', (req, res) => {
 
 // ── Get contacts for a company ────────────────────────────────────────────────
 
-router.get('/:id/contacts', (req, res) => {
+router.get('/:id/contacts', async (req, res) => {
   try {
     const { source } = req.query; // 'linkedin' | 'hunter' | undefined (all)
-    let sql = 'SELECT * FROM job_contacts WHERE job_id = ?';
+    let sql = 'SELECT * FROM job_contacts WHERE job_id = $1';
     const params = [req.params.id];
-    if (source) { sql += ' AND source = ?'; params.push(source); }
+    let i = 2;
+    if (source) { sql += ` AND source = $${i++}`; params.push(source); }
     sql += ' ORDER BY created_at DESC';
-    res.json(db.prepare(sql).all(...params));
+    res.json(await all(sql, params));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1024,7 +1031,7 @@ router.get('/:id/contacts', (req, res) => {
 // Emits: start | source | complete | error events as Server-Sent Events
 
 router.get('/:id/find-people-stream', async (req, res) => {
-  const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+  const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
   if (!job) { res.status(404).json({ error: 'Company not found' }); return; }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -1052,18 +1059,19 @@ router.get('/:id/find-people-stream', async (req, res) => {
     );
 
     // Save contacts (preserve their individual source tags)
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES (?, ?, ?, ?, ?)
-    `);
+    const insertSql = `
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (job_id, name) DO NOTHING
+    `;
     let added = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const p of people.slice(0, 10)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = insert.run(job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin');
-        if (r.changes > 0) added++;
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        if (r.rowCount > 0) added++;
       }
-    })();
+    });
 
     const bySource = {};
     for (const p of people) { bySource[p.source] = (bySource[p.source] || 0) + 1; }
@@ -1080,7 +1088,7 @@ router.get('/:id/find-people-stream', async (req, res) => {
 
 router.post('/:id/find-linkedin', async (req, res) => {
   try {
-    const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const people = await apify.findPeopleAtLinkedInCompany(
@@ -1090,23 +1098,25 @@ router.post('/:id/find-linkedin', async (req, res) => {
       null // no progress callback for silent auto-trigger
     );
 
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES (?, ?, ?, ?, ?)
-    `);
+    const insertSql = `
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (job_id, name) DO NOTHING
+    `;
 
     let added = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const p of people.slice(0, 8)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = insert.run(job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin');
-        if (r.changes > 0) added++;
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        if (r.rowCount > 0) added++;
       }
-    })();
+    });
 
-    const contacts = db.prepare(
-      'SELECT * FROM job_contacts WHERE job_id = ? ORDER BY created_at DESC'
-    ).all(job.id);
+    const contacts = await all(
+      'SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY created_at DESC',
+      [job.id]
+    );
 
     res.json({ added, contacts });
   } catch (err) {
@@ -1178,7 +1188,7 @@ function isEngineeringContact(title = '') {
 
 router.post('/:id/find-emails', async (req, res) => {
   try {
-    const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const { domain: domainOverride } = req.body || {};
@@ -1222,7 +1232,7 @@ router.post('/:id/find-emails', async (req, res) => {
     }
 
     // Save resolved domain back to DB (only if it's a real company domain)
-    db.prepare('UPDATE jobs SET domain = ? WHERE id = ?').run(domain, job.id);
+    await run('UPDATE jobs SET domain = $1 WHERE id = $2', [domain, job.id]);
 
     // Search with fallback to .com/.io/.co variants
     let { domain: usedDomain, emails } = await findEmailsWithFallback(domain, 10);
@@ -1243,7 +1253,7 @@ router.post('/:id/find-emails', async (req, res) => {
             emails = retry.emails;
             domain = hunterDomain;
             console.log(`[Hunter] retry succeeded: ${emails.length} emails for ${usedDomain}`);
-            db.prepare('UPDATE jobs SET domain = ? WHERE id = ?').run(usedDomain, job.id);
+            await run('UPDATE jobs SET domain = $1 WHERE id = $2', [usedDomain, job.id]);
           }
         } else {
           console.log(`[Hunter] rejected "${hunterDomain}" — doesn't match company "${job.name}"`);
@@ -1275,24 +1285,26 @@ router.post('/:id/find-emails', async (req, res) => {
       console.log(`[find-emails] filtered out ${filteredOut} non-engineering contacts (${emails.length} → ${engEmails.length})`);
     }
 
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO job_contacts (job_id, name, title, linkedin_url, email, source)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
+    const insertSql = `
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, email, source)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      ON CONFLICT (job_id, name) DO NOTHING
+    `;
 
     let added = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const e of engEmails) {
         if (!e.email) continue;
         const src = e.source || emailSource || 'hunter';
-        const r = insert.run(job.id, e.name || 'Unknown', e.title || '', e.linkedin_url || '', e.email, src);
-        if (r.changes > 0) added++;
+        const r = await client.query(insertSql, [job.id, e.name || 'Unknown', e.title || '', e.linkedin_url || '', e.email, src]);
+        if (r.rowCount > 0) added++;
       }
-    })();
+    });
 
-    const contacts = db.prepare(
-      "SELECT * FROM job_contacts WHERE job_id = ? AND email IS NOT NULL AND email != '' ORDER BY created_at DESC"
-    ).all(job.id);
+    const contacts = await all(
+      "SELECT * FROM job_contacts WHERE job_id = $1 AND email IS NOT NULL AND email != '' ORDER BY created_at DESC",
+      [job.id]
+    );
 
     // When all sources found contacts but all were non-engineering, surface a clear message
     const allFiltered = emails.length > 0 && engEmails.length === 0;
@@ -1314,10 +1326,10 @@ router.post('/:id/find-emails', async (req, res) => {
 
 router.post('/contacts/:contactId/find-email', async (req, res) => {
   try {
-    const contact = db.prepare(`
+    const contact = await one(`
       SELECT jc.*, j.id AS job_id, j.name AS company_name, j.domain AS job_domain, j.url AS job_url
-      FROM job_contacts jc JOIN jobs j ON j.id = jc.job_id WHERE jc.id = ?
-    `).get(req.params.contactId);
+      FROM job_contacts jc JOIN jobs j ON j.id = jc.job_id WHERE jc.id = $1
+    `, [req.params.contactId]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
     if (contact.email) return res.json({ email: contact.email, cached: true });
     if (!contact.name) return res.status(400).json({ error: 'Contact has no name to search' });
@@ -1340,7 +1352,7 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
     }
     if (!domain) return res.status(400).json({ error: `Could not resolve domain for ${contact.company_name}` });
 
-    db.prepare('UPDATE jobs SET domain = ? WHERE id = ?').run(domain, contact.job_id);
+    await run('UPDATE jobs SET domain = $1 WHERE id = $2', [domain, contact.job_id]);
 
     const found = await findEmailForPerson(domain, firstName, lastName);
     if (!found?.email) {
@@ -1352,10 +1364,12 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
                  : found.confidence >= 80 ? 'valid'
                  : found.confidence >= 50 ? 'risky' : null;
 
-    db.prepare('UPDATE job_contacts SET email = ?, email_status = ?, source = COALESCE(NULLIF(source, \'\'), ?) WHERE id = ?')
-      .run(found.email, status, 'hunter', contact.id);
+    await run(
+      "UPDATE job_contacts SET email = $1, email_status = $2, source = COALESCE(NULLIF(source, ''), $3) WHERE id = $4",
+      [found.email, status, 'hunter', contact.id]
+    );
 
-    const updated = db.prepare('SELECT * FROM job_contacts WHERE id = ?').get(contact.id);
+    const updated = await one('SELECT * FROM job_contacts WHERE id = $1', [contact.id]);
     res.json({ email: found.email, email_status: status, contact: updated, domain, confidence: found.confidence });
   } catch (err) {
     console.error('contacts/find-email error:', err.message);
@@ -1367,12 +1381,12 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
 
 router.post('/contacts/:contactId/generate', async (req, res) => {
   try {
-    const contact = db.prepare(`
+    const contact = await one(`
       SELECT jc.*, j.name as company_name, j.category as company_type
       FROM job_contacts jc
       JOIN jobs j ON j.id = jc.job_id
-      WHERE jc.id = ?
-    `).get(req.params.contactId);
+      WHERE jc.id = $1
+    `, [req.params.contactId]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
     const { type = 'email', extraContext = '' } = req.body;
@@ -1388,12 +1402,14 @@ router.post('/contacts/:contactId/generate', async (req, res) => {
     if (type === 'linkedin') {
       const result = await generateOutreach({ ...params, type: 'linkedin' });
       const dm = result.message || result.body || '';
-      db.prepare("UPDATE job_contacts SET generated_dm = ?, status = 'generated' WHERE id = ?").run(dm, contact.id);
+      await run("UPDATE job_contacts SET generated_dm = $1, status = 'generated' WHERE id = $2", [dm, contact.id]);
       return res.json({ message: dm, dm });
     } else {
       const result = await generateOutreach({ ...params, type: 'cold_email' });
-      db.prepare("UPDATE job_contacts SET generated_subject = ?, generated_body = ?, status = 'generated' WHERE id = ?")
-        .run(result.subject, result.body, contact.id);
+      await run(
+        "UPDATE job_contacts SET generated_subject = $1, generated_body = $2, status = 'generated' WHERE id = $3",
+        [result.subject, result.body, contact.id]
+      );
       return res.json({ subject: result.subject, body: result.body });
     }
   } catch (err) {
@@ -1404,23 +1420,23 @@ router.post('/contacts/:contactId/generate', async (req, res) => {
 
 // ── Update contact (save edits / status) ──────────────────────────────────────
 
-router.put('/contacts/:contactId', (req, res) => {
+router.put('/contacts/:contactId', async (req, res) => {
   try {
     const { status, generated_dm, generated_subject, generated_body, email } = req.body;
-    db.prepare(`
+    await run(`
       UPDATE job_contacts SET
-        status            = COALESCE(?, status),
-        generated_dm      = COALESCE(?, generated_dm),
-        generated_subject = COALESCE(?, generated_subject),
-        generated_body    = COALESCE(?, generated_body),
-        email             = COALESCE(?, email)
-      WHERE id = ?
-    `).run(
+        status            = COALESCE($1, status),
+        generated_dm      = COALESCE($2, generated_dm),
+        generated_subject = COALESCE($3, generated_subject),
+        generated_body    = COALESCE($4, generated_body),
+        email             = COALESCE($5, email)
+      WHERE id = $6
+    `, [
       status || null, generated_dm || null,
       generated_subject || null, generated_body || null,
       email || null, req.params.contactId
-    );
-    res.json(db.prepare('SELECT * FROM job_contacts WHERE id = ?').get(req.params.contactId));
+    ]);
+    res.json(await one('SELECT * FROM job_contacts WHERE id = $1', [req.params.contactId]));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1428,9 +1444,9 @@ router.put('/contacts/:contactId', (req, res) => {
 
 // ── Delete a contact ──────────────────────────────────────────────────────────
 
-router.delete('/contacts/:contactId', (req, res) => {
+router.delete('/contacts/:contactId', async (req, res) => {
   try {
-    db.prepare('DELETE FROM job_contacts WHERE id = ?').run(req.params.contactId);
+    await run('DELETE FROM job_contacts WHERE id = $1', [req.params.contactId]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1441,14 +1457,14 @@ router.delete('/contacts/:contactId', (req, res) => {
 
 router.post('/:id/scrape-linkedin-company', async (req, res) => {
   try {
-    const job = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const job = await one('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
     if (!job) return res.status(404).json({ error: 'Company not found' });
 
     const { linkedinUrl } = req.body;
 
     // Save the LinkedIn company URL if provided
     if (linkedinUrl) {
-      db.prepare('UPDATE jobs SET linkedin_company_url = ? WHERE id = ?').run(linkedinUrl, job.id);
+      await run('UPDATE jobs SET linkedin_company_url = $1 WHERE id = $2', [linkedinUrl, job.id]);
     }
 
     const urlToUse = linkedinUrl || job.linkedin_company_url || null;
@@ -1456,23 +1472,25 @@ router.post('/:id/scrape-linkedin-company', async (req, res) => {
     // Find people — passes domain + cookie is read from env inside the function
     const people = await apify.findPeopleAtLinkedInCompany(job.name, urlToUse, job.domain || null, null);
 
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO job_contacts (job_id, name, title, linkedin_url, source)
-      VALUES (?, ?, ?, ?, ?)
-    `);
+    const insertSql = `
+      INSERT INTO job_contacts (job_id, name, title, linkedin_url, source)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (job_id, name) DO NOTHING
+    `;
 
     let added = 0;
-    db.transaction(() => {
+    await tx(async (client) => {
       for (const p of people.slice(0, 8)) {
         if (!p.name || p.name.toLowerCase() === 'unknown') continue;
-        const r = insert.run(job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin');
-        if (r.changes > 0) added++;
+        const r = await client.query(insertSql, [job.id, p.name, p.title || '', p.linkedin_url || '', p.source || 'linkedin']);
+        if (r.rowCount > 0) added++;
       }
-    })();
+    });
 
-    const contacts = db.prepare(
-      'SELECT * FROM job_contacts WHERE job_id = ? ORDER BY created_at DESC'
-    ).all(job.id);
+    const contacts = await all(
+      'SELECT * FROM job_contacts WHERE job_id = $1 ORDER BY created_at DESC',
+      [job.id]
+    );
 
     res.json({ added, contacts, linkedinUrl: urlToUse });
   } catch (err) {
