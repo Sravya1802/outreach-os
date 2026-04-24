@@ -27,6 +27,7 @@ import importSheetRouter from './routes/importSheet.js';
 import careerOpsRouter   from './routes/careerOps.js';
 import automationsRouter  from './routes/automations.js';
 import ycRouter           from './routes/yc.js';
+import { requireAuth }    from './middleware/requireAuth.js';
 import { scrapeAllSources } from './services/scraper.js';
 import { importStartupSheet } from './services/startupSheet.js';
 import { checkAllCredits }   from './services/creditChecker.js';
@@ -51,6 +52,29 @@ app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 
 app.use('/api', rateLimit({ windowMs: 60_000, max: 200, standardHeaders: true, legacyHeaders: false }));
+
+// ── Public endpoints ─────────────────────────────────────────────────────────
+// /api/health is intentionally unauthenticated — monitoring, pm2 keep-alive,
+// and nginx health checks all hit it. Declared before requireAuth.
+app.get('/api/health', (req, res) => {
+  res.json({
+    status:       'ok',
+    ai_provider:  process.env.AI_PROVIDER || 'gemini',
+    has_gemini:   !!process.env.GEMINI_API_KEY   && process.env.GEMINI_API_KEY   !== 'your_gemini_key_here',
+    has_openai:   !!process.env.OPENAI_API_KEY,
+    has_apify:    !!process.env.APIFY_API_TOKEN  && process.env.APIFY_API_TOKEN  !== 'your_apify_token_here',
+    has_apollo:   !!process.env.APOLLO_API_KEY   && process.env.APOLLO_API_KEY   !== 'your_apollo_key_here',
+    has_serper:   !!process.env.SERPER_API_KEY,
+    has_hunter:   !!process.env.HUNTER_API_KEY,
+    has_prospeo:  !!process.env.PROSPEO_API_KEY,
+    has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
+    auth_mode:    process.env.AUTH_MODE || 'enforce',
+  });
+});
+
+// ── Auth middleware for everything else under /api ──────────────────────────
+// Controlled by AUTH_MODE env var. See backend/middleware/requireAuth.js.
+app.use('/api', requireAuth);
 
 app.use('/api/companies',  companiesRouter);
 app.use('/api/contacts',   contactsRouter);
@@ -248,21 +272,6 @@ app.get('/api/activity', async (req, res) => {
   } catch (err) {
     res.json({ activity: [] });
   }
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({
-    status:       'ok',
-    ai_provider:  process.env.AI_PROVIDER || 'gemini',
-    has_gemini:   !!process.env.GEMINI_API_KEY   && process.env.GEMINI_API_KEY   !== 'your_gemini_key_here',
-    has_openai:   !!process.env.OPENAI_API_KEY,
-    has_apify:    !!process.env.APIFY_API_TOKEN  && process.env.APIFY_API_TOKEN  !== 'your_apify_token_here',
-    has_apollo:   !!process.env.APOLLO_API_KEY   && process.env.APOLLO_API_KEY   !== 'your_apollo_key_here',
-    has_serper:   !!process.env.SERPER_API_KEY,
-    has_hunter:   !!process.env.HUNTER_API_KEY,
-    has_prospeo:  !!process.env.PROSPEO_API_KEY,
-    has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
-  });
 });
 
 app.use((err, req, res, next) => {
