@@ -633,11 +633,12 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
   const [filter, setFilter]     = useState('all')
   const [error, setError]       = useState(null)
   const [sending, setSending]   = useState(null)
+  const [roleType, setRoleType] = useState('intern') // 'intern' | 'fulltime' | 'all'
 
   async function handleScan() {
     setScanning(true); setError(null); setJobs([])
     try {
-      const r = await api.career.scanPortals()
+      const r = await api.career.scanPortals(roleType)
       setJobs(r.jobs || []); setBySource(r.bySource || {})
     } catch (err) { setError(err.message) }
     finally { setScanning(false) }
@@ -645,10 +646,15 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
 
   const filtered = filter === 'all' ? jobs : jobs.filter(j => j.source === filter)
   const srcColors = { greenhouse:'#16a34a', lever:'#2563eb', ashby:'#7c3aed' }
+  const ROLE_OPTS = [
+    { k: 'intern',   l: 'Internships' },
+    { k: 'fulltime', l: 'Full-time' },
+    { k: 'all',      l: 'All roles' },
+  ]
 
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
         <div>
           <div style={{ fontSize:15, fontWeight:700, color:'#0f172a', marginBottom:3 }}>Live Portal Scanner</div>
           <div style={{ fontSize:12, color:'#94a3b8' }}>Scans Greenhouse, Lever & Ashby for CS/engineering roles posted this week</div>
@@ -657,6 +663,19 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
           style={{ padding:'10px 22px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: scanning ? 'default':'pointer', display:'flex', alignItems:'center', gap:8 }}>
           {scanning ? <><Spin size={14} color="#fff" /> Scanning…</> : '🔍 Scan Now'}
         </button>
+      </div>
+
+      {/* Role-type toggle — filters backend results by intern / fulltime / all */}
+      <div style={{ display:'flex', gap:6, marginBottom:18, alignItems:'center' }}>
+        <span style={{ fontSize:11, fontWeight:600, color:'#64748b', marginRight:4 }}>ROLE TYPE</span>
+        {ROLE_OPTS.map(({ k, l }) => (
+          <button key={k} onClick={() => setRoleType(k)} disabled={scanning}
+            style={{ padding:'5px 14px', fontSize:12, fontWeight:700, border:`1px solid ${roleType===k ? '#6366f1' : '#e2e8f0'}`, borderRadius:7, cursor: scanning ? 'default':'pointer',
+              background: roleType===k ? '#eef2ff' : '#fff',
+              color: roleType===k ? '#4f46e5' : '#64748b' }}>
+            {l}
+          </button>
+        ))}
       </div>
 
       {jobs.length > 0 && (
@@ -678,7 +697,7 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
         <div style={{ textAlign:'center', padding:'72px 0', color:'#94a3b8' }}>
           <div style={{ fontSize:44, marginBottom:14 }}>🔍</div>
           <div style={{ fontSize:14, fontWeight:600, color:'#64748b', marginBottom:6 }}>Ready to scan 50+ company portals</div>
-          <div style={{ fontSize:12 }}>Filters to CS/SWE internship roles posted in the last 7 days</div>
+          <div style={{ fontSize:12 }}>Filters to CS/SWE {roleType === 'intern' ? 'internship' : roleType === 'fulltime' ? 'full-time' : 'intern + full-time'} roles posted in the last 7 days</div>
         </div>
       )}
 
