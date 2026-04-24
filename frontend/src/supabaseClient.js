@@ -1,7 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
+// `import.meta.env` is Vite-only; guard so this module imports cleanly under
+// plain Node (e.g. `node --test`) where env is undefined.
+const ENV = import.meta.env || {}
+const supabaseUrl = ENV.VITE_SUPABASE_URL
+const supabaseAnonKey = ENV.VITE_SUPABASE_ANON_KEY
 
 console.log('[Supabase] URL:', supabaseUrl ? '✓ loaded' : '✗ MISSING')
 console.log('[Supabase] ANON_KEY:', supabaseAnonKey ? '✓ loaded' : '✗ MISSING')

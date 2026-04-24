@@ -3,9 +3,16 @@
 //
 // Every route hits the Express backend at VITE_API_URL (Oracle VM in prod,
 // '' in dev for vite proxy). No direct Supabase table access — the backend
-// owns all data access and business logic. Supabase is only used for auth
-// (App.jsx / Login.jsx).
+// owns all data access and business logic. Supabase is only used for auth:
+//   - App.jsx / Login.jsx drive the login flow
+//   - this module reads the current session JWT and attaches it to every
+//     outbound request (Authorization: Bearer <jwt>). For URL-returning
+//     helpers (EventSource, window.open, <a href>) — which can't set headers
+//     — the token is appended via ?access_token=<jwt>. The backend middleware
+//     accepts either source.
 // ─────────────────────────────────────────────────────────────────────────────
+
+import { supabase } from './supabaseClient.js'
 
 const ENV = import.meta.env || {}
 const BASE = ENV.VITE_API_URL ? ENV.VITE_API_URL.replace(/\/$/, '') : ''
@@ -14,12 +21,40 @@ export const apiUrl = (path = '') => `${API}${path.startsWith('/') ? path : `/${
 
 const isFormData = (body) => typeof FormData !== 'undefined' && body instanceof FormData
 
+// ── Auth token plumbing ─────────────────────────────────────────────────────
+// URL-returning helpers need a sync read of the current JWT (they're called
+// inside JSX: <a href={reportHtmlUrl(id)}>, new EventSource(...), window.open).
+// Keep a cached copy updated by Supabase's auth state.
+let cachedToken = null
+try {
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    cachedToken = session?.access_token || null
+  }).catch(() => {})
+  supabase.auth.onAuthStateChange((_event, session) => {
+    cachedToken = session?.access_token || null
+  })
+} catch { /* placeholder client in tests — stays unauthenticated */ }
+
+export function withAuthQuery(url) {
+  if (!cachedToken) return url
+  return url + (url.includes('?') ? '&' : '?') + 'access_token=' + encodeURIComponent(cachedToken)
+}
+
+// fetch-based calls get the freshest token (session may have auto-refreshed).
+async function authHeaders() {
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}
+  } catch { return {} }
+}
+
 async function apiCall(url, options = {}) {
+  const auth = await authHeaders()
   const init = {
     method: options.method || 'GET',
     headers: options.headers !== undefined
-      ? options.headers
-      : (isFormData(options.body) ? {} : { 'Content-Type': 'application/json' }),
+      ? { ...auth, ...options.headers }
+      : { ...auth, ...(isFormData(options.body) ? {} : { 'Content-Type': 'application/json' }) },
   }
   if (options.body !== undefined) {
     init.body = isFormData(options.body) ? options.body : JSON.stringify(options.body)
@@ -32,7 +67,11 @@ async function apiCall(url, options = {}) {
   return res.json()
 }
 
-export const rawApiFetch = (url, options = {}) => fetch(apiUrl(url), options)
+export async function rawApiFetch(url, options = {}) {
+  const auth = await authHeaders()
+  const headers = options.headers ? { ...auth, ...options.headers } : auth
+  return fetch(apiUrl(url), { ...options, headers })
+}
 
 const qs = (params) => {
   const entries = Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -119,7 +158,7 @@ export const api = {
     scrape:       (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
     updateStatus: (id, status) => apiCall(`/jobs/${id}/status`, { method: 'PUT', body: { status } }),
     findLinkedIn: (id) => apiCall(`/jobs/${id}/find-linkedin`, { method: 'POST', body: {} }),
-    findPeopleStream: (id) => apiUrl(`/jobs/${id}/find-people-stream`),
+    findPeopleStream: (id) => withAuthQuery(apiUrl(`/jobs/${id}/find-people-stream`)),
     findEmails: (id, domain = null) => apiCall(`/jobs/${id}/find-emails`, {
       method: 'POST',
       body: domain ? { domain } : {},
@@ -180,7 +219,7 @@ export const api = {
     getCompany:    (id) => apiCall(`/career/company/${id}`),
     updateCompany: (id, patch) => apiCall(`/career/company/${id}`, { method: 'PUT', body: patch }),
     scoreFit:      (id) => apiCall(`/career/company/${id}/score-fit`, { method: 'POST' }),
-    scoreFitUrl:   (id) => apiUrl(`/career/company/${id}/score-fit`),
+    scoreFitUrl:   (id) => withAuthQuery(apiUrl(`/career/company/${id}/score-fit`)),
 
     // ── Auto-apply ───────────────────────────────────────────────────────────
     autoApplyRun:           () => apiCall('/career/auto-apply/run', { method: 'POST' }),
@@ -195,11 +234,11 @@ export const api = {
       return apiCall(`/career/${companyId}/documents`, { method: 'POST', body: fd })
     },
     deleteDocument:   (companyId, docId) => apiCall(`/career/${companyId}/documents/${docId}`, { method: 'DELETE' }),
-    downloadDocument: (companyId, docId) => apiUrl(`/career/${companyId}/documents/${docId}/download`),
+    downloadDocument: (companyId, docId) => withAuthQuery(apiUrl(`/career/${companyId}/documents/${docId}/download`)),
 
     // ── Report / download URLs — backend renders the HTML/PDF directly ───────
-    reportHtmlUrl:  (id) => apiUrl(`/career/evaluations/${id}/report.html`),
-    downloadUrl:    (id) => apiUrl(`/career/download/${id}`),
+    reportHtmlUrl:  (id) => withAuthQuery(apiUrl(`/career/evaluations/${id}/report.html`)),
+    downloadUrl:    (id) => withAuthQuery(apiUrl(`/career/download/${id}`)),
     tailoredResume: (id) => apiCall(`/career/tailored-resume/${id}`, { method: 'POST' }),
   },
 
