@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { api } from '../api'
 
 const APP_STATUS_LABELS = {
   interested:   { label:'Interested',    bg:'#eff6ff', color:'#2563eb' },
@@ -37,8 +38,7 @@ export default function CareerOpsPage() {
   const [filter, setFilter]     = useState('all')
 
   useEffect(() => {
-    fetch('/api/career/ranked')
-      .then(r => r.ok ? r.json() : { applications: [] })
+    api.career.ranked()
       .then(d => { setApplications(d.applications || []); setLoading(false) })
       .catch(e => { console.warn('Career ranked fetch error:', e); setLoading(false) })
   }, [])

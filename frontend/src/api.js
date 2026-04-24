@@ -7,26 +7,32 @@
 // (App.jsx / Login.jsx).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const BASE = import.meta.env.VITE_API_URL || ''
-const API  = `${BASE}/api`
+const ENV = import.meta.env || {}
+const BASE = ENV.VITE_API_URL ? ENV.VITE_API_URL.replace(/\/$/, '') : ''
+export const API = `${BASE}/api`
+export const apiUrl = (path = '') => `${API}${path.startsWith('/') ? path : `/${path}`}`
+
+const isFormData = (body) => typeof FormData !== 'undefined' && body instanceof FormData
 
 async function apiCall(url, options = {}) {
   const init = {
     method: options.method || 'GET',
     headers: options.headers !== undefined
       ? options.headers
-      : (options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      : (isFormData(options.body) ? {} : { 'Content-Type': 'application/json' }),
   }
   if (options.body !== undefined) {
-    init.body = options.body instanceof FormData ? options.body : JSON.stringify(options.body)
+    init.body = isFormData(options.body) ? options.body : JSON.stringify(options.body)
   }
-  const res = await fetch(`${API}${url}`, init)
+  const res = await fetch(apiUrl(url), init)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(err.error || 'Request failed')
   }
   return res.json()
 }
+
+export const rawApiFetch = (url, options = {}) => fetch(apiUrl(url), options)
 
 const qs = (params) => {
   const entries = Object.entries(params || {}).filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -97,20 +103,38 @@ export const api = {
       pageSize: params.pageSize,
     })),
     dashboard:      () => apiCall('/unified/dashboard'),
+    allContacts:    (params = {}) => apiCall('/unified/all-contacts' + (
+      params instanceof URLSearchParams ? `?${params.toString()}` : qs(params)
+    )),
   },
 
   jobs: {
+    lastRefresh:  () => apiCall('/jobs/last-refresh'),
     search:       (q) => apiCall('/jobs/search' + qs({ q })),
     detail:       (id) => apiCall(`/jobs/${id}/detail`),
     roles:        (id) => apiCall(`/jobs/${id}/roles`),
     careersUrl:   (id) => apiCall(`/jobs/${id}/careers-url`),
     contacts:     (id) => apiCall(`/jobs/${id}/contacts`),
     scrapeRoles:  (id, roleType = 'intern') => apiCall(`/jobs/${id}/scrape-roles`, { method: 'POST', body: { roleType } }),
-    scrape:       (params) => apiCall('/companies/scrape', { method: 'POST', body: params }),
+    scrape:       (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
     updateStatus: (id, status) => apiCall(`/jobs/${id}/status`, { method: 'PUT', body: { status } }),
-    findEmails:          () => Promise.reject(new Error('Use /jobs/:id/find-emails directly from route-specific UI')),
-    findEmailForContact: () => Promise.reject(new Error('Use /jobs/contacts/:contactId/find-email directly from route-specific UI')),
-    generate:            () => Promise.reject(new Error('Use /jobs/contacts/:contactId/generate directly from route-specific UI')),
+    findLinkedIn: (id) => apiCall(`/jobs/${id}/find-linkedin`, { method: 'POST', body: {} }),
+    findPeopleStream: (id) => apiUrl(`/jobs/${id}/find-people-stream`),
+    findEmails: (id, domain = null) => apiCall(`/jobs/${id}/find-emails`, {
+      method: 'POST',
+      body: domain ? { domain } : {},
+    }),
+    findEmailForContact: (contactId) => apiCall(`/jobs/contacts/${contactId}/find-email`, { method: 'POST', body: {} }),
+    generate: (contactId, type = 'email', extraContext = '') => apiCall(`/jobs/contacts/${contactId}/generate`, {
+      method: 'POST',
+      body: { type, extraContext },
+    }),
+    updateContact: (contactId, data) => apiCall(`/jobs/contacts/${contactId}`, { method: 'PUT', body: data }),
+    deleteContact: (contactId) => apiCall(`/jobs/contacts/${contactId}`, { method: 'DELETE' }),
+    scrapeLinkedInCompany: (id, linkedinUrl) => apiCall(`/jobs/${id}/scrape-linkedin-company`, {
+      method: 'POST',
+      body: { linkedinUrl },
+    }),
   },
 
   career: {
@@ -156,6 +180,7 @@ export const api = {
     getCompany:    (id) => apiCall(`/career/company/${id}`),
     updateCompany: (id, patch) => apiCall(`/career/company/${id}`, { method: 'PUT', body: patch }),
     scoreFit:      (id) => apiCall(`/career/company/${id}/score-fit`, { method: 'POST' }),
+    scoreFitUrl:   (id) => apiUrl(`/career/company/${id}/score-fit`),
 
     // ── Auto-apply ───────────────────────────────────────────────────────────
     autoApplyRun:           () => apiCall('/career/auto-apply/run', { method: 'POST' }),
@@ -170,11 +195,11 @@ export const api = {
       return apiCall(`/career/${companyId}/documents`, { method: 'POST', body: fd })
     },
     deleteDocument:   (companyId, docId) => apiCall(`/career/${companyId}/documents/${docId}`, { method: 'DELETE' }),
-    downloadDocument: (companyId, docId) => `${API}/career/${companyId}/documents/${docId}/download`,
+    downloadDocument: (companyId, docId) => apiUrl(`/career/${companyId}/documents/${docId}/download`),
 
     // ── Report / download URLs — backend renders the HTML/PDF directly ───────
-    reportHtmlUrl:  (id) => `${API}/career/evaluations/${id}/report.html`,
-    downloadUrl:    (id) => `${API}/career/download/${id}`,
+    reportHtmlUrl:  (id) => apiUrl(`/career/evaluations/${id}/report.html`),
+    downloadUrl:    (id) => apiUrl(`/career/download/${id}`),
     tailoredResume: (id) => apiCall(`/career/tailored-resume/${id}`, { method: 'POST' }),
   },
 

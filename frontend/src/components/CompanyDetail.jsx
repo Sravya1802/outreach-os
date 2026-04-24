@@ -555,7 +555,7 @@ function JobScraperTab({ company, onTabSwitch }) {
       try {
         const [appData, globalResume] = await Promise.all([
           api.career.getCompany(company.id),
-          fetch('/api/career/resume').then(r => r.json()).catch(() => ({})),
+          api.career.resume().catch(() => ({})),
         ])
         hasResume = !!appData?.resume_original_name || !!globalResume?.hasResume
       } catch (_) {}
@@ -1127,7 +1127,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   // Works with both per-company resume (resume_original_name) and globally uploaded resume (hasGlobalResume)
   const [hasGlobalResume, setHasGlobalResume] = useState(false)
   useEffect(() => {
-    fetch('/api/career/resume').then(r => r.json()).then(d => setHasGlobalResume(!!d?.hasResume)).catch(() => {})
+    api.career.resume().then(d => setHasGlobalResume(!!d?.hasResume)).catch(() => {})
   }, [])
 
   useEffect(() => {
