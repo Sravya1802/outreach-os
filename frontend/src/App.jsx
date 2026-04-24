@@ -15,6 +15,8 @@ import CareerOpsPage    from './components/CareerOpsPage'
 import CareerOps        from './components/CareerOps'
 import ApplicationPipeline from './components/ApplicationPipeline'
 import JobDashboard     from './components/JobDashboard'
+import AutoApplyPage    from './components/AutoApplyPage'
+import TemplatesPage    from './components/TemplatesPage'
 import Login            from './components/Login'
 
 
@@ -218,45 +220,57 @@ export default function App() {
         {/* Nav */}
         <nav style={{ flex:1, padding:'4px 10px', overflowY:'auto' }}>
 
-          {/* MAIN section */}
-          {sectionLabel('Main')}
-
+          {/* DASHBOARD (top-level, no section heading) */}
           <NavLink to="/dashboard" end style={({ isActive }) => navStyle(isActive)}>
             <span style={{ flex:1 }}>Dashboard</span>
           </NavLink>
-
-          <NavLink to="/companies" end style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Companies</span>
-            <NavBadge n={stats?.totalCompanies} />
-          </NavLink>
-
-          <NavLink to="/pipeline" style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Pipeline</span>
-          </NavLink>
-
-          {/* TOOLS section */}
-          {sectionLabel('Tools')}
 
           <NavLink to="/job-dashboard" style={({ isActive }) => navStyle(isActive)}>
             <span style={{ flex:1 }}>Job Dashboard</span>
           </NavLink>
 
-          <NavLink to="/outreach" style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Outreach</span>
-            <NavBadge n={stats?.totalContacts} />
+          {/* DISCOVER — find roles + score them */}
+          {sectionLabel('Discover')}
+
+          <NavLink to="/discover/companies" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Companies</span>
+            <NavBadge n={stats?.totalCompanies} />
           </NavLink>
 
-          <NavLink to="/scraper" style={({ isActive }) => navStyle(isActive)}>
+          <NavLink to="/discover/scraper" style={({ isActive }) => navStyle(isActive)}>
             <span style={{ flex:1 }}>Job Scraper</span>
           </NavLink>
 
-          <NavLink to="/career-ops" style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Role Eligibility Info</span>
+          <NavLink to="/discover/evaluate" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Evaluate a Role</span>
+          </NavLink>
+
+          {/* APPLY — decide, apply, track */}
+          {sectionLabel('Apply')}
+
+          <NavLink to="/apply/auto-apply" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Auto Apply</span>
+          </NavLink>
+
+          <NavLink to="/apply/pipeline" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Pipeline</span>
+          </NavLink>
+
+          <NavLink to="/apply/ranked" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Ranked Roles</span>
             <NavBadge n={stats?.totalApplications} />
           </NavLink>
 
-          <NavLink to="/career-ops-workflow" style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Career Ops</span>
+          {/* OUTREACH — cold reach-outs */}
+          {sectionLabel('Outreach')}
+
+          <NavLink to="/outreach/messages" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Messages</span>
+            <NavBadge n={stats?.totalContacts} />
+          </NavLink>
+
+          <NavLink to="/outreach/templates" style={({ isActive }) => navStyle(isActive)}>
+            <span style={{ flex:1 }}>Templates</span>
           </NavLink>
 
         </nav>
@@ -300,19 +314,41 @@ export default function App() {
       {/* ── Main content ── */}
       <main style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
         <Routes>
-          <Route path="/"                  element={<Navigate to="/dashboard" replace />} />
-          <Route path="/dashboard"         element={<DashboardPage onStatsChange={setStats} />} />
-          <Route path="/companies"         element={<CompanyDashboard onStatsChange={setStats} />} />
+          {/* Top-level */}
+          <Route path="/"               element={<Navigate to="/dashboard" replace />} />
+          <Route path="/dashboard"      element={<DashboardPage onStatsChange={setStats} />} />
+          <Route path="/job-dashboard"  element={<JobDashboard />} />
+
+          {/* DISCOVER section */}
+          <Route path="/discover/companies"  element={<CompanyDashboard onStatsChange={setStats} />} />
+          <Route path="/discover/scraper"    element={<ScraperPage />} />
+          <Route path="/discover/evaluate"   element={<CareerOps />} />
+
+          {/* APPLY section */}
+          <Route path="/apply/auto-apply"    element={<AutoApplyPage />} />
+          <Route path="/apply/pipeline"      element={<ApplicationPipeline />} />
+          <Route path="/apply/ranked"        element={<CareerOpsPage />} />
+
+          {/* OUTREACH section */}
+          <Route path="/outreach/messages"   element={<OutreachPage />} />
+          <Route path="/outreach/templates"  element={<TemplatesPage />} />
+
+          {/* Detail/utility routes (used by deep links from cards/buttons) */}
           <Route path="/category/:name"    element={<CategoryView />} />
           <Route path="/company/:id"       element={<CompanyDetail />} />
-          <Route path="/pipeline"          element={<ApplicationPipeline />} />
-          <Route path="/outreach"          element={<OutreachPage />} />
-          <Route path="/scraper"           element={<ScraperPage />} />
-          <Route path="/career-ops"        element={<CareerOpsPage />} />
-          <Route path="/career-ops-workflow" element={<CareerOps />} />
-          <Route path="/job-dashboard"     element={<JobDashboard />} />
+
+          {/* Settings */}
           <Route path="/settings"          element={<Settings name={profileName} setName={setProfileName} aiProvider={aiProvider} setAiProvider={setAiProvider} onSignOut={signOut} userEmail={session.user?.email} />} />
-          <Route path="*"                  element={<Navigate to="/dashboard" replace />} />
+
+          {/* Legacy redirects — keep bookmarks alive after the IA refactor */}
+          <Route path="/companies"            element={<Navigate to="/discover/companies" replace />} />
+          <Route path="/scraper"              element={<Navigate to="/discover/scraper" replace />} />
+          <Route path="/career-ops-workflow"  element={<Navigate to="/discover/evaluate" replace />} />
+          <Route path="/pipeline"             element={<Navigate to="/apply/pipeline" replace />} />
+          <Route path="/career-ops"           element={<Navigate to="/apply/ranked" replace />} />
+          <Route path="/outreach"             element={<Navigate to="/outreach/messages" replace />} />
+
+          <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
       </main>
     </div>

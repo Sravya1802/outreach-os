@@ -226,6 +226,16 @@ export const api = {
     autoApplyDirect:        (body) => apiCall('/career/auto-apply-direct',        { method: 'POST', body }),
     autoApplyResumePreview: (jobUrls) => apiCall('/career/auto-apply/resume-preview', { method: 'POST', body: { jobUrls } }),
 
+    // ── Bulk queue (slider in Auto Apply → Queue tab) ────────────────────────
+    bulkQueuePreview: (params) => apiCall('/career/bulk-queue/preview' + (
+      params instanceof URLSearchParams ? `?${params.toString()}` : (
+        params && (params.minGrade || params.minScore != null)
+          ? '?' + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v != null))).toString()
+          : ''
+      )
+    )),
+    bulkQueue:        (body) => apiCall('/career/bulk-queue', { method: 'POST', body }),
+
     // ── Company documents ────────────────────────────────────────────────────
     documents:        (companyId) => apiCall(`/career/${companyId}/documents`),
     uploadDocument:   async (companyId, file) => {
