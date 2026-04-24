@@ -173,32 +173,36 @@ app.get('/api/stats', async (req, res) => {
 app.get('/api/dashboard/job-metrics', async (req, res) => {
   try {
     const uid = req.user.id;
-    const [
-      totalCompaniesR, totalEvaluationsR, totalContactsR,
-      contactsWithEmailR, contactsWithLinkedInR,
-      outreachGeneratedR, outreachSentR, outreachRepliedR,
-      funnelEvaluatedR, funnelAppliedR, funnelSubmittedR, funnelRespondedR,
-      funnelInterviewR, funnelOfferR, funnelRejectedR,
-      modeManualR, modeAutoR,
-      gradeDistRows, topOutreachCompanies, recentEvals, recentApplied,
-    ] = await Promise.all([
-      one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE (generated_subject IS NOT NULL OR generated_dm IS NOT NULL) AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status IN ('sent','dm_sent','email_sent') AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE status = 'replied' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE (apply_status IS NULL OR apply_status = 'not_started') AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status IN ('opened','queued','submitted') AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'submitted' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'responded' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'interview' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'offer' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_status = 'rejected' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'manual' AND apply_status IS NOT NULL AND apply_status != 'not_started' AND user_id = $1", [uid]),
-      one("SELECT COUNT(*)::int AS n FROM evaluations WHERE apply_mode = 'auto'   AND apply_status IS NOT NULL AND apply_status != 'not_started' AND user_id = $1", [uid]),
+    // Previously 18 separate COUNT queries scanning the same tables over and
+    // over (~N × index-scan per page load). Collapsed to 3 aggregate queries
+    // using FILTER clauses — one per tracked table.
+    const [jcAgg, evalAgg, jobsAgg, gradeDistRows, topOutreachCompanies, recentEvals, recentApplied] = await Promise.all([
+      // job_contacts: 6 counters rolled into one scan.
+      one(`SELECT
+             COUNT(*)::int                                                           AS total,
+             COUNT(*) FILTER (WHERE email IS NOT NULL AND email != '')::int           AS with_email,
+             COUNT(*) FILTER (WHERE linkedin_url IS NOT NULL AND linkedin_url != '')::int AS with_linkedin,
+             COUNT(*) FILTER (WHERE generated_subject IS NOT NULL OR generated_dm IS NOT NULL)::int AS outreach_generated,
+             COUNT(*) FILTER (WHERE status IN ('sent','dm_sent','email_sent'))::int  AS outreach_sent,
+             COUNT(*) FILTER (WHERE status = 'replied')::int                          AS outreach_replied
+           FROM job_contacts WHERE user_id = $1`, [uid]),
+      // evaluations: 10 counters rolled into one scan.
+      one(`SELECT
+             COUNT(*)::int                                                                                    AS total,
+             COUNT(*) FILTER (WHERE apply_status IS NULL OR apply_status = 'not_started')::int                AS funnel_evaluated,
+             COUNT(*) FILTER (WHERE apply_status IN ('opened','queued','submitted'))::int                     AS funnel_applied,
+             COUNT(*) FILTER (WHERE apply_status = 'submitted')::int                                          AS funnel_submitted,
+             COUNT(*) FILTER (WHERE apply_status = 'responded')::int                                          AS funnel_responded,
+             COUNT(*) FILTER (WHERE apply_status = 'interview')::int                                          AS funnel_interview,
+             COUNT(*) FILTER (WHERE apply_status = 'offer')::int                                              AS funnel_offer,
+             COUNT(*) FILTER (WHERE apply_status = 'rejected')::int                                           AS funnel_rejected,
+             COUNT(*) FILTER (WHERE apply_mode = 'manual' AND apply_status IS NOT NULL AND apply_status != 'not_started')::int AS mode_manual,
+             COUNT(*) FILTER (WHERE apply_mode = 'auto'   AND apply_status IS NOT NULL AND apply_status != 'not_started')::int AS mode_auto
+           FROM evaluations WHERE user_id = $1`, [uid]),
+      // jobs: just total companies (1 counter, kept separate since jobs table
+      // is by far the largest and we don't want to pollute its scan with
+      // unrelated filters).
+      one("SELECT COUNT(*)::int AS total FROM jobs WHERE user_id = $1", [uid]),
       all("SELECT grade, COUNT(*)::int AS n FROM evaluations WHERE grade IS NOT NULL AND user_id = $1 GROUP BY grade", [uid]),
       all(`
         SELECT j.name, j.category,
@@ -221,6 +225,25 @@ app.get('/api/dashboard/job-metrics', async (req, res) => {
         FROM evaluations WHERE applied_at IS NOT NULL AND user_id = $1 ORDER BY applied_at DESC LIMIT 10
       `, [uid]),
     ]);
+
+    // Unpack into the same shape downstream code expects.
+    const totalCompaniesR      = { n: jobsAgg?.total      || 0 };
+    const totalEvaluationsR    = { n: evalAgg?.total      || 0 };
+    const totalContactsR       = { n: jcAgg?.total        || 0 };
+    const contactsWithEmailR   = { n: jcAgg?.with_email   || 0 };
+    const contactsWithLinkedInR= { n: jcAgg?.with_linkedin || 0 };
+    const outreachGeneratedR   = { n: jcAgg?.outreach_generated || 0 };
+    const outreachSentR        = { n: jcAgg?.outreach_sent || 0 };
+    const outreachRepliedR     = { n: jcAgg?.outreach_replied || 0 };
+    const funnelEvaluatedR     = { n: evalAgg?.funnel_evaluated || 0 };
+    const funnelAppliedR       = { n: evalAgg?.funnel_applied   || 0 };
+    const funnelSubmittedR     = { n: evalAgg?.funnel_submitted || 0 };
+    const funnelRespondedR     = { n: evalAgg?.funnel_responded || 0 };
+    const funnelInterviewR     = { n: evalAgg?.funnel_interview || 0 };
+    const funnelOfferR         = { n: evalAgg?.funnel_offer     || 0 };
+    const funnelRejectedR      = { n: evalAgg?.funnel_rejected  || 0 };
+    const modeManualR          = { n: evalAgg?.mode_manual      || 0 };
+    const modeAutoR            = { n: evalAgg?.mode_auto        || 0 };
 
     const appFunnel = {
       evaluated: funnelEvaluatedR?.n || 0,

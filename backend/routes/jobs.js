@@ -1004,17 +1004,29 @@ router.get('/', async (req, res) => {
     sql += ' ORDER BY pay DESC';
     const jobs = await all(sql, params);
 
-    // Attach contact counts
-    const countSql = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2";
-    const liSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2 AND source = 'linkedin'";
-    const emSql    = "SELECT COUNT(*) as n FROM job_contacts WHERE job_id = $1 AND user_id = $2 AND source = 'hunter'";
-
-    const enriched = await Promise.all(jobs.map(async (j) => ({
-      ...j,
-      contact_count:  Number((await one(countSql, [j.id, req.user.id])).n),
-      linkedin_count: Number((await one(liSql, [j.id, req.user.id])).n),
-      email_count:    Number((await one(emSql, [j.id, req.user.id])).n),
-    })));
+    // Attach contact counts in ONE aggregate query instead of 3 × per-job
+    // (previously 3 × 1499 = 4497 queries per page load, ~10 s wall-clock).
+    // Single GROUP BY with FILTER brings that to 1 query regardless of count.
+    const counts = await all(
+      `SELECT job_id,
+              COUNT(*)::int                                  AS contact_count,
+              COUNT(*) FILTER (WHERE source = 'linkedin')::int AS linkedin_count,
+              COUNT(*) FILTER (WHERE source = 'hunter')::int   AS email_count
+         FROM job_contacts
+        WHERE user_id = $1
+        GROUP BY job_id`,
+      [req.user.id]
+    );
+    const countMap = new Map(counts.map(c => [c.job_id, c]));
+    const enriched = jobs.map(j => {
+      const c = countMap.get(j.id);
+      return {
+        ...j,
+        contact_count:  c?.contact_count  || 0,
+        linkedin_count: c?.linkedin_count || 0,
+        email_count:    c?.email_count    || 0,
+      };
+    });
     res.json(enriched);
   } catch (err) {
     res.status(500).json({ error: err.message });
