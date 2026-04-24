@@ -18,7 +18,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import db from '../db.js';
+import db, { one, all, run } from '../db.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
 import { tailorResume, generateResumePDF } from './resumeGenerator.js';
 
@@ -35,20 +35,22 @@ const STATUS = {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function getProfile() {
-  return db.prepare('SELECT * FROM user_profile WHERE id = 1').get() || {};
+async function getProfile() {
+  return (await one('SELECT * FROM user_profile WHERE id = 1')) || {};
 }
 
-function setStatus(evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
-  const parts = ['apply_status = ?'];
-  const args  = [status];
-  if (error !== null)   { parts.push('apply_error = ?');        args.push(error ? String(error).slice(0, 500) : null); }
-  if (platform)         { parts.push('apply_platform = ?');     args.push(platform); }
-  if (resumeUsed)       { parts.push('apply_resume_used = ?');  args.push(resumeUsed); }
-  if (status === STATUS.submitted) { parts.push("applied_at = datetime('now')"); }
+async function setStatus(evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
+  const parts = [];
+  const args  = [];
+  let idx = 1;
+  parts.push(`apply_status = $${idx++}`);             args.push(status);
+  if (error !== null)   { parts.push(`apply_error = $${idx++}`);        args.push(error ? String(error).slice(0, 500) : null); }
+  if (platform)         { parts.push(`apply_platform = $${idx++}`);     args.push(platform); }
+  if (resumeUsed)       { parts.push(`apply_resume_used = $${idx++}`);  args.push(resumeUsed); }
+  if (status === STATUS.submitted) { parts.push('applied_at = NOW()'); }
   if (incrementAttempts) { parts.push('apply_attempts = COALESCE(apply_attempts, 0) + 1'); }
   args.push(evalId);
-  db.prepare(`UPDATE evaluations SET ${parts.join(', ')} WHERE id = ?`).run(...args);
+  await run(`UPDATE evaluations SET ${parts.join(', ')} WHERE id = $${idx}`, args);
 }
 
 // Safe wrapper around page.fill — ignores missing selectors, treats failures as skipped.
@@ -165,19 +167,19 @@ async function fillAshby(page, profile, resumePath) {
 // ── Main: apply to a single evaluation ───────────────────────────────────────
 
 export async function processOneEvaluation(evalId, { headless = true, dryRun = false } = {}) {
-  const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(evalId);
+  const row = await one('SELECT * FROM evaluations WHERE id = $1', [evalId]);
   if (!row) return { ok: false, error: 'Evaluation not found' };
   if (!row.job_url) {
-    setStatus(evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
+    await setStatus(evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
     return { ok: false, error: 'No job URL to apply to' };
   }
 
   const platform = detectPlatform(row.job_url);
-  const profile  = getProfile();
+  const profile  = await getProfile();
 
   // Validate profile completeness before attempting auto-apply
   if (!profile.first_name || !profile.last_name || !profile.email || !profile.phone) {
-    setStatus(evalId, STATUS.failed, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform, incrementAttempts: true });
+    await setStatus(evalId, STATUS.failed, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform, incrementAttempts: true });
     return { ok: false, error: 'Profile incomplete' };
   }
 
@@ -193,12 +195,13 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     // No tailored PDF yet — generate one on the fly so auto-apply always submits
     // a role-personalized CV instead of a generic one.
     try {
-      const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+      const resumeRow = await one("SELECT value FROM meta WHERE key = 'user_resume_text'");
+      const resumeText = resumeRow?.value;
       if (resumeText) {
         console.log(`[autoApply] generating tailored resume for eval ${evalId}…`);
         const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
         const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
-        db.prepare('UPDATE evaluations SET pdf_path = ? WHERE id = ?').run(pdfPath, evalId);
+        await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2', [pdfPath, evalId]);
         resume = { filename: path.basename(pdfPath), absPath: pdfPath, source: 'tailored-justnow' };
       }
     } catch (err) {
@@ -217,17 +220,17 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
   }
 
   if (!resume) {
-    setStatus(evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
+    await setStatus(evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
     return { ok: false, error: 'No resume found' };
   }
 
   const supported = ['greenhouse', 'lever', 'ashby'];
   if (!supported.includes(platform)) {
-    setStatus(evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
+    await setStatus(evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
     return { ok: false, platform, error: 'Platform not supported' };
   }
 
-  setStatus(evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
+  await setStatus(evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
 
   // Lazy import so Playwright isn't loaded for non-auto-apply requests
   const { chromium } = await import('playwright');
@@ -246,16 +249,16 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     await page.waitForTimeout(1500);
 
     if (await hasCaptcha(page)) {
-      setStatus(evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
+      await setStatus(evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Captcha present' };
     }
     if (await looksLikeLogin(page)) {
-      setStatus(evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
+      await setStatus(evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Login required' };
     }
 
     if (dryRun) {
-      setStatus(evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
+      await setStatus(evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
       return { ok: true, platform, dryRun: true };
     }
 
@@ -279,14 +282,14 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     );
 
     if (looksSubmitted) {
-      setStatus(evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
+      await setStatus(evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
       return { ok: true, platform, resume: resume.filename };
     }
     // Not obviously confirmed — mark as in_progress with note, so user can verify.
-    setStatus(evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
+    await setStatus(evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
     return { ok: false, platform, error: 'Submission unconfirmed' };
   } catch (err) {
-    setStatus(evalId, STATUS.failed, { error: err.message, platform });
+    await setStatus(evalId, STATUS.failed, { error: err.message, platform });
     return { ok: false, platform, error: err.message };
   } finally {
     if (browser) { try { await browser.close(); } catch (_) {} }
@@ -298,13 +301,13 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
  * Returns a summary { processed, submitted, failed, skipped }.
  */
 export async function runQueueOnce({ headless = true, dryRun = false, limit = 10 } = {}) {
-  const rows = db.prepare(`
+  const rows = await all(`
     SELECT id FROM evaluations
     WHERE apply_mode = 'auto'
       AND apply_status = 'queued'
     ORDER BY created_at ASC
-    LIMIT ?
-  `).all(limit);
+    LIMIT $1
+  `, [limit]);
 
   const summary = { processed: 0, submitted: 0, failed: 0, skipped: 0, results: [] };
   for (const { id } of rows) {

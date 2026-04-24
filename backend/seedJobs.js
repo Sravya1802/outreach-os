@@ -186,20 +186,36 @@ function getDomain(url) {
   } catch { return ''; }
 }
 
-export function seedJobs(db) {
-  const count = db.prepare('SELECT COUNT(*) as n FROM jobs').get().n;
-  if (count > 0) return; // already seeded
+import { one, tx } from './db.js';
 
-  const insert = db.prepare(`
-    INSERT OR IGNORE INTO jobs (name, category, pay, roles, location, url, tag, domain)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `);
+export async function seedJobs() {
+  const row = await one('SELECT COUNT(*)::int AS n FROM jobs');
+  if (row && row.n > 0) return; // already seeded
 
-  db.transaction(() => {
+  const INSERT_SQL = `
+    INSERT INTO jobs (name, category, pay, roles, location, url, tag, domain)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    ON CONFLICT (name) DO NOTHING
+  `;
+
+  await tx(async (client) => {
     for (const [name, category, pay, roles, location, url, tag] of COMPANIES) {
-      insert.run(name, category, pay, roles, location, url, tag || '', getDomain(url));
+      await client.query(INSERT_SQL, [name, category, pay, roles, location, url, tag || '', getDomain(url)]);
     }
-  })();
+  });
 
   console.log(`Seeded ${COMPANIES.length} companies into jobs table`);
+}
+
+// Standalone invocation: `node seedJobs.js`
+if (import.meta.url === `file://${process.argv[1]}`) {
+  (async () => {
+    try {
+      await seedJobs();
+      process.exit(0);
+    } catch (err) {
+      console.error('[seedJobs] Failed:', err);
+      process.exit(1);
+    }
+  })();
 }
