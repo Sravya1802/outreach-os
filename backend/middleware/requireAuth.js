@@ -22,7 +22,10 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
-const AUTH_MODE = (process.env.AUTH_MODE || 'enforce').toLowerCase()
+// Default is 'log-only' (safe) — a missed env var during rollout won't lock
+// anyone out. Flip to 'enforce' explicitly in .env once frontend is sending
+// Authorization headers and observation logs look clean.
+const AUTH_MODE = (process.env.AUTH_MODE || 'log-only').toLowerCase()
 
 let JWKS = null
 if (SUPABASE_URL) {
