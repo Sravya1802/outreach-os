@@ -3,6 +3,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 // Lazy accessors — avoid dotenv timing issues
 function getGeminiKey()    { return process.env.GEMINI_API_KEY    || ''; }
 function getAnthropicKey() { return process.env.ANTHROPIC_API_KEY || ''; }
+function getOpenAIKey()    { return process.env.OPENAI_API_KEY    || ''; }
 
 // ─── Level 2: Known-companies map ────────────────────────────────────────────
 // Exact company name → category (lowercased keys). Covers ~300 well-known employers.
@@ -803,7 +804,24 @@ async function callClaude(batch) {
   return parseJSON(msg.content[0].text);
 }
 
-// Gemini with smart retry → Claude fallback
+async function callOpenAI(batch) {
+  const key = getOpenAIKey();
+  if (!key) throw new Error('OPENAI_API_KEY not set');
+  const { default: OpenAI } = await import('openai');
+  const client = new OpenAI({ apiKey: key });
+  const res = await client.chat.completions.create({
+    model: 'gpt-4o-mini',
+    temperature: 0,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: SYSTEM_PROMPT },
+      { role: 'user',   content: buildInput(batch) },
+    ],
+  });
+  return parseJSON(res.choices[0].message.content);
+}
+
+// Gemini → Claude → OpenAI fallback chain
 async function classifyBatch(batch, batchNum, totalBatches) {
   const label = `Batch ${batchNum}/${totalBatches}`;
 
@@ -838,7 +856,16 @@ async function classifyBatch(batch, batchNum, totalBatches) {
     console.log(`[Classifier/Claude] ${label} — OK (fallback)`);
     return { results, provider: 'claude' };
   } catch (err) {
-    console.error(`[Classifier/Claude] ${label} — ${err.message}`);
+    console.warn(`[Classifier/Claude] ${label} — ${err.message}, falling back to OpenAI`);
+  }
+
+  // OpenAI fallback (used when GEMINI + ANTHROPIC keys are missing but OPENAI is set)
+  try {
+    const results = await callOpenAI(batch);
+    console.log(`[Classifier/OpenAI] ${label} — OK (fallback)`);
+    return { results, provider: 'openai' };
+  } catch (err) {
+    console.error(`[Classifier/OpenAI] ${label} — ${err.message}`);
     throw err;
   }
 }
