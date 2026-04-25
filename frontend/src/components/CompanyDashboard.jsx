@@ -44,7 +44,7 @@ function Spin({ color = '#6366f1', size = 14 }) {
 export default function CompanyDashboard({ onStatsChange }) {
   const navigate = useNavigate()
   const [stats, setStats]         = useState(null)
-  const [catCounts, setCatCounts] = useState({})
+  const [catCounts, setCatCounts] = useState(null)
   const [ycCount, setYcCount]     = useState(null)
   const [search, setSearch]       = useState('')
   const [results, setResults]     = useState([])
@@ -60,7 +60,7 @@ export default function CompanyDashboard({ onStatsChange }) {
       const map = {}
       for (const row of (d.counts || [])) map[row.category] = row.count
       setCatCounts(map)
-    }).catch(() => {})
+    }).catch(() => setCatCounts({}))
     api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {})
   }
 
@@ -80,7 +80,7 @@ export default function CompanyDashboard({ onStatsChange }) {
         const map = {}
         for (const r of (d.counts || [])) map[r.category] = r.count
         setCatCounts(map)
-      }).catch(() => {})
+      }).catch(() => setCatCounts({}))
     }
     loadStats()
     fetch('https://yc-oss.github.io/api/companies/hiring.json')
@@ -125,11 +125,13 @@ export default function CompanyDashboard({ onStatsChange }) {
   // Build sorted category list with counts.
   // Use stats.totalCompanies (authoritative COUNT(*) from jobs table) as the
   // single source of truth so the header count matches the stats card below.
-  const totalInDb = stats?.totalCompanies ?? Object.values(catCounts).reduce((a, b) => a + b, 0)
-  const maxCount  = Math.max(...CATEGORIES.map(c => catCounts[c.label] || 0), 1)
+  const initialLoading = catCounts === null && stats === null
+  const cc = catCounts || {}
+  const totalInDb = stats?.totalCompanies ?? Object.values(cc).reduce((a, b) => a + b, 0)
+  const maxCount  = Math.max(...CATEGORIES.map(c => cc[c.label] || 0), 1)
 
   const sortedCats = [...CATEGORIES]
-    .map(c => ({ ...c, count: catCounts[c.label] || 0 }))
+    .map(c => ({ ...c, count: cc[c.label] || 0 }))
     .sort((a, b) => {
       if (sortBy === 'az') return a.label.localeCompare(b.label)
       if (sortBy === 'za') return b.label.localeCompare(a.label)
@@ -144,7 +146,9 @@ export default function CompanyDashboard({ onStatsChange }) {
         <div style={{ marginBottom:4 }}>
           <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:0 }}>Companies</h1>
           <p style={{ fontSize:13, color:'#64748b', margin:'4px 0 0' }}>
-            {totalInDb.toLocaleString()} companies · {sortedCats.filter(c => c.count > 0).length} industries
+            {initialLoading
+              ? 'Loading…'
+              : `${totalInDb.toLocaleString()} companies · ${sortedCats.filter(c => c.count > 0).length} industries`}
           </p>
         </div>
 
@@ -235,7 +239,9 @@ export default function CompanyDashboard({ onStatsChange }) {
         {/* Controls */}
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
           <span style={{ fontSize:13, color:'#64748b', fontWeight:600 }}>
-            {sortedCats.filter(c => c.count > 0).length} active{!hideEmpty && ` · ${sortedCats.filter(c => c.count === 0).length} empty`}
+            {catCounts === null
+              ? 'Loading categories…'
+              : `${sortedCats.filter(c => c.count > 0).length} active${!hideEmpty ? ` · ${sortedCats.filter(c => c.count === 0).length} empty` : ''}`}
           </span>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
             <select value={sortBy} onChange={e => setSortBy(e.target.value)}
@@ -292,7 +298,7 @@ export default function CompanyDashboard({ onStatsChange }) {
                   <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.3 }}>{cat.label}</div>
                 </div>
                 <div style={{ fontSize:24, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, marginBottom:4 }}>
-                  {cat.count.toLocaleString()}
+                  {catCounts === null ? '—' : cat.count.toLocaleString()}
                 </div>
                 <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
                   {cat.desc}
