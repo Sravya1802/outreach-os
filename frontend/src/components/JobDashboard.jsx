@@ -45,18 +45,41 @@ function timeAgo(iso) {
   return `${Math.floor(h / 168)}w ago`
 }
 
+// Stale-while-revalidate cache for the dashboard payload. Lives for the
+// session — first paint after the very first visit is instant, and each
+// reload fires a background refresh that updates the UI when it lands.
+const CACHE_KEY = 'jobDashboardMetrics:v1'
+function readCachedMetrics() {
+  try {
+    const raw = sessionStorage.getItem(CACHE_KEY)
+    if (!raw) return null
+    const { ts, data } = JSON.parse(raw)
+    if (!data || Date.now() - ts > 5 * 60 * 1000) return null
+    return data
+  } catch { return null }
+}
+function writeCachedMetrics(data) {
+  try { sessionStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })) } catch {}
+}
+
 export default function JobDashboard() {
   const navigate = useNavigate()
-  const [m, setM]             = useState(null)
-  const [loading, setLoading] = useState(true)
+  const cached = readCachedMetrics()
+  const [m, setM]             = useState(cached)
+  const [loading, setLoading] = useState(!cached)
+  const [refreshing, setRefreshing] = useState(false)
 
   const load = useCallback(async () => {
-    setLoading(true)
-    try { setM(await api.jobMetrics()) } catch (_) { setM(null) }
-    setLoading(false)
-  }, [])
+    if (m) setRefreshing(true); else setLoading(true)
+    try {
+      const fresh = await api.jobMetrics()
+      setM(fresh)
+      writeCachedMetrics(fresh)
+    } catch (_) { if (!m) setM(null) }
+    finally { setLoading(false); setRefreshing(false) }
+  }, [m])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading && !m) {
     return <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}><Spin size={28} /></div>
@@ -79,8 +102,8 @@ export default function JobDashboard() {
             <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Every company, contact, and application — tracked end-to-end</p>
           </div>
           <button onClick={load}
-            style={{ padding:'8px 16px', fontSize:12, fontWeight:700, background:'#fff', color:'#475569', border:'1px solid #e2e8f0', borderRadius:8, cursor:'pointer' }}>
-            ↻ Refresh
+            style={{ padding:'8px 16px', fontSize:12, fontWeight:700, background:'#fff', color:'#475569', border:'1px solid #e2e8f0', borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', gap:8 }}>
+            {refreshing ? <Spin size={12} color="#475569" /> : '↻'} Refresh
           </button>
         </div>
       </div>
