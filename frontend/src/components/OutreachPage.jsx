@@ -36,10 +36,9 @@ export default function OutreachPage() {
     const params = new URLSearchParams({ limit: '500' })
     if (emailFilter === 'with_email') params.set('hasEmail', 'true')
     if (emailFilter === 'no_email')   params.set('noEmail', 'true')
-    fetch(`/api/unified/all-contacts?${params}`)
-      .then(r => r.ok ? r.json() : { contacts: [] })
+    api.unified.allContacts(params)
       .then(d => setContacts(d.contacts || []))
-      .catch(() => {})
+      .catch(e => { console.error('[outreach] all-contacts failed:', e); setContacts([]) })
       .finally(() => setLoading(false))
   }, [emailFilter])
 
