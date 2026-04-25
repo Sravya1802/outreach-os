@@ -5,9 +5,9 @@ import { AutoApplySetup } from './CareerOps'
 const TABS = [
   { id: 'setup',          label: '⚙ Setup',          desc: 'Profile + resume library used to fill applications' },
   { id: 'queue',          label: '📋 Queue',         desc: 'Bulk-queue evaluations + run the worker' },
-  { id: 'completed',      label: '✅ Completed',     desc: 'Applications the auto-apply worker submitted successfully' },
   { id: 'resume-folder',  label: '📁 Resume Folder', desc: 'Role-archetype PDFs: AIML / SWE / DS / DevOps / full stack / startup' },
   { id: 'history',        label: '📜 History',       desc: 'Past auto-apply runs and outcomes' },
+  { id: 'completed',      label: '✅ Completed',     desc: 'Applications the auto-apply worker submitted successfully' },
 ]
 
 const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F']

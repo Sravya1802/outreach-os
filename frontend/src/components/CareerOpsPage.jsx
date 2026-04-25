@@ -16,17 +16,23 @@ function Spin({ color = '#6366f1', size = 20 }) {
   return <span style={{ display:'inline-block', width:size, height:size, border:`2px solid ${color}30`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
+function fitScore(score) {
+  const n = Number(score)
+  return Number.isFinite(n) ? n : null
+}
+
 function ScoreCircle({ score }) {
-  if (!score) return (
+  const n = fitScore(score)
+  if (n == null || n <= 0) return (
     <div style={{ width:52, height:52, borderRadius:'50%', border:'2px solid #e2e8f0', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
       <span style={{ fontSize:10, color:'#94a3b8', fontWeight:700 }}>N/A</span>
     </div>
   )
-  const pct = Math.min(score / 5, 1)
+  const pct = Math.min(n / 5, 1)
   const color = pct >= 0.85 ? '#16a34a' : pct >= 0.7 ? '#ca8a04' : pct >= 0.5 ? '#2563eb' : '#dc2626'
   return (
     <div style={{ width:52, height:52, borderRadius:'50%', border:`3px solid ${color}`, display:'flex', alignItems:'center', justifyContent:'center', background:`${color}10`, flexShrink:0 }}>
-      <span style={{ fontSize:14, fontWeight:800, color }}>{score.toFixed(1)}</span>
+      <span style={{ fontSize:14, fontWeight:800, color }}>{n.toFixed(1)}</span>
     </div>
   )
 }
@@ -39,23 +45,28 @@ export default function CareerOpsPage() {
 
   useEffect(() => {
     api.career.ranked()
-      .then(d => { setApplications(d.applications || []); setLoading(false) })
+      .then(d => {
+        const rows = Array.isArray(d) ? d : (Array.isArray(d?.applications) ? d.applications : [])
+        setApplications(rows)
+        setLoading(false)
+      })
       .catch(e => { console.warn('Career ranked fetch error:', e); setLoading(false) })
   }, [])
 
   const filtered = applications.filter(a => {
     if (filter === 'all') return true
     if (filter === 'applied') return ['applied','phone_screen','interview','offer'].includes(a.status)
-    if (filter === 'scored') return a.fit_score != null
+    if (filter === 'scored') return fitScore(a.fit_score) != null
     return true
   })
 
-  const avgScore = applications.filter(a => a.fit_score).length > 0
-    ? (applications.filter(a => a.fit_score).reduce((s, a) => s + a.fit_score, 0) / applications.filter(a => a.fit_score).length).toFixed(1)
+  const scored = applications.map(a => ({ app: a, score: fitScore(a.fit_score) })).filter(a => a.score != null)
+  const avgScore = scored.length > 0
+    ? (scored.reduce((s, a) => s + a.score, 0) / scored.length).toFixed(1)
     : null
 
-  const topPick = applications.find(a => a.fit_score === Math.max(...applications.map(a => a.fit_score || 0)))
-  const applyCount = applications.filter(a => a.fit_score >= 4.2).length
+  const topPick = scored.reduce((best, row) => (!best || row.score > best.score ? row : best), null)?.app
+  const applyCount = scored.filter(a => a.score >= 4.2).length
 
   return (
     <div style={{ flex:1, overflowY:'auto', background:'#f8fafc' }}>
@@ -115,7 +126,9 @@ export default function CareerOpsPage() {
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
             {filtered.map((app, i) => {
               const stMeta = APP_STATUS_LABELS[app.status] || APP_STATUS_LABELS.interested
-              const isBest = app.fit_score && app.fit_score === Math.max(...filtered.map(a => a.fit_score || 0))
+              const score = fitScore(app.fit_score)
+              const bestFilteredScore = Math.max(...filtered.map(a => fitScore(a.fit_score) ?? 0))
+              const isBest = score != null && score > 0 && score === bestFilteredScore
               return (
                 <div key={app.id || i}
                   style={{ background:'#fff', border:`1px solid ${isBest ? '#4ade80' : '#e2e8f0'}`, borderRadius:14, padding:'20px 24px', display:'flex', gap:18, alignItems:'flex-start', position:'relative' }}>
