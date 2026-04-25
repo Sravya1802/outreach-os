@@ -38,12 +38,12 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+0b26615  docs: update handoff after auto-apply work
 b3bc61c  feat: add completed auto-apply tab
 8a55549  fix: attach auth to outreach contacts fetch
 bfcea63  Phase C: IA refactor — DISCOVER / APPLY / OUTREACH sections + Auto Apply page
 3c5be1b  docs: align README with current architecture + deprecate stale guides
 ae6cbb0  Security/hygiene: untrack PDFs, HTMLs, and empty DB files
-7355933  auth/frontend: send Supabase JWT on every backend call
 …
 ```
 
@@ -115,17 +115,23 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Main pushed after Auto Apply work
+- **What:** Pushed `main` to GitHub after rebasing local Outreach/Completed/HANDOFF commits on top of the remote Phase C commit (`bfcea63`).
+- **Files:** [HANDOFF.md:38](HANDOFF.md#L38)
+- **Status:** pushed to `origin/main` through `0b26615`; local worktree still has unrelated untracked files `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, and `supabase/migrations/003_per_user_isolation.sql`.
+- **Follow-up:** Wait for Vercel deployment, then verify `/outreach` and `/apply/auto-apply` in browser.
+
 ### 2026-04-25 — Outreach fix committed + Phase C linearized onto main
 - **What:** Committed the Outreach CRM JWT-fetch fix, then replayed local work on top of remote `main` after GitHub advanced to Phase C (`bfcea63`) during the session.
 - **Files:** [frontend/src/components/OutreachPage.jsx:34](frontend/src/components/OutreachPage.jsx#L34), [HANDOFF.md:38](HANDOFF.md#L38)
-- **Status:** committed on `main`: `8a55549`; Phase C is now in `main` via `bfcea63`; not browser-tested.
-- **Follow-up:** Push `main` and verify `/outreach` on the deployed Vercel app after deployment.
+- **Status:** committed and pushed on `main`: `8a55549`; Phase C is now in `main` via `bfcea63`; not browser-tested.
+- **Follow-up:** Verify `/outreach` on the deployed Vercel app after deployment.
 
 ### 2026-04-25 — Auto Apply Completed tab
 - **What:** Added a `Completed` tab to `/apply/auto-apply`. It reads `api.career.pipeline()`, filters `apply_status === 'submitted'`, and shows submitted roles sorted by applied date.
 - **Files:** [frontend/src/components/AutoApplyPage.jsx:5](frontend/src/components/AutoApplyPage.jsx#L5), [frontend/src/components/AutoApplyPage.jsx:177](frontend/src/components/AutoApplyPage.jsx#L177)
-- **Status:** committed on `main`: `b3bc61c`; `npm run build --prefix frontend` passed. Full `npm run lint --prefix frontend` still fails on pre-existing repo lint debt (`react-hooks/set-state-in-effect`, unused vars, empty catches, `vite.config.js` `__dirname`).
-- **Follow-up:** Push `main`; verify the Completed tab in browser after Vercel deploy.
+- **Status:** committed and pushed on `main`: `b3bc61c`; `npm run build --prefix frontend` passed. Full `npm run lint --prefix frontend` still fails on pre-existing repo lint debt (`react-hooks/set-state-in-effect`, unused vars, empty catches, `vite.config.js` `__dirname`).
+- **Follow-up:** Verify the Completed tab in browser after Vercel deploy.
 
 ### 2026-04-25 — Context refresh + memory confirmation
 - **What:** Read `HANDOFF.md`, confirmed `MEMORY.md` and `feedback_keep_handoff_updated.md` are accessible, and checked frontend/backend worktree state.
