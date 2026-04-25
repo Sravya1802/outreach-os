@@ -255,7 +255,7 @@ export default function App() {
           </NavLink>
 
           <NavLink to="/discover/evaluate" style={({ isActive }) => navStyle(isActive)}>
-            <span style={{ flex:1 }}>Evaluate a Role</span>
+            <span style={{ flex:1 }}>Career Ops</span>
           </NavLink>
 
           {/* APPLY — decide, apply, track */}
