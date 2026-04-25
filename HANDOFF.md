@@ -118,6 +118,25 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Full-app audit + 4 fixes
+- **What:** End-to-end audit of repo state, builds, JWT coverage, per-user isolation, frontend↔backend contract, secret hygiene, and live VM. Fixed 4 issues uncovered.
+  1. **JWT bypass** in [JobDashboard.jsx:192](frontend/src/components/JobDashboard.jsx#L192) — Recent Evaluations links rendered raw `<a href="/api/career/evaluations/X/report.html">` which 401s in enforce mode. Swapped to `api.career.reportHtmlUrl(e.id)` (same `withAuthQuery` helper used by CareerOps/Pipeline/CompanyDetail).
+  2. **Per-user isolation** (defense-in-depth) — 3 queries JOIN'd `jobs` without `AND j.user_id = $X`. The driving table's user_id was scoped, so leakage required cross-user FK rows that shouldn't exist, but DB-level defense-in-depth was missing. Fixed in:
+     - `GET /api/career/stats` — top-pick subquery
+     - `GET /api/career/ranked` — ranked applications
+     - `POST /api/jobs/contacts/:id/generate` — contact + company lookup
+  3. Apify key on VM **validated** against `https://api.apify.com/v2/users/me`: length 46, prefix `apify_api_`, account `marbled_geothermal` (FREE plan). User did rotate the VM-side key (auto-generated username = fresh account). pm2 logs from earlier today still show "Monthly usage hard limit exceeded" on LinkedIn actors, but those pre-date the rotation; not yet retried post-restart.
+  4. Lint debt unchanged — 47 errors are pre-existing `react-hooks/set-state-in-effect`, unused vars, `vite.config.js __dirname`. Documented as architectural follow-up, not addressed.
+- **Audit clean:**
+  - Frontend↔backend API contract: 80+ method/path pairs, zero mismatches.
+  - Secret scan: `.env` properly gitignored in both repos. No tracked credentials, only documented test-account UUID `459b9b5b...` in HANDOFF (intentional). `deploy/env.template` uses placeholders.
+  - Backend syntax sweep: every `.js` under `backend/` passes `node --check`.
+  - Frontend build: passes (677kb bundle, gzipped 178kb — could be code-split, low priority).
+  - Live VM: `pm2` stable, `/api/health` ok, `auth_mode=enforce`.
+- **Files:** [frontend/src/components/JobDashboard.jsx:192](frontend/src/components/JobDashboard.jsx#L192), [../outreach-local/backend/routes/careerOps.js:823](../outreach-local/backend/routes/careerOps.js#L823), [../outreach-local/backend/routes/careerOps.js:837](../outreach-local/backend/routes/careerOps.js#L837), [../outreach-local/backend/routes/jobs.js:1409](../outreach-local/backend/routes/jobs.js#L1409)
+- **Status:** committed and pushed. Frontend on `main`: `45128da`. Backend on `phase-4-pg`: `54ddf62`. Builds + node --check pass. **Backend NOT yet redeployed** — sandbox blocked the auto-deploy for newly-committed security changes; needs explicit user authorization.
+- **Follow-up:** Run `sudo bash /home/ubuntu/outreach/deploy/update.sh` on VM to ship the 3 isolation fixes. After that, browser-verify (a) Job Dashboard "Recent Evaluations" links open the report instead of 401-ing, (b) `/apply/ranked` still loads as `lakshmisravyar`. Apify scraping: if it still fails, check Apify dashboard for actor-specific monthly limits (key itself is valid).
+
 ### 2026-04-25 — VM backend deploy for sort/filter fix
 - **What:** Ran `sudo bash /home/ubuntu/outreach/deploy/update.sh` on the Mumbai VM (user-authorized SSH). Fast-forwarded `phase-4-pg` from `53f0767` → `86eaeed`, pm2 restarted `outreach-backend`. The in-script localhost health check raced the boot (connection-refused at 2s uptime), but the public `https://outreach-jt.duckdns.org/api/health` returned `{"status":"ok","auth_mode":"enforce"}` four seconds later and pm2 was stable at 22s/247mb.
 - **Files:** [../outreach-local/backend/routes/unified.js:50](../outreach-local/backend/routes/unified.js#L50)
