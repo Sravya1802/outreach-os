@@ -189,7 +189,7 @@ export default function JobDashboard() {
               <div style={{ fontSize:13, color:'#94a3b8' }}>No evaluations yet.</div>
             ) : (
               recentEvals.slice(0, 8).map((e, i) => (
-                <a key={i} href={`/api/career/evaluations/${e.id}/report.html`} target="_blank" rel="noreferrer"
+                <a key={i} href={api.career.reportHtmlUrl(e.id)} target="_blank" rel="noreferrer"
                   style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i < recentEvals.length - 1 ? '1px solid #f1f5f9' : 'none', textDecoration:'none' }}>
                   <div style={{ width:26, height:26, borderRadius:'50%', border:`2px solid ${GRADE_COLOR[e.grade] || '#94a3b8'}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
                     <span style={{ fontSize:11, fontWeight:900, color: GRADE_COLOR[e.grade] || '#94a3b8' }}>{e.grade || '—'}</span>
