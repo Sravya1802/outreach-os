@@ -245,9 +245,20 @@ const LINKEDIN_TEMPLATES = {
 function templateGuidance(type, customTemplates) {
   if (!customTemplates) return ''
   const key = type === 'linkedin' ? 'linkedin' : 'email'
-  const template = cleanOutreachTemplate(customTemplates[key])
-  if (!template) return ''
-  return `\n\nUser's preferred ${key} template/style anchor. Mirror its tone, structure, length, and directness while still personalizing to the recipient and company. Do not copy placeholders literally:\n${template}`
+  const primary = cleanOutreachTemplate(customTemplates[key])
+  const variants = Array.isArray(customTemplates.variants)
+    ? customTemplates.variants.filter(v => v && v.kind === key && v.body)
+    : []
+  if (!primary && variants.length === 0) return ''
+  let guidance = ''
+  if (primary) {
+    guidance += `\n\nUser's preferred ${key} template/style anchor. Mirror its tone, structure, length, and directness while still personalizing to the recipient and company. Do not copy placeholders literally:\n${primary}`
+  }
+  if (variants.length > 0) {
+    guidance += `\n\nAdditional ${key} style examples the user has saved (treat as alternative tones; pick the closest match for this recipient):\n`
+    guidance += variants.slice(0, 5).map(v => `[${v.name || 'Variant'}]\n${v.body}`).join('\n---\n')
+  }
+  return guidance
 }
 
 // Detect scenario and return best template

@@ -158,7 +158,8 @@ router.post('/evaluate', async (req, res) => {
 router.get('/evaluations', async (req, res) => {
   try {
     const rows = await all(`
-      SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at
+      SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at,
+             apply_mode, apply_status
       FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50
     `, [req.user.id]);
     res.json(rows);

@@ -48,6 +48,24 @@ const ASHBY_COMPANIES = [
 const CS_DEPTS  = /engineering|software|data|machine.?learning|\bml\b|infrastructure|platform|backend|frontend|systems|sre|devops|security|ai\b|research|analytics|cloud/i;
 const INTERN_RE = /intern/i;
 
+// ─── USA-only location filter ─────────────────────────────────────────────────
+// Drop results from non-US countries. Actors regularly leak Toronto/Bangalore/
+// London/Dublin/etc even when the input asks for "United States". Strategy:
+//   1. Anything explicitly non-US (country name or non-US country code) → drop
+//   2. Anything explicitly US (state name, US city, "Remote US", "USA") → keep
+//   3. Empty / "Remote" / unknown → keep (assume US since query was US-targeted)
+const NON_US_TOKENS = /\b(canada|toronto|vancouver|montreal|ottawa|calgary|waterloo|mississauga|edmonton|quebec|brampton|surrey|halifax|saskatoon|winnipeg|burnaby|markham|richmond hill|brampton|guelph|kitchener|ontario|alberta|british columbia|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island|yukon|northwest territories|nunavut|\bon, ca\b|\bbc, ca\b|\bab, ca\b|\bqc, ca\b|united kingdom|england|britain|\buk\b|london|manchester|birmingham|liverpool|edinburgh|glasgow|bristol|leeds|cambridge|oxford|sheffield|cardiff|belfast|dublin|cork|galway|limerick|ireland|france|paris|lyon|marseille|toulouse|nice|nantes|strasbourg|montpellier|bordeaux|germany|berlin|munich|hamburg|frankfurt|cologne|stuttgart|düsseldorf|leipzig|netherlands|amsterdam|rotterdam|the hague|utrecht|eindhoven|belgium|brussels|antwerp|ghent|spain|madrid|barcelona|valencia|seville|bilbao|portugal|lisbon|porto|italy|rome|milan|naples|turin|florence|bologna|venice|switzerland|zurich|geneva|basel|bern|austria|vienna|salzburg|sweden|stockholm|gothenburg|malmö|denmark|copenhagen|aarhus|norway|oslo|bergen|trondheim|finland|helsinki|tampere|poland|warsaw|kraków|wrocław|gdańsk|czechia|prague|brno|hungary|budapest|romania|bucharest|cluj|iași|greece|athens|thessaloniki|bulgaria|sofia|turkey|istanbul|ankara|izmir|israel|tel aviv|jerusalem|haifa|herzliya|india|bangalore|bengaluru|mumbai|delhi|noida|gurgaon|gurugram|hyderabad|chennai|pune|kolkata|ahmedabad|jaipur|lucknow|kanpur|nagpur|indore|coimbatore|kochi|thiruvananthapuram|chandigarh|china|beijing|shanghai|shenzhen|guangzhou|chengdu|hangzhou|wuhan|nanjing|tianjin|hong kong|taiwan|taipei|kaohsiung|japan|tokyo|osaka|kyoto|yokohama|nagoya|sapporo|fukuoka|south korea|seoul|busan|incheon|singapore|malaysia|kuala lumpur|penang|johor bahru|indonesia|jakarta|surabaya|bandung|thailand|bangkok|chiang mai|vietnam|ho chi minh|hanoi|philippines|manila|cebu|davao|australia|sydney|melbourne|brisbane|perth|adelaide|canberra|hobart|new zealand|auckland|wellington|christchurch|dunedin|brazil|são paulo|rio de janeiro|brasília|salvador|fortaleza|belo horizonte|curitiba|porto alegre|argentina|buenos aires|córdoba|rosario|chile|santiago|valparaíso|colombia|bogotá|medellín|cali|peru|lima|mexico|mexico city|guadalajara|monterrey|puebla|tijuana|south africa|johannesburg|cape town|durban|pretoria|nigeria|lagos|abuja|kenya|nairobi|egypt|cairo|alexandria|uae|dubai|abu dhabi|saudi arabia|riyadh|jeddah|qatar|doha|kuwait|kuwait city|bahrain|manama|jordan|amman|lebanon|beirut|pakistan|karachi|lahore|islamabad|bangladesh|dhaka|sri lanka|colombo|nepal|kathmandu)\b/i;
+function isUSLocation(loc) {
+  if (!loc) return true;
+  const s = String(loc).toLowerCase().trim();
+  if (!s) return true;
+  // Common "remote" variants → assume US since query was US-targeted
+  if (/^(remote|anywhere|us remote|usa|united states|us only|remote, usa|remote - us|remote \(us\))$/.test(s)) return true;
+  // Explicit non-US match
+  if (NON_US_TOKENS.test(s)) return false;
+  return true;
+}
+
 // ─── Search terms per subcategory ─────────────────────────────────────────────
 
 const SEARCH_TERMS_MAP = {
@@ -285,11 +303,13 @@ async function scrapeGreenhouse() {
         if (!INTERN_RE.test(job.title || '')) continue;
         const depts = (job.departments || []).map(d => d.name || '').join(' ');
         if (!CS_DEPTS.test(depts) && !CS_DEPTS.test(job.title || '')) continue;
+        const loc = job.location?.name || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           companyName,
           jobTitle:       job.title || '',
           jobDescription: (job.content || '').replace(/<[^>]+>/g, '').slice(0, 500),
-          location:       job.location?.name || 'USA',
+          location:       loc,
           careersUrl:     job.absolute_url || '',
           source:         'greenhouse',
         }));
@@ -317,11 +337,13 @@ async function scrapeLever() {
         if (!INTERN_RE.test(job.text || '')) continue;
         const team = job.categories?.team || '';
         if (!CS_DEPTS.test(team) && !CS_DEPTS.test(job.text || '')) continue;
+        const loc = job.categories?.location || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           job.company || (company.charAt(0).toUpperCase() + company.slice(1)),
           jobTitle:       job.text || '',
           jobDescription: (job.descriptionPlain || job.description || '').slice(0, 500),
-          location:       job.categories?.location || 'USA',
+          location:       loc,
           careersUrl:     job.hostedUrl || '',
           source:         'lever',
         }));
@@ -351,11 +373,13 @@ async function scrapeAshby() {
       for (const job of jobList) {
         if (!INTERN_RE.test(job.title || '')) continue;
         if (!CS_DEPTS.test(job.department || '') && !CS_DEPTS.test(job.title || '')) continue;
+        const loc = job.locationName || job.location || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           companyName,
           jobTitle:       job.title || '',
           jobDescription: (job.descriptionHtml || job.descriptionSocial || '').replace(/<[^>]+>/g, '').slice(0, 500),
-          location:       job.locationName || job.location || 'USA',
+          location:       loc,
           careersUrl:     job.jobPostingUrl || job.applyUrl || '',
           source:         'ashby',
         }));
@@ -507,7 +531,8 @@ async function scrapeLinkedInJobs(searchTerms = []) {
           careersUrl:     i.jobUrl || i.url || '',
           source:         'linkedin',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length === 0) {
         // Actor ignored the intern keyword and returned unrelated roles — try
         // the next actor (which uses LinkedIn's own search URL and honors
@@ -575,7 +600,8 @@ async function scrapeWellfound(searchTerms = []) {
           careersUrl:     i.url || i.applyUrl || '',
           source:         'wellfound',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       console.log(`[wellfound] returned ${results.length} results`);
       return results;
     } catch (err) {
@@ -614,7 +640,8 @@ async function scrapeIndeed(searchTerms = []) {
           careersUrl:     i.url || i.externalApplyLink || '',
           source:         'indeed',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length === 0) {
         const sample = (items[0]?.positionName || items[0]?.title || '').slice(0, 80);
         console.warn(`[indeed] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
@@ -660,7 +687,8 @@ async function scrapeDice(searchTerms = []) {
           careersUrl: i.jobDetailUrl ? `https://www.dice.com/job-detail/${i.jobDetailUrl}` : i.applyUrl || '',
           source:     'dice',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[dice] returned ${results.length} results (direct API)`);
         return results;
@@ -688,7 +716,8 @@ async function scrapeDice(searchTerms = []) {
         careersUrl: i.url || '',
         source:     'dice',
       }))
-      .filter(r => r.name.length > 1);
+      .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
     console.log(`[dice] returned ${results.length} results (Apify)`);
     return results;
   } catch (err) {
@@ -722,7 +751,8 @@ async function scrapeGoogleJobs(searchTerms = []) {
           careersUrl:     i.url || i.applyLink || '',
           source:         'google_jobs',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length === 0) {
         const sample = (items[0]?.title || items[0]?.jobTitle || '').slice(0, 80);
         console.warn(`[google_jobs] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
@@ -779,7 +809,8 @@ async function scrapeAIJobs() {
           });
         })
         .filter(Boolean)
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[ai_jobs] returned ${results.length} results (${url})`);
         return results;
@@ -856,7 +887,8 @@ async function scrapeProsple() {
           careersUrl: i.url || i.applyUrl || '',
           source:     'prosple',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[prosple] returned ${results.length} results`);
         return results;
@@ -884,7 +916,8 @@ async function scrapeAIJobsAI() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.apply_url || '', source: 'aijobs_ai' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[aijobs.ai] ${results.length} results`); return results; }
     }
   } catch (_) {}
@@ -926,7 +959,8 @@ async function scrapeStartupJobs() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.startup?.name || i.company || '').trim(), jobTitle: i.title, location: i.location || i.remote ? 'Remote' : 'USA', careersUrl: i.url || i.link || '', source: 'startup_jobs' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[startup.jobs] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -968,7 +1002,8 @@ async function scrapeRemoteAI() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'Remote', careersUrl: i.url || i.apply_url || '', source: 'remoteai' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[remoteai.io] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -1010,7 +1045,8 @@ async function scrapeArcDev() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company?.name || i.company || '').trim(), jobTitle: i.title, location: i.location || 'Remote', careersUrl: i.url || i.apply_url || '', source: 'arc_dev' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[arc.dev] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -1036,7 +1072,8 @@ async function scrapeAIJobsNet() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.link || '', source: 'aijobs_net' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[aijobs.net] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -1078,7 +1115,8 @@ async function scrapeHiringCafe() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.apply_url || '', source: 'hiring_cafe' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[hiring.cafe] ${results.length} results`); return results; }
     } catch (_) {}
   }
