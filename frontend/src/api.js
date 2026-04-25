@@ -67,6 +67,20 @@ async function apiCall(url, options = {}) {
   return res.json()
 }
 
+async function statsWithContactSummary() {
+  const stats = await apiCall('/stats')
+  const metrics = await apiCall('/dashboard/job-metrics').catch(() => null)
+  const summary = metrics?.summary || {}
+  return {
+    ...stats,
+    totalContacts: summary.totalContacts ?? stats.totalContacts,
+    contactsWithEmail: summary.contactsWithEmail ?? stats.contactsWithEmail,
+    totalLinkedInContacts: summary.contactsWithLinkedIn ?? stats.totalLinkedInContacts,
+    outreachSent: summary.outreachSent ?? stats.totalSent,
+    outreachReplied: summary.outreachReplied ?? stats.totalReplied,
+  }
+}
+
 export async function rawApiFetch(url, options = {}) {
   const auth = await authHeaders()
   const headers = options.headers ? { ...auth, ...options.headers } : auth
@@ -80,12 +94,12 @@ const qs = (params) => {
 
 export const api = {
   health:     () => apiCall('/health'),
-  stats:      () => apiCall('/stats'),
+  stats:      () => statsWithContactSummary(),
   activity:   () => apiCall('/activity'),
   jobMetrics: () => apiCall('/dashboard/job-metrics'),
 
   credits: {
-    status: () => apiCall('/credits/status').catch(() => ({ credits: 999, plan: 'hobby' })),
+    status: () => apiCall('/credits/status').catch(() => ({})),
   },
 
   companies: {

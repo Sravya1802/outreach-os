@@ -152,15 +152,19 @@ export default function CompanyDashboard({ onStatsChange }) {
         {stats && (
           <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:12, marginTop:20 }}>
             {[
-              { label:'Companies', value: stats.totalCompanies?.toLocaleString() ?? '—' },
-              { label:'Contacts',  value: stats.totalContacts?.toLocaleString() ?? '—' },
-              { label:'Outreach Sent', value: stats.totalSent?.toLocaleString() ?? '—' },
-              { label:'Response Rate', value: stats.responseRate != null ? `${stats.responseRate}%` : '—' },
-              { label:'Sources', value: stats.activeSources?.toLocaleString() ?? '—' },
+              { label:'Companies', value: stats.totalCompanies?.toLocaleString() ?? '—', sub:'in database' },
+              { label:'Contacts',  value: stats.totalContacts?.toLocaleString() ?? '—', sub:[
+                stats.contactsWithEmail != null ? `${stats.contactsWithEmail.toLocaleString()} emails` : null,
+                stats.totalLinkedInContacts != null ? `${stats.totalLinkedInContacts.toLocaleString()} LinkedIn` : null,
+              ].filter(Boolean).join(' · ') || 'people found' },
+              { label:'Outreach Sent', value: stats.totalSent?.toLocaleString() ?? '—', sub:'messages sent' },
+              { label:'Response Rate', value: stats.responseRate != null ? `${stats.responseRate}%` : '—', sub:'reply rate' },
+              { label:'Sources', value: stats.activeSources?.toLocaleString() ?? '—', sub:'active feeds' },
             ].map(s => (
               <div key={s.label} className="dash-stat-card" style={{ padding:'14px 16px', background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0' }}>
                 <div style={{ fontSize:20, fontWeight:800, color:'#0f172a' }}>{s.value}</div>
                 <div style={{ fontSize:11, color:'#94a3b8', marginTop:3, fontWeight:600 }}>{s.label}</div>
+                <div style={{ fontSize:10, color:'#94a3b8', marginTop:2 }}>{s.sub}</div>
               </div>
             ))}
           </div>

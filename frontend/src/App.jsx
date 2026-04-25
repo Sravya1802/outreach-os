@@ -127,8 +127,16 @@ function RefreshBadge() {
   )
 }
 
-function StatusDot({ ok }) {
-  return <span style={{ width:7, height:7, borderRadius:'50%', background: ok ? '#22c55e' : '#475569', display:'inline-block', flexShrink:0 }} />
+function serviceStatus(configured, detail = null) {
+  if (!configured) return { status: 'off', note: 'Not configured' }
+  if (detail?.critical || detail?.error) return { status: 'down', note: detail.error || 'Quota exhausted or unavailable' }
+  if (detail?.warning || detail?.rateLimited) return { status: 'warn', note: 'Low quota or rate limited' }
+  return { status: 'ok', note: 'Available' }
+}
+
+function StatusDot({ status }) {
+  const color = status === 'ok' ? '#22c55e' : status === 'warn' ? '#f59e0b' : status === 'down' ? '#ef4444' : '#475569'
+  return <span style={{ width:7, height:7, borderRadius:'50%', background: color, display:'inline-block', flexShrink:0 }} />
 }
 
 function NavBadge({ n }) {
@@ -145,6 +153,7 @@ export default function App() {
   const [session, setSession]         = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
   const [health, setHealth]           = useState(null)
+  const [credits, setCredits]         = useState(null)
   const [stats, setStats]             = useState(null)
   const [profileName, setProfileName] = useState('')
   const [aiProvider, setAiProvider]   = useState('gemini')
@@ -164,7 +173,11 @@ export default function App() {
     setProfileName(email.split('@')[0] || 'User')
   }, [session])
 
-  useEffect(() => { if (session) api.health().then(setHealth).catch(() => {}) }, [session])
+  useEffect(() => {
+    if (!session) return
+    api.health().then(setHealth).catch(() => {})
+    api.credits.status().then(setCredits).catch(() => {})
+  }, [session])
   useEffect(() => {
     if (!session) return
     const refresh = () => api.stats().then(setStats).catch(() => {})
@@ -282,10 +295,15 @@ export default function App() {
               API Status
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-              {[['Gemini AI', health.has_gemini], ['Apify', health.has_apify], ['Apollo', health.has_apollo], ['LinkedIn', health.has_linkedin]].map(([label, ok]) => (
-                <div key={label} style={{ display:'flex', alignItems:'center', gap:8 }}>
-                  <StatusDot ok={ok} />
-                  <span style={{ fontSize:11, color: ok ? '#64748b' : '#475569' }}>{label}</span>
+              {[
+                ['Gemini AI', serviceStatus(health.has_gemini, credits?.gemini)],
+                ['Apify',    serviceStatus(health.has_apify,  credits?.apify)],
+                ['Apollo',   serviceStatus(health.has_apollo, credits?.apollo)],
+                ['LinkedIn', serviceStatus(health.has_linkedin)],
+              ].map(([label, svc]) => (
+                <div key={label} title={svc.note} style={{ display:'flex', alignItems:'center', gap:8 }}>
+                  <StatusDot status={svc.status} />
+                  <span style={{ fontSize:11, color: svc.status === 'ok' ? '#64748b' : svc.status === 'down' ? '#f87171' : svc.status === 'warn' ? '#f59e0b' : '#475569' }}>{label}</span>
                 </div>
               ))}
             </div>

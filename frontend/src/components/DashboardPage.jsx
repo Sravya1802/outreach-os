@@ -71,7 +71,7 @@ export default function DashboardPage({ onStatsChange }) {
 
   const statCards = stats ? [
     { label:'Companies',    value: stats.totalCompanies?.toLocaleString() ?? '—',  sub:'in database',       tint:'#6366f1', action: () => navigate('/companies') },
-    { label:'Contacts',     value: stats.totalContacts?.toLocaleString() ?? '—',   sub:'with emails found', tint:'#059669', action: () => navigate('/outreach') },
+    { label:'Contacts',     value: stats.totalContacts?.toLocaleString() ?? '—',   sub: stats.contactsWithEmail != null ? `${stats.contactsWithEmail.toLocaleString()} emails found` : 'people found', tint:'#059669', action: () => navigate('/outreach') },
     { label:'Sent',         value: stats.totalSent?.toLocaleString() ?? '—',       sub:'outreach emails',   tint:'#0891b2', action: null },
     { label:'Response Rate',value: stats.responseRate != null ? `${stats.responseRate}%` : '—', sub:'reply rate', tint:'#d97706', action: null },
     { label:'Evaluated',    value: stats.totalApplications?.toLocaleString() ?? '—', sub:'applications',   tint:'#9333ea', action: () => navigate('/career-ops') },
