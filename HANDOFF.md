@@ -38,17 +38,18 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+346c0b2  fix: show real contact and api status counts
+c36bb39  docs: record ranked roles fix
 0d0e534  fix: stabilize ranked roles rendering
 509d859  docs: record apply nav fix push
 7540f13  docs: record apply nav overlay fix
 fcb908b  fix: keep sidebar nav above content overlays
-aceba4e  docs: record push state recheck
-bc996ce  docs: record main push status
 …
 ```
 
 phase-4-pg tip:
 ```
+f929862  fix: report total contacts and apify quota status
 624e6a3  perf: collapse N+1 count queries (4497→1 + 18→3)
 f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 8571f6c  migration 004: tighten user_id NOT NULL
@@ -59,13 +60,13 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ### Pending — needs my input or has an unfixed bug
 1. **Outreach CRM "0 contacts"** — code fix is committed (`8a55549`) so `/outreach` now calls the JWT-attaching API wrapper. After Vercel deploy, verify as `lakshmisravyar@gmail.com` that `/outreach` shows 36 contacts (14 with email). If still empty, check Settings page → red Account box and DevTools Network `all-contacts` `Authorization` header.
 2. **Email + DM templates** — placeholder page exists at `/outreach/templates`. I'll paste my preferred templates and you wire them into the AI prompt + populate the page.
-3. **Role Eligibility / Ranked Roles loading bug** — code fix committed (`0d0e534`) to prevent blank render when `/career/ranked` returns score values as strings. After Vercel deploy, verify `/apply/ranked` opens and renders rows or an empty state.
+3. **Role Eligibility / Ranked Roles loading bug** — code fix committed and pushed (`0d0e534`) to prevent blank render when `/career/ranked` returns score values as strings. After Vercel deploy, verify `/apply/ranked` opens and renders rows or an empty state.
 4. **Sign in / Sign up UI** — currently one combined Login form, want a tabs-based UX.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
 
 ### Deferred / acknowledged
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
-- "Apify status card should turn red when limit hit" — small UI fix in Settings sidebar.
+- ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; verify after Vercel + VM deploy.
 - "Top Companies filter on Companies page is broken" — small frontend bug.
 - "Companies page shows 0 first then populates" — loading-state flicker.
 - "Don't pre-load resume in Career Ops Evaluate" — UX preference.
@@ -87,7 +88,7 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Verify deploy** for Outreach CRM fix, Auto Apply tab order, Completed tab, and `/apply/ranked`.
+1. **Verify deploy** for Outreach CRM fix, Companies contact count, Apify red status, Auto Apply tab order, Completed tab, and `/apply/ranked`.
 2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
 3. **Receive** Role Eligibility DevTools error → fix.
 4. **Quick wins**: Apify-status-red, Top-Companies-filter, Companies-flicker, Career-Ops-no-preload — these are 15-30 min each.
@@ -115,11 +116,17 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Companies contacts count + Apify status
+- **What:** Fixed misleading Companies/Dashboard contact stats by enriching frontend stats from job metrics and patched backend `/api/stats` to return total contacts plus email/LinkedIn counts. Wired API Status to `/api/credits/status` so Apify turns red on quota/error instead of green just because a token exists.
+- **Files:** [frontend/src/api.js:70](frontend/src/api.js#L70), [frontend/src/components/CompanyDashboard.jsx:151](frontend/src/components/CompanyDashboard.jsx#L151), [frontend/src/App.jsx:130](frontend/src/App.jsx#L130), [../outreach-local/backend/server.js:133](../outreach-local/backend/server.js#L133), [../outreach-local/backend/services/creditChecker.js:44](../outreach-local/backend/services/creditChecker.js#L44)
+- **Status:** frontend committed on `main`: `346c0b2`; backend committed on `phase-4-pg`: `f929862`; `npm run build --prefix frontend`, `node --check backend/server.js`, and `node --check backend/services/creditChecker.js` passed.
+- **Follow-up:** Push both branches. Vercel deploy updates frontend; VM backend still needs `phase-4-pg` pulled/restarted for source-of-truth `/api/stats` and Apify quota detection to update.
+
 ### 2026-04-25 — Ranked Roles blank page + Completed tab order
 - **What:** Moved Auto Apply `Completed` tab after `History`. Hardened `/apply/ranked` against backend score values arriving as strings by normalizing `fit_score`, response shape, average score, best-match, and score rendering.
 - **Files:** [frontend/src/components/AutoApplyPage.jsx:5](frontend/src/components/AutoApplyPage.jsx#L5), [frontend/src/components/CareerOpsPage.jsx:19](frontend/src/components/CareerOpsPage.jsx#L19)
-- **Status:** committed on `main`: `0d0e534`; `npm run build --prefix frontend` passed; not yet browser-confirmed by user.
-- **Follow-up:** Push `main`; after Vercel deploy, hard-refresh and verify `/apply/ranked` plus Auto Apply tab ordering.
+- **Status:** committed and pushed on `main`: `0d0e534`; `npm run build --prefix frontend` passed; not yet browser-confirmed by user.
+- **Follow-up:** After Vercel deploy, hard-refresh and verify `/apply/ranked` plus Auto Apply tab ordering.
 
 ### 2026-04-25 — Apply nav overlay fix pushed
 - **What:** Pushed the sidebar overlay fix and handoff update to `origin/main`.
