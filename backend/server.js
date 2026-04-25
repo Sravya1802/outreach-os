@@ -159,6 +159,17 @@ app.get('/api/stats', async (req, res) => {
     } catch (_) {}
     const totalSent = c5?.n || 0;
     const totalReplied = c6?.n || 0;
+
+    // Last scrape summary — written by /jobs/scrape; rendered on Dashboard
+    let lastScrape = null;
+    try {
+      const row = await one(
+        "SELECT value FROM meta WHERE user_id = $1 AND key = 'last_scrape_summary'",
+        [req.user.id]
+      );
+      if (row?.value) lastScrape = JSON.parse(row.value);
+    } catch (_) {}
+
     res.json({
       totalCompanies: c1?.n || 0,
       totalContacts: c2?.n || 0,
@@ -169,6 +180,7 @@ app.get('/api/stats', async (req, res) => {
       activeSources: c7?.n || 0,
       ycImported: c8?.n || 0,
       totalApplications,
+      lastScrape,
     });
   } catch (err) {
     console.error('[stats]', err);

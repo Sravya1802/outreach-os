@@ -131,9 +131,31 @@ router.post('/scrape', async (req, res) => {
   console.log('[scrape] top categories:', breakdown.map(r => `${r.category}/${r.subcategory}:${r.n}`).join(', '));
 
   const total = (await one('SELECT COUNT(*) as n FROM jobs WHERE user_id = $1', [req.user.id])).n;
-  console.log(`[scrape] done — added=${added} total=${total} classified=${classified} unclassified=${unclassified}`);
+  const found = rawResults.length;
+  const alreadyInDb = Math.max(0, found - added);
+  console.log(`[scrape] done — found=${found} added=${added} alreadyInDb=${alreadyInDb} total=${total} classified=${classified} unclassified=${unclassified}`);
 
-  res.json({ added, total, succeeded, failedSrc, classified, unclassified, bySource, errors: scrapeErrors, newCompanies });
+  // Persist the latest scrape summary so the dashboard can render
+  // "Last scrape — 2 min ago, found 100, +5 new" without needing a separate
+  // activity log query. meta is per-user; one row per user, last-write wins.
+  try {
+    await run(
+      `INSERT INTO meta (user_id, key, value)
+       VALUES ($1, 'last_scrape_summary', $2)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+      [req.user.id, JSON.stringify({
+        at:         new Date().toISOString(),
+        found,
+        added,
+        alreadyInDb,
+        succeeded,
+        failedSrc,
+        bySource,
+      })]
+    );
+  } catch (e) { console.warn('[scrape] failed to persist last_scrape_summary:', e.message); }
+
+  res.json({ added, found, alreadyInDb, total, succeeded, failedSrc, classified, unclassified, bySource, errors: scrapeErrors, newCompanies });
 });
 
 // ── Search companies by name ──────────────────────────────────────────────────
