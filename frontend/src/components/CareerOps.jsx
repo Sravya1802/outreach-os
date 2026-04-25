@@ -933,11 +933,17 @@ export default function CareerOps() {
       {/* Body */}
       <div style={{ flex:1, overflowY:'auto', padding:'24px 28px' }}>
 
-        {/* Resume — always visible */}
-        <div style={{ marginBottom:22 }}>
-          <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:8 }}>Your Resume</div>
-          <ResumeUpload resumeInfo={resumeInfo} onUploaded={info => setResumeInfo({ hasResume:true, ...info })} />
-        </div>
+        {/* Resume section — only render when needed:
+            - on profile/setup tab (manage resume there), or
+            - on any tab when the user has no resume yet (so the prompt to upload is visible).
+            Returning users on evaluate/scanner/batch/history skip the redundant green
+            "uploaded" box and see the actual workflow first. */}
+        {(tab === 'profile' || resumeInfo?.hasResume === false) && (
+          <div style={{ marginBottom:22 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:8 }}>Your Resume</div>
+            <ResumeUpload resumeInfo={resumeInfo} onUploaded={info => setResumeInfo({ hasResume:true, ...info })} />
+          </div>
+        )}
 
         {/* ── Evaluate tab ── */}
         {tab === 'evaluate' && (
