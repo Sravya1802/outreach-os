@@ -207,7 +207,7 @@ export default function App() {
     <div style={{ height:'100vh', display:'flex', overflow:'hidden', fontFamily:'var(--font)', background:'var(--bg)' }}>
 
       {/* ── Sidebar ── */}
-      <aside style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b' }}>
+      <aside style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
 
         {/* Logo */}
         <div style={{ padding:'20px 18px 16px', borderBottom:'1px solid #1e293b' }}>
