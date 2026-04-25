@@ -124,21 +124,61 @@ export default function DashboardPage({ onStatsChange }) {
               : `${Math.floor(ageMs / 86400000)}d ago`
             const allInDb = ls.added === 0 && ls.found > 0
             const tint = allInDb ? '#94a3b8' : ls.added > 0 ? '#16a34a' : '#dc2626'
+            const sourceEntries = Object.entries(ls.bySource || {})
+              .filter(([, n]) => n > 0)
+              .sort((a, b) => b[1] - a[1])
+            const failedSources = Object.keys(ls.errors || {})
             return (
-              <div onClick={() => navigate('/scraper')}
-                style={{ marginBottom:24, padding:'14px 18px', background:'#fff', border:`1px solid ${tint}30`, borderLeft:`3px solid ${tint}`, borderRadius:10, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
-                <div>
-                  <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:3 }}>
-                    Last scrape · {ageStr}
+              <div style={{ marginBottom:24, padding:'14px 18px', background:'#fff', border:`1px solid ${tint}30`, borderLeft:`3px solid ${tint}`, borderRadius:10, display:'flex', flexDirection:'column', gap:10 }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
+                  <div>
+                    <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:3 }}>
+                      Last scrape · {ageStr}
+                    </div>
+                    <div style={{ fontSize:13, fontWeight:600, color:'#0f172a' }}>
+                      Found <strong>{ls.found}</strong>
+                      {ls.added > 0 && <> · <span style={{ color:'#16a34a' }}>+{ls.added} new</span></>}
+                      {ls.alreadyInDb > 0 && <> · <span style={{ color:'#64748b' }}>{ls.alreadyInDb} already in DB</span></>}
+                    </div>
                   </div>
-                  <div style={{ fontSize:13, fontWeight:600, color:'#0f172a' }}>
-                    Found <strong>{ls.found}</strong>
-                    {ls.added > 0 && <> · <span style={{ color:'#16a34a' }}>+{ls.added} new</span></>}
-                    {ls.alreadyInDb > 0 && <> · <span style={{ color:'#64748b' }}>{ls.alreadyInDb} already in DB</span></>}
-                    {ls.failedSrc > 0 && <> · <span style={{ color:'#dc2626' }}>{ls.failedSrc} source{ls.failedSrc !== 1 ? 's' : ''} failed</span></>}
-                  </div>
+                  <button onClick={() => navigate('/scraper')}
+                    style={{ background:'transparent', border:'none', fontSize:11, fontWeight:700, color: tint, cursor:'pointer', padding:0 }}>
+                    ↻ Scrape again
+                  </button>
                 </div>
-                <div style={{ fontSize:11, fontWeight:700, color: tint }}>↻ Scrape again</div>
+
+                {/* Per-source breakdown — confirms which scrapers are actually working */}
+                {sourceEntries.length > 0 && (
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                    {sourceEntries.map(([src, n]) => (
+                      <span key={src} style={{ fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6, background:'#f0fdf4', color:'#166534', border:'1px solid #bbf7d0' }}>
+                        {src}: {n}
+                      </span>
+                    ))}
+                    {failedSources.map(src => (
+                      <span key={src} title={ls.errors[src]} style={{ fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:6, background:'#fef2f2', color:'#991b1b', border:'1px solid #fecaca' }}>
+                        {src}: failed
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                {/* Names of newly added companies — concrete proof of what happened */}
+                {(ls.newCompanyNames || []).length > 0 && (
+                  <div style={{ fontSize:12, color:'#475569', lineHeight:1.5 }}>
+                    <span style={{ color:'#94a3b8', fontWeight:600 }}>New: </span>
+                    {ls.newCompanyNames.slice(0, 8).map((n, i) => (
+                      <span key={i}>
+                        <button onClick={() => navigate(`/companies?search=${encodeURIComponent(n)}`)}
+                          style={{ background:'transparent', border:'none', padding:0, color:'#0f172a', fontWeight:600, cursor:'pointer', textDecoration:'underline' }}>
+                          {n}
+                        </button>
+                        {i < Math.min(7, ls.newCompanyNames.length - 1) && ', '}
+                      </span>
+                    ))}
+                    {ls.newCompanyNames.length > 8 && <span style={{ color:'#94a3b8' }}> + {ls.added - 8} more</span>}
+                  </div>
+                )}
               </div>
             )
           })()}
