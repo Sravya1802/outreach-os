@@ -225,6 +225,11 @@ export const api = {
     stats:       () => apiCall('/career/stats'),
     ranked:      () => apiCall('/career/ranked'),
     scanPortals: (roleType = 'intern') => apiCall('/career/scan-portals', { method: 'POST', body: { roleType } }),
+    autoApplyQueue:   () => apiCall('/career/auto-apply-queue'),
+    nightlySettings:  () => apiCall('/career/nightly-settings'),
+    saveNightlySettings: (body) => apiCall('/career/nightly-settings', { method: 'PUT', body }),
+    runNightlyPipeline:  (overrides = {}) => apiCall('/career/nightly-pipeline', { method: 'POST', body: overrides }),
+    nightlyLastRun:      () => apiCall('/career/nightly-pipeline/last-run'),
 
     // ── Profile + resumes library ────────────────────────────────────────────
     profile:        () => apiCall('/career/profile'),

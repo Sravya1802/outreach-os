@@ -441,18 +441,54 @@ export function AutoApplySetup() {
   const [savedMsg, setSavedMsg]   = useState(null)
   const [running, setRunning]     = useState(false)
   const [runResult, setRunResult] = useState(null)
+  const [queue, setQueue]         = useState({ items: [], counts: {} })
+  const [nightly, setNightly]     = useState(null)
+  const [nightlySaving, setNightlySaving] = useState(false)
+  const [nightlyRunning, setNightlyRunning] = useState(false)
+  const [nightlyResult, setNightlyResult] = useState(null)
+  const [lastRun, setLastRun]     = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [p, lib] = await Promise.all([api.career.profile(), api.career.resumesLibrary()])
+      const [p, lib, q, ns, lr] = await Promise.all([
+        api.career.profile(),
+        api.career.resumesLibrary(),
+        api.career.autoApplyQueue().catch(() => ({ items: [], counts: {} })),
+        api.career.nightlySettings().catch(() => ({ settings: null })),
+        api.career.nightlyLastRun().catch(() => ({ lastRun: null })),
+      ])
       setProfile(p || {})
       setResumeDir(lib.resumeDir || '')
       setResumes(lib.resumes || [])
+      setQueue(q || { items: [], counts: {} })
+      setNightly(ns?.settings || { enabled:false, roleType:'intern', minScore:85, maxApps:50, useLibraryResume:true })
+      setLastRun(lr?.lastRun || null)
     } catch (e) { console.warn('Profile load error:', e) }
     setLoading(false)
   }, [])
   useEffect(() => { load() }, [load])
+
+  async function saveNightly() {
+    setNightlySaving(true)
+    try {
+      const r = await api.career.saveNightlySettings(nightly)
+      setNightly(r.settings)
+    } catch (err) { alert('Save failed: ' + err.message) }
+    setNightlySaving(false)
+  }
+
+  async function runNightly() {
+    setNightlyRunning(true); setNightlyResult(null)
+    try {
+      const r = await api.career.runNightlyPipeline()
+      setNightlyResult(r); setLastRun(r)
+      // refresh the queue list
+      const q = await api.career.autoApplyQueue().catch(() => ({ items: [], counts: {} }))
+      setQueue(q)
+    } catch (err) { setNightlyResult({ error: err.message }) }
+    setNightlyRunning(false)
+  }
 
   async function saveProfile() {
     setSaving(true); setSavedMsg(null)
@@ -571,6 +607,151 @@ export function AutoApplySetup() {
           </div>
         )}
       </div>
+
+      {/* Visible queue — shows what's in flight, what needs review, what's done */}
+      <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20, marginBottom:16 }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, flexWrap:'wrap', gap:10 }}>
+          <div>
+            <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:0 }}>Queue & Status</h2>
+            <p style={{ fontSize:12, color:'#64748b', margin:'2px 0 0' }}>Every role flagged for auto-apply, by status</p>
+          </div>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+            {[
+              ['needs_review',         queue.counts?.needs_review || 0, '#dc2626', '#fee2e2', 'Needs review'],
+              ['queued',               queue.counts?.queued       || 0, '#7c3aed', '#f5f3ff', 'Queued'],
+              ['submitted',            queue.counts?.submitted    || 0, '#16a34a', '#f0fdf4', 'Submitted'],
+              ['failed',               queue.counts?.failed       || 0, '#d97706', '#fffbeb', 'Failed'],
+              ['platform_unsupported', queue.counts?.unsupported  || 0, '#64748b', '#f1f5f9', 'Unsupported'],
+            ].map(([k, n, color, bg, label]) => n > 0 && (
+              <span key={k} style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background: bg, color, border: `1px solid ${color}30` }}>
+                {label}: {n}
+              </span>
+            ))}
+          </div>
+        </div>
+        {queue.items.length === 0 ? (
+          <div style={{ fontSize:13, color:'#94a3b8', padding:'18px 0', textAlign:'center' }}>
+            No roles in the queue yet. Add some via "＋ Add to Auto-Apply Queue" on an Evaluate result, or run the nightly pipeline below.
+          </div>
+        ) : (
+          <div style={{ maxHeight:340, overflowY:'auto', border:'1px solid #f1f5f9', borderRadius:10 }}>
+            {queue.items.map(item => {
+              const statusMeta = {
+                needs_review:         { color:'#dc2626', bg:'#fee2e2', label:'Needs review' },
+                queued:               { color:'#7c3aed', bg:'#f5f3ff', label:'Queued' },
+                submitted:            { color:'#16a34a', bg:'#f0fdf4', label:'Submitted' },
+                submit_failed:        { color:'#d97706', bg:'#fffbeb', label:'Failed' },
+                failed:               { color:'#d97706', bg:'#fffbeb', label:'Failed' },
+                platform_unsupported: { color:'#64748b', bg:'#f1f5f9', label:'Unsupported' },
+              }[item.apply_status] || { color:'#64748b', bg:'#f1f5f9', label: item.apply_status }
+              const sourceLabel = {
+                career_ops:           'Manual eval',
+                career_ops_batch:     'Bulk eval',
+                nightly_pipeline:     '🌙 Nightly',
+                'career_ops_batch (portal scanner)': 'Portal Scanner',
+              }[item.source] || item.source || 'manual'
+              return (
+                <div key={item.id} style={{ padding:'12px 14px', borderBottom:'1px solid #f1f5f9', display:'flex', alignItems:'center', gap:12, fontSize:12 }}>
+                  <span style={{ fontSize:10, fontWeight:700, padding:'3px 8px', borderRadius:5, background: statusMeta.bg, color: statusMeta.color, flexShrink:0, minWidth:90, textAlign:'center' }}>
+                    {statusMeta.label}
+                  </span>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontWeight:700, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {item.job_title || 'Unknown role'} <span style={{ fontWeight:400, color:'#94a3b8' }}>at</span> {item.company_name || 'Unknown'}
+                    </div>
+                    <div style={{ fontSize:11, color:'#94a3b8', marginTop:2, display:'flex', gap:8, flexWrap:'wrap' }}>
+                      {item.grade && <span>Grade {item.grade}</span>}
+                      {item.score && <span>· {Number(item.score).toFixed(0)}/100</span>}
+                      <span>· from {sourceLabel}</span>
+                      {item.apply_platform && <span>· {item.apply_platform}</span>}
+                      {item.created_at && <span>· {new Date(item.created_at).toLocaleDateString()}</span>}
+                    </div>
+                    {item.apply_status === 'needs_review' && item.apply_error && (
+                      <div style={{ fontSize:11, color:'#dc2626', marginTop:3, fontStyle:'italic' }}>⚠ {item.apply_error}</div>
+                    )}
+                  </div>
+                  {item.job_url && (
+                    <a href={item.job_url} target="_blank" rel="noreferrer"
+                      style={{ fontSize:11, fontWeight:600, color:'#6366f1', textDecoration:'none', flexShrink:0 }}>
+                      View ↗
+                    </a>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Nightly pipeline — full chain (scan → evaluate → fit-filter → queue → submit) */}
+      {nightly && (
+        <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20, marginBottom:16 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:12, flexWrap:'wrap', gap:10 }}>
+            <div>
+              <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:0 }}>🌙 Nightly Pipeline</h2>
+              <p style={{ fontSize:12, color:'#64748b', margin:'2px 0 0' }}>Auto-runs at 07:00 UTC: scan → evaluate → score ≥ {nightly.minScore} → submit (up to {nightly.maxApps}). Uses your <strong>library</strong> resume — no per-role tailoring.</p>
+            </div>
+            <button onClick={runNightly} disabled={nightlyRunning}
+              style={{ padding:'9px 18px', fontSize:12, fontWeight:700, background: nightlyRunning ? '#f1f5f9' : 'linear-gradient(135deg,#1e293b,#334155)', color: nightlyRunning ? '#64748b':'#fff', border:'none', borderRadius:9, cursor: nightlyRunning ? 'default':'pointer', display:'flex', alignItems:'center', gap:7 }}>
+              {nightlyRunning ? <><Spin size={13} color="#64748b" /> Running pipeline…</> : '🌙 Run Pipeline Now'}
+            </button>
+          </div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr 1fr', gap:12, marginBottom:14 }}>
+            <div>
+              <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>Enabled</label>
+              <select value={nightly.enabled ? '1' : '0'} onChange={e => setNightly({ ...nightly, enabled: e.target.value === '1' })}
+                style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13 }}>
+                <option value="0">Off</option>
+                <option value="1">On (cron + manual)</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>Role Type</label>
+              <select value={nightly.roleType} onChange={e => setNightly({ ...nightly, roleType: e.target.value })}
+                style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13 }}>
+                <option value="intern">Intern</option>
+                <option value="fulltime">Full-time</option>
+                <option value="all">Both</option>
+              </select>
+            </div>
+            <div>
+              <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>Min Score</label>
+              <input type="number" min="0" max="100" value={nightly.minScore} onChange={e => setNightly({ ...nightly, minScore: Number(e.target.value) })}
+                style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13 }} />
+            </div>
+            <div>
+              <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>Max Apps / Run</label>
+              <input type="number" min="1" max="200" value={nightly.maxApps} onChange={e => setNightly({ ...nightly, maxApps: Number(e.target.value) })}
+                style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13 }} />
+            </div>
+          </div>
+
+          <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+            <button onClick={saveNightly} disabled={nightlySaving}
+              style={{ padding:'7px 14px', fontSize:12, fontWeight:700, background:'#fff', color:'#475569', border:'1px solid #e2e8f0', borderRadius:8, cursor: nightlySaving ? 'default':'pointer' }}>
+              {nightlySaving ? 'Saving…' : 'Save Settings'}
+            </button>
+            {lastRun?.startedAt && (
+              <span style={{ fontSize:11, color:'#94a3b8' }}>
+                Last run {new Date(lastRun.startedAt).toLocaleString()} — scanned {lastRun.scanned}, evaluated {lastRun.evaluated}, fits {lastRun.fits}, applied {lastRun.applied}
+                {lastRun.needsReview > 0 && <>, <span style={{ color:'#dc2626' }}>{lastRun.needsReview} needs review</span></>}
+              </span>
+            )}
+          </div>
+
+          {nightlyResult && (
+            <div style={{ marginTop:12, padding:'12px 14px', background: nightlyResult.error ? '#fef2f2' : '#f0fdf4', border:`1px solid ${nightlyResult.error ? '#fecaca' : '#bbf7d0'}`, borderRadius:9, fontSize:12 }}>
+              {nightlyResult.error
+                ? <span style={{ color:'#dc2626' }}>✗ {nightlyResult.error}</span>
+                : <span style={{ color:'#15803d', fontWeight:600 }}>
+                    ✓ Pipeline complete — scanned {nightlyResult.scanned}, evaluated {nightlyResult.evaluated}, {nightlyResult.fits} fits found, {nightlyResult.applied} applications submitted
+                    {nightlyResult.needsReview > 0 && <> · <span style={{ color:'#dc2626' }}>{nightlyResult.needsReview} need review</span></>}
+                  </span>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Queue runner */}
       <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20 }}>
