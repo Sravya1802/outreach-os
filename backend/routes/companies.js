@@ -56,7 +56,7 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
         const rawText = result?.pages ? result.pages.map(p => p.text || '').join('\n') : String(result || '');
         const text = rawText.trim();
         if (text && text.length > 50) {
-          const upsertSql = "INSERT INTO meta (key, value, user_id) VALUES ($1, $2, $3) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value";
+          const upsertSql = "INSERT INTO meta (key, value, user_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
           await run(upsertSql, ['user_resume_text', text, req.user.id]);
           await run(upsertSql, ['user_resume_name', req.file.originalname, req.user.id]);
           await run(upsertSql, ['user_resume_date', new Date().toISOString(), req.user.id]);

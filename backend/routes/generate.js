@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import { one, run } from '../db.js';
 import { generateOutreach, generateWaaSMessage, generateCoverLetter } from '../services/ai.js';
+import { DEFAULT_OUTREACH_TEMPLATES, normalizeOutreachTemplates } from '../services/outreachTemplates.js';
 
 const router = Router();
+const TEMPLATE_META_KEY = 'outreach_templates';
 
 async function getContactInfo(contactId, userId) {
   return one(`
@@ -15,6 +17,47 @@ async function getContactInfo(contactId, userId) {
     WHERE contacts.id = $1 AND contacts.user_id = $2
   `, [contactId, userId]);
 }
+
+async function getUserTemplates(userId) {
+  const row = await one(
+    'SELECT value FROM meta WHERE user_id = $1 AND key = $2',
+    [userId, TEMPLATE_META_KEY]
+  );
+  if (!row?.value) return null;
+  try {
+    return normalizeOutreachTemplates(JSON.parse(row.value));
+  } catch {
+    return null;
+  }
+}
+
+router.get('/templates', async (req, res) => {
+  try {
+    const saved = await getUserTemplates(req.user.id);
+    res.json({
+      templates: saved || DEFAULT_OUTREACH_TEMPLATES,
+      defaults: DEFAULT_OUTREACH_TEMPLATES,
+      customized: !!saved,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/templates', async (req, res) => {
+  try {
+    const templates = normalizeOutreachTemplates(req.body || {});
+    await run(
+      `INSERT INTO meta (user_id, key, value)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+      [req.user.id, TEMPLATE_META_KEY, JSON.stringify(templates)]
+    );
+    res.json({ templates, customized: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Generate cold email
 router.post('/email', async (req, res) => {
@@ -33,11 +76,12 @@ router.post('/email', async (req, res) => {
       stage = 'startup'; role = '';
     }
 
+    const customTemplates = await getUserTemplates(req.user.id);
     const result = await generateOutreach({
       type: 'cold_email',
       recipientName: name, recipientTitle: title, companyName: company,
       companyStage: stage, role, extraContext, hasApplied, rolesAvailable,
-      specificAchievement, position, isRecruiter,
+      specificAchievement, position, isRecruiter, customTemplates,
     });
 
     if (contactId) {
@@ -71,11 +115,12 @@ router.post('/linkedin', async (req, res) => {
       stage = 'startup'; role = '';
     }
 
+    const customTemplates = await getUserTemplates(req.user.id);
     const result = await generateOutreach({
       type: 'linkedin',
       recipientName: name, recipientTitle: title, companyName: company,
       companyStage: stage, role, extraContext, hasApplied, rolesAvailable,
-      specificAchievement, position, isRecruiter,
+      specificAchievement, position, isRecruiter, customTemplates,
     });
 
     if (contactId) {
@@ -109,7 +154,8 @@ router.post('/both', async (req, res) => {
       stage = 'startup'; role = '';
     }
 
-    const params = { recipientName: name, recipientTitle: title, companyName: company, companyStage: stage, role, extraContext, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter };
+    const customTemplates = await getUserTemplates(req.user.id);
+    const params = { recipientName: name, recipientTitle: title, companyName: company, companyStage: stage, role, extraContext, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter, customTemplates };
 
     const [email, linkedin] = await Promise.all([
       generateOutreach({ ...params, type: 'cold_email' }),
