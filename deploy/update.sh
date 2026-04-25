@@ -57,10 +57,17 @@ sleep 2
 run_as_user "pm2 status"
 
 step "Health check"
-if curl -fsS http://localhost:3001/api/health | grep -q '"status":"ok"'; then
-  ok "Backend healthy"
-else
-  echo -e "${RED}Backend not healthy — check pm2 logs outreach-backend${NC}"
+# pm2 restart returns before the Node process is listening; poll up to 30s.
+for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  if curl -fsS --max-time 2 http://localhost:3001/api/health 2>/dev/null | grep -q '"status":"ok"'; then
+    ok "Backend healthy (attempt $attempt)"
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+if [ -z "${healthy:-}" ]; then
+  echo -e "${RED}Backend not healthy after 30s — check pm2 logs outreach-backend${NC}"
   exit 1
 fi
 
