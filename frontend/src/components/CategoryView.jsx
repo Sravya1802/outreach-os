@@ -244,10 +244,10 @@ function RegularCategoryView({ categoryName }) {
   const [scrapeMsg, setScrapeMsg] = useState(null)
   const debounce = useRef(null)
 
-  const load = useCallback(async (pg = 0, q = search, src = source, st = status) => {
+  const load = useCallback(async (pg = 0, q = search, src = source, st = status, sb = sortBy) => {
     setLoading(true)
     try {
-      const params = { category: categoryName, page: pg, pageSize: 50 }
+      const params = { category: categoryName, page: pg, pageSize: 50, sort: sb }
       if (q)   params.search = q
       if (src) params.source = src
       if (st)  params.status = st
@@ -258,15 +258,15 @@ function RegularCategoryView({ categoryName }) {
       setTotal(d.total || rows.length)
     } catch (e) { console.warn('Companies load error:', e) }
     setLoading(false)
-  }, [categoryName, search, source, status])
+  }, [categoryName, search, source, status, sortBy])
 
-  useEffect(() => { load(0, search, source, status) }, [categoryName, search, source, status, load])
+  useEffect(() => { load(0, search, source, status, sortBy) }, [categoryName, search, source, status, sortBy, load])
 
   function onSearch(e) {
     const q = e.target.value
     setSearch(q)
     clearTimeout(debounce.current)
-    debounce.current = setTimeout(() => { setPage(0); load(0, q, source, status) }, 300)
+    debounce.current = setTimeout(() => { setPage(0); load(0, q, source, status, sortBy) }, 300)
   }
 
   async function scrapeSource(src) {
@@ -317,12 +317,12 @@ function RegularCategoryView({ categoryName }) {
         <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
           <input value={search} onChange={onSearch} placeholder="Filter by name…"
             style={{ padding:'7px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', outline:'none', minWidth:200 }} />
-          <select value={source} onChange={e => { setSource(e.target.value); setPage(0); load(0, search, e.target.value, status) }}
+          <select value={source} onChange={e => { setSource(e.target.value); setPage(0) }}
             style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
             <option value="">All Sources</option>
             {sources.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={status} onChange={e => { setStatus(e.target.value); setPage(0); load(0, search, source, e.target.value) }}
+          <select value={status} onChange={e => { setStatus(e.target.value); setPage(0) }}
             style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
             <option value="">All Statuses</option>
             {['new','researching','contacted','responded','skip'].map(s => <option key={s} value={s}>{s}</option>)}

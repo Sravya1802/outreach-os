@@ -151,7 +151,9 @@ export const api = {
     companies:      (params = {}) => apiCall('/unified/companies' + qs({
       category: params.category,
       search:   params.search,
+      source:   params.source,
       status:   params.status,
+      sort:     params.sort,
       page:     params.page,
       pageSize: params.pageSize,
     })),
