@@ -552,23 +552,28 @@ router.post('/tailored-resume/:id', async (req, res) => {
     const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume found' });
 
-    const candidateName = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value?.replace('.pdf','') || 'Candidate';
+    // Pull candidate name from user_profile (preferred). Fallback to the
+    // resume filename minus .pdf, then to a generic 'Candidate'. Hardcoded
+    // 'Sravya Rachakonda' here was a multi-user bug — every tailored PDF
+    // came out branded with the founder's name regardless of which user
+    // generated it.
+    const profile = await one('SELECT first_name, last_name FROM user_profile WHERE user_id = $1', [req.user.id]);
+    const fallbackFromFilename = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value?.replace(/\.pdf$/i, '');
+    const candidateName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim()
+      || fallbackFromFilename
+      || 'Candidate';
 
-    console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title}`);
+    console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title} (candidate: ${candidateName})`);
 
-    // AI tailor
     const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
+    const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, candidateName);
 
-    // Generate PDF
-    const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
-
-    // Update DB
     await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3', [pdfPath, row.id, req.user.id]);
 
     res.json({ ok: true, pdfPath: relativePath, downloadUrl: `/api/career/download/${row.id}` });
   } catch (err) {
-    console.error('[careerOps] tailored-resume error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[careerOps] tailored-resume error:', err && err.stack || err.message);
+    res.status(500).json({ error: err.message || 'Tailor failed' });
   }
 });
 

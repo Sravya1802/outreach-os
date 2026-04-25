@@ -231,7 +231,8 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
       if (resumeText) {
         console.log(`[autoApply] generating tailored resume for eval ${evalId}…`);
         const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
-        const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
+        const candidateName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim() || 'Candidate';
+        const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, candidateName);
         await run(
           'UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3',
           [pdfPath, evalId, userId]

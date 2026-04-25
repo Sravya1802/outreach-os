@@ -270,22 +270,31 @@ export async function generateResumePDF(tailoredData, companyName, jobTitle, can
   const tmpHtml = path.join(OUTPUT_DIR, `_tmp-${name}-${company}.html`);
   fs.writeFileSync(tmpHtml, html, 'utf8');
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
-  });
-
+  // `networkidle0` waits for all network requests to settle and can hang
+  // indefinitely if a font/asset request stalls. `load` is sufficient since
+  // all assets are local file:// URLs. Cap with explicit timeouts so the
+  // request fails fast instead of timing out the whole HTTP roundtrip.
+  let browser;
   try {
+    browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+      timeout: 30000,
+    });
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    await page.setContent(html, { waitUntil: 'load', timeout: 20000 });
     await page.pdf({
       path: pdfPath,
       format: paperFormat,
       margin: { top: '0.6in', right: '0.6in', bottom: '0.6in', left: '0.6in' },
       printBackground: true,
+      timeout: 20000,
     });
+  } catch (err) {
+    console.error('[resumeGenerator] PDF generation failed:', err && err.stack || err.message);
+    throw new Error(`PDF generation failed: ${err.message}`);
   } finally {
-    await browser.close();
+    if (browser) { try { await browser.close(); } catch {} }
   }
 
   console.log(`[resumeGenerator] PDF saved: ${filename}`);
