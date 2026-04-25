@@ -16,11 +16,12 @@ ok()   { echo -e "${GREEN}✓${NC} $1"; }
 [[ $EUID -eq 0 ]] || { echo "Run with sudo"; exit 1; }
 TARGET_USER="${SUDO_USER:-ubuntu}"
 APP_DIR="/home/$TARGET_USER/outreach"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-phase-4-pg}"
 run_as_user() { sudo -u "$TARGET_USER" -H bash -c "$1"; }
 
 step "Fetching latest from origin"
 BEFORE=$(cd "$APP_DIR" && git rev-parse HEAD)
-run_as_user "cd '$APP_DIR' && git fetch origin && git reset --hard origin/local-backup"
+run_as_user "cd '$APP_DIR' && git fetch origin '$DEPLOY_BRANCH' && git merge --ff-only 'origin/$DEPLOY_BRANCH'"
 AFTER=$(cd "$APP_DIR" && git rev-parse HEAD)
 
 if [[ "$BEFORE" == "$AFTER" ]]; then
@@ -31,9 +32,17 @@ fi
 step "New commits: $BEFORE → $AFTER"
 run_as_user "cd '$APP_DIR' && git log --oneline $BEFORE..$AFTER"
 
-step "Installing backend deps (skipped if lockfile unchanged)"
-run_as_user "cd '$APP_DIR/backend' && npm ci --omit=dev --loglevel=error"
-ok "Backend deps current"
+if run_as_user "cd '$APP_DIR' && git diff --name-only '$BEFORE' '$AFTER' -- backend/package.json backend/package-lock.json | grep -q ."; then
+  step "Installing backend deps"
+  if run_as_user "test -f '$APP_DIR/backend/package-lock.json'"; then
+    run_as_user "cd '$APP_DIR/backend' && npm ci --omit=dev --legacy-peer-deps --loglevel=error"
+  else
+    run_as_user "cd '$APP_DIR/backend' && npm install --omit=dev --legacy-peer-deps --loglevel=error"
+  fi
+  ok "Backend deps current"
+else
+  ok "Backend deps unchanged"
+fi
 
 # If Playwright version changed, re-download Chromium
 if run_as_user "cd '$APP_DIR/backend' && npm ls playwright 2>/dev/null" | grep -q "playwright@"; then
