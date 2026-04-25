@@ -338,7 +338,7 @@ export default function App() {
           <Route path="/job-dashboard"  element={<JobDashboard />} />
 
           {/* DISCOVER section */}
-          <Route path="/discover/companies"  element={<CompanyDashboard onStatsChange={setStats} />} />
+          <Route path="/discover/companies"  element={<CompanyDashboard key={session.user?.id || 'companies'} onStatsChange={setStats} statsSnapshot={stats} userId={session.user?.id} />} />
           <Route path="/discover/scraper"    element={<ScraperPage />} />
           <Route path="/discover/evaluate"   element={<CareerOps />} />
 

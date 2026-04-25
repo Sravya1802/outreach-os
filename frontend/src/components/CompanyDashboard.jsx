@@ -41,12 +41,38 @@ function Spin({ color = '#6366f1', size = 14 }) {
   return <span style={{ display:'inline-block', width:size, height:size, border:`2px solid ${color}30`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite', flexShrink:0 }} />
 }
 
-export default function CompanyDashboard({ onStatsChange }) {
+const CACHE_TTL_MS = 10 * 60 * 1000
+const cacheKey = (userId) => `outreachos:companies-dashboard:${userId || 'anonymous'}`
+
+function readCache(userId) {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(cacheKey(userId)) || 'null')
+    if (!cached?.savedAt || Date.now() - cached.savedAt > CACHE_TTL_MS) return null
+    return cached
+  } catch {
+    return null
+  }
+}
+
+function writeCache(userId, next) {
+  try {
+    sessionStorage.setItem(cacheKey(userId), JSON.stringify({ ...next, savedAt: Date.now() }))
+  } catch {}
+}
+
+function countsToMap(data) {
+  const map = {}
+  for (const row of (data?.counts || [])) map[row.category] = row.count
+  return map
+}
+
+export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, userId = '' }) {
   const navigate = useNavigate()
-  const [stats, setStats]         = useState(null)
-  const [catCounts, setCatCounts] = useState(null)
-  const [statsLoaded, setStatsLoaded] = useState(false)
-  const [catCountsLoaded, setCatCountsLoaded] = useState(false)
+  const cached = readCache(userId)
+  const [stats, setStats]         = useState(statsSnapshot || cached?.stats || null)
+  const [catCounts, setCatCounts] = useState(cached?.catCounts || null)
+  const [statsLoaded, setStatsLoaded] = useState(Boolean(statsSnapshot || cached?.stats))
+  const [catCountsLoaded, setCatCountsLoaded] = useState(Boolean(cached?.catCounts))
   const [ycCount, setYcCount]     = useState(null)
   const [search, setSearch]       = useState('')
   const [results, setResults]     = useState([])
@@ -57,13 +83,33 @@ export default function CompanyDashboard({ onStatsChange }) {
   const searchRef  = useRef(null)
   const debounce   = useRef(null)
 
-  function refreshCounts() {
-    api.unified.categoryCounts().then(d => {
-      const map = {}
-      for (const row of (d.counts || [])) map[row.category] = row.count
-      setCatCounts(map)
-    }).catch(() => setCatCounts({})).finally(() => setCatCountsLoaded(true))
-    api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {}).finally(() => setStatsLoaded(true))
+  async function refreshCounts() {
+    const [statsResult, countsResult] = await Promise.allSettled([
+      api.stats(),
+      api.unified.categoryCounts(),
+    ])
+
+    const nextStats = statsResult.status === 'fulfilled' ? statsResult.value : stats
+    const nextCounts = countsResult.status === 'fulfilled' ? countsToMap(countsResult.value) : catCounts
+
+    if (statsResult.status === 'fulfilled') {
+      setStats(nextStats)
+      onStatsChange?.(nextStats)
+      setStatsLoaded(true)
+    } else if (!statsLoaded) {
+      setStatsLoaded(true)
+    }
+
+    if (countsResult.status === 'fulfilled') {
+      setCatCounts(nextCounts)
+      setCatCountsLoaded(true)
+    } else if (!catCountsLoaded) {
+      setCatCountsLoaded(true)
+    }
+
+    if (nextStats || nextCounts) {
+      writeCache(userId, { stats: nextStats, catCounts: nextCounts })
+    }
   }
 
   // Inject CSS
@@ -76,21 +122,20 @@ export default function CompanyDashboard({ onStatsChange }) {
 
   // Load stats + category counts (re-runs on `stats-refresh` events)
   useEffect(() => {
-    const loadStats = () => {
-      api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {}).finally(() => setStatsLoaded(true))
-      api.unified.categoryCounts().then(d => {
-        const map = {}
-        for (const r of (d.counts || [])) map[r.category] = r.count
-        setCatCounts(map)
-      }).catch(() => setCatCounts({})).finally(() => setCatCountsLoaded(true))
-    }
-    loadStats()
+    refreshCounts()
     fetch('https://yc-oss.github.io/api/companies/hiring.json')
       .then(r => r.json()).then(d => setYcCount(Array.isArray(d) ? d.length : null))
       .catch(() => setYcCount(null))
-    window.addEventListener('stats-refresh', loadStats)
-    return () => window.removeEventListener('stats-refresh', loadStats)
-  }, [])
+    window.addEventListener('stats-refresh', refreshCounts)
+    return () => window.removeEventListener('stats-refresh', refreshCounts)
+  }, [userId])
+
+  useEffect(() => {
+    if (!statsSnapshot) return
+    setStats(statsSnapshot)
+    setStatsLoaded(true)
+    writeCache(userId, { stats: statsSnapshot, catCounts: catCounts || readCache(userId)?.catCounts || null })
+  }, [statsSnapshot, userId])
 
   // Debounced search
   const doSearch = useCallback((q) => {
@@ -149,7 +194,7 @@ export default function CompanyDashboard({ onStatsChange }) {
           <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:0 }}>Companies</h1>
           <p style={{ fontSize:13, color:'#64748b', margin:'4px 0 0' }}>
             {countsLoading
-              ? 'Loading company counts…'
+              ? ' '
               : `${totalInDb.toLocaleString()} companies · ${sortedCats.filter(c => c.count > 0).length} industries`}
           </p>
         </div>
@@ -242,7 +287,7 @@ export default function CompanyDashboard({ onStatsChange }) {
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
           <span style={{ fontSize:13, color:'#64748b', fontWeight:600 }}>
             {!catCountsLoaded
-              ? 'Loading categories…'
+              ? ' '
               : `${sortedCats.filter(c => c.count > 0).length} active${!hideEmpty ? ` · ${sortedCats.filter(c => c.count === 0).length} empty` : ''}`}
           </span>
           <div style={{ display:'flex', alignItems:'center', gap:8 }}>
@@ -275,7 +320,7 @@ export default function CompanyDashboard({ onStatsChange }) {
               </div>
             </div>
             <div style={{ fontSize:24, fontWeight:800, color:'#F26625', marginBottom:4 }}>
-              {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : '—'}
+              {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : ' '}
             </div>
             <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4 }}>
               YC-backed companies you've imported
@@ -300,7 +345,7 @@ export default function CompanyDashboard({ onStatsChange }) {
                   <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.3 }}>{cat.label}</div>
                 </div>
                 <div style={{ fontSize:24, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, marginBottom:4 }}>
-                  {!catCountsLoaded ? '—' : cat.count.toLocaleString()}
+                  {!catCountsLoaded ? ' ' : cat.count.toLocaleString()}
                 </div>
                 <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
                   {cat.desc}
