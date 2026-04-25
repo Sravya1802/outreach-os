@@ -50,6 +50,7 @@ export default function DashboardPage({ onStatsChange }) {
   const [activity, setActivity] = useState([])
   const [catCounts, setCatCounts] = useState({})
   const [ycCount, setYcCount]   = useState(null)
+  const [queue, setQueue]       = useState(null)
 
   useEffect(() => {
     const loadStats = () => {
@@ -59,6 +60,7 @@ export default function DashboardPage({ onStatsChange }) {
         for (const r of (d.counts || [])) map[r.category] = r.count
         setCatCounts(map)
       }).catch(() => {})
+      api.career.autoApplyQueue().then(q => setQueue(q)).catch(() => setQueue(null))
     }
     loadStats()
     api.activity().then(d => setActivity(d.activity || [])).catch(() => {})
@@ -113,6 +115,33 @@ export default function DashboardPage({ onStatsChange }) {
 
         {/* Left column */}
         <div>
+
+          {/* Auto-Apply Queue summary — bubbles up needs_review urgency. */}
+          {queue && (queue.counts?.needs_review > 0 || queue.counts?.queued > 0 || queue.counts?.failed > 0) && (() => {
+            const c = queue.counts || {}
+            const urgent = (c.needs_review || 0) > 0
+            const tint = urgent ? '#dc2626' : c.queued > 0 ? '#7c3aed' : '#64748b'
+            return (
+              <div onClick={() => navigate('/career-ops')}
+                style={{ marginBottom:24, padding:'14px 18px', background:'#fff', border:`1px solid ${tint}30`, borderLeft:`3px solid ${tint}`, borderRadius:10, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16, flexWrap:'wrap' }}>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:3 }}>
+                    Auto-Apply Queue {urgent && <span style={{ color:'#dc2626' }}>· needs attention</span>}
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#0f172a', display:'flex', gap:10, flexWrap:'wrap' }}>
+                    {c.needs_review > 0 && <span style={{ color:'#dc2626' }}>⚠ {c.needs_review} needs review</span>}
+                    {c.queued > 0       && <span style={{ color:'#7c3aed' }}>{c.queued} queued</span>}
+                    {c.submitted > 0    && <span style={{ color:'#16a34a' }}>{c.submitted} submitted</span>}
+                    {c.failed > 0       && <span style={{ color:'#d97706' }}>{c.failed} failed</span>}
+                    {c.unsupported > 0  && <span style={{ color:'#64748b' }}>{c.unsupported} unsupported</span>}
+                  </div>
+                </div>
+                <div style={{ fontSize:11, fontWeight:700, color: tint }}>
+                  {urgent ? '→ Fix profile' : '→ Open queue'}
+                </div>
+              </div>
+            )
+          })()}
 
           {/* Last scrape — populated by /jobs/scrape (writes meta.last_scrape_summary) */}
           {stats?.lastScrape && (() => {
