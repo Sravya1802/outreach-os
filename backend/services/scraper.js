@@ -1,4 +1,5 @@
 import { ApifyClient } from 'apify-client';
+import { noteApifyError } from './apify.js';
 
 // Lazy accessor — dotenv must load before first call
 function getApifyToken() { return process.env.APIFY_API_TOKEN || ''; }
@@ -248,8 +249,14 @@ async function runApifyActor(actorId, input, storeSearchTerm, waitSecs = 90) {
     if (isUnavailable && storeSearchTerm) {
       console.warn(`[apify] ${actorId} unavailable — searching store for: "${storeSearchTerm}"`);
       const alt = await findActorInStore(storeSearchTerm);
-      if (alt && alt !== actorId) return await tryRun(alt);
+      if (alt && alt !== actorId) {
+        try { return await tryRun(alt); }
+        catch (altErr) { noteApifyError(alt, altErr); throw altErr; }
+      }
     }
+    // Defense in depth: any actor failure in this central runner records to
+    // the burn sentinel if it's quota-shaped, even when callers forget.
+    noteApifyError(actorId, err);
     throw err;
   }
 }
@@ -470,11 +477,15 @@ async function scrapeLinkedInJobs(searchTerms = []) {
   console.log('[linkedin] started');
   const query = searchTerms[0] || 'Software Engineer Intern 2026';
 
-  // Try multiple actor IDs and input schemas in order
+  // Apify made breaking changes:
+  //  - bebity/linkedin-jobs-scraper went paid-only (free trial expired)
+  //  - curious_coder changed input schema to require `urls`, not keyword
+  // valig still works on FREE plans with the keyword schema. Keep
+  // curious_coder as a fallback with the new `urls` schema. Drop bebity.
+  const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=United%20States`;
   const attempts = [
-    { id: 'curious_coder/linkedin-jobs-scraper',  input: { keyword: query, location: 'United States', rows: 50 } },
-    { id: 'curious_coder/linkedin-jobs-scraper',  input: { searchTerms: [query], location: 'United States', count: 50 } },
-    { id: 'bebity/linkedin-jobs-scraper',          input: { keyword: query, location: 'United States', maxItems: 50 } },
+    { id: 'valig/linkedin-jobs-scraper',          input: { keyword: query, location: 'United States', limit: 100 } },
+    { id: 'curious_coder/linkedin-jobs-scraper',  input: { urls: [searchUrl], maxJobs: 100 } },
   ];
 
   for (const { id, input } of attempts) {
@@ -496,6 +507,7 @@ async function scrapeLinkedInJobs(searchTerms = []) {
       console.log(`[linkedin] returned ${results.length} results (${id})`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[linkedin] attempt "${id}" failed: ${err.message}`);
     }
   }
@@ -532,6 +544,7 @@ async function scrapeWellfound(searchTerms = []) {
       console.log(`[wellfound] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[wellfound] attempt "${id}" failed: ${err.message}`);
     }
   }
@@ -570,6 +583,7 @@ async function scrapeIndeed(searchTerms = []) {
       console.log(`[indeed] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[indeed] attempt "${id}" failed: ${err.message}`);
     }
   }
@@ -672,6 +686,7 @@ async function scrapeGoogleJobs(searchTerms = []) {
       console.log(`[google_jobs] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[google_jobs] attempt "${id}" failed: ${err.message}`);
     }
   }
