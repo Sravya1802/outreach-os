@@ -516,8 +516,31 @@ async function scrapeLinkedInJobs(searchTerms = []) {
     }
   }
 
-  console.error('[linkedin] all attempts failed');
-  return [];
+  console.error('[linkedin] all attempts failed — falling back to direct Greenhouse scan');
+  const fallback = [];
+  await Promise.allSettled(GREENHOUSE_TOKENS.map(async (slug) => {
+    try {
+      const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=false`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const job of (data.jobs || [])) {
+        const title = job.title || '';
+        if (!INTERN_RE.test(title) || !CS_DEPTS.test(title)) continue;
+        fallback.push(norm({
+          name:       slug.charAt(0).toUpperCase() + slug.slice(1),
+          jobTitle:   title,
+          location:   job.location?.name || 'USA',
+          careersUrl: job.absolute_url || `https://boards.greenhouse.io/${slug}`,
+          source:     'linkedin',
+        }));
+      }
+    } catch (_) {}
+  }));
+
+  console.log(`[linkedin] Greenhouse fallback returned ${fallback.length} results`);
+  return fallback;
 }
 
 async function scrapeWellfound(searchTerms = []) {
@@ -1146,6 +1169,26 @@ const SOURCES = [
   { key: 'prosple',      fn: ()      => scrapeProsple() },
 ];
 
+const SOURCE_ALIASES = {
+  google:      ['google_jobs'],
+  google_jobs: ['google_jobs'],
+  github:      ['simplify', 'speedyapply', 'internlist'],
+};
+
+function selectSources(sourceFilter = '') {
+  if (!sourceFilter) return SOURCES;
+  const requested = String(sourceFilter)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const keys = requested.flatMap(key => SOURCE_ALIASES[key] || [key]);
+  const selected = SOURCES.filter(source => keys.includes(source.key));
+  if (selected.length === 0) {
+    throw new Error(`Unknown scrape source: ${sourceFilter}`);
+  }
+  return selected;
+}
+
 /**
  * Run all scraping sources in parallel, normalize, and deduplicate.
  * category/subcategory are used ONLY for search query construction —
@@ -1153,18 +1196,19 @@ const SOURCES = [
  *
  * @returns {{ results: NormalizedCompany[], bySource: Record<string,number>, errors: Record<string,string> }}
  */
-export async function scrapeAllSources(subcategory = '', category = '') {
+export async function scrapeAllSources(subcategory = '', category = '', sourceFilter = '') {
   const searchTerms = getSearchTerms(category, subcategory);
-  console.log(`[scraper] starting ${SOURCES.length} sources — subcategory="${subcategory}" terms=[${searchTerms.slice(0, 2).join(', ')}]`);
+  const selectedSources = selectSources(sourceFilter);
+  console.log(`[scraper] starting ${selectedSources.length} sources${sourceFilter ? ` (${sourceFilter})` : ''} — subcategory="${subcategory}" terms=[${searchTerms.slice(0, 2).join(', ')}]`);
 
-  const settled = await Promise.allSettled(SOURCES.map(s => s.fn(searchTerms)));
+  const settled = await Promise.allSettled(selectedSources.map(s => s.fn(searchTerms)));
 
   const bySource = {};
   const errors   = {};
   const allRaw   = [];
 
-  for (let i = 0; i < SOURCES.length; i++) {
-    const { key } = SOURCES[i];
+  for (let i = 0; i < selectedSources.length; i++) {
+    const { key } = selectedSources[i];
     const result  = settled[i];
     if (result.status === 'fulfilled') {
       bySource[key] = result.value.length;

@@ -290,6 +290,20 @@ function mapYCIndustry(industry) {
   return 'Startups';
 }
 
+function normalizeLegacyCompanyResult(item) {
+  const company = (item?.company || item?.name || item?.companyName || '').trim();
+  if (!company) return null;
+  return {
+    company,
+    role:      item.role || item.jobTitle || item.title || 'Software Engineering Intern',
+    location:  item.location || 'USA',
+    stage:     item.stage || null,
+    source:    item.source || 'scrape',
+    apply_url: item.apply_url || item.careersUrl || item.url || '',
+    posted_at: item.posted_at || null,
+  };
+}
+
 // Scrape ALL sources in parallel
 router.post('/scrape', async (req, res) => {
   try {
@@ -309,7 +323,7 @@ router.post('/scrape', async (req, res) => {
       ...(google.status === 'fulfilled' ? google.value : []),
       ...(github.status === 'fulfilled' ? github.value : []),
       ...(yc.status === 'fulfilled' ? yc.value : []),
-    ].filter(it => it && typeof it.company === 'string' && it.company.trim());
+    ].map(normalizeLegacyCompanyResult).filter(Boolean);
 
     let inserted = 0;
     await tx(async (client) => {
@@ -318,7 +332,7 @@ router.post('/scrape', async (req, res) => {
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null, req.user.id]);
+        `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }
     });
@@ -358,7 +372,7 @@ router.post('/scrape/:src', async (req, res) => {
       default: return res.status(400).json({ error: `Unknown source: ${src}` });
     }
 
-    const cleaned = results.filter(it => it && typeof it.company === 'string' && it.company.trim());
+    const cleaned = results.map(normalizeLegacyCompanyResult).filter(Boolean);
 
     let inserted = 0;
     await tx(async (client) => {
@@ -367,7 +381,7 @@ router.post('/scrape/:src', async (req, res) => {
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (name, role) DO NOTHING
-        `, [item.company.trim(), item.role, item.location, item.stage || null, item.source, item.apply_url, item.posted_at || null, req.user.id]);
+        `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }
     });

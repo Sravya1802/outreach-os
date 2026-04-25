@@ -16,13 +16,13 @@ const router = Router();
 // ── Scrape companies from all 6 sources in parallel ──────────────────────────
 
 router.post('/scrape', async (req, res) => {
-  const { category = '', subcategory = '' } = req.body || {};
+  const { category = '', subcategory = '', source = '' } = req.body || {};
   // category/subcategory are ONLY for search query construction — never written to DB directly.
-  console.log(`[scrape] starting — context: category="${category}" subcategory="${subcategory}"`);
+  console.log(`[scrape] starting — context: category="${category}" subcategory="${subcategory}" source="${source}"`);
 
   // ── Run all sources ──────────────────────────────────────────────────────
   const { results: rawResults, bySource, errors: scrapeErrors } =
-    await scrapeAllSources(subcategory, category);
+    await scrapeAllSources(subcategory, category, source);
 
   const succeeded = Object.values(bySource).filter(n => n > 0).length;
   const failedSrc = Object.keys(scrapeErrors).length;
