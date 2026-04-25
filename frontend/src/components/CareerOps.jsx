@@ -626,21 +626,76 @@ function EvalCard({ ev, onClick, onDelete }) {
 }
 
 // ── Portal scanner ────────────────────────────────────────────────────────────
+// Scan results persist across tab switches via sessionStorage, so the user
+// doesn't have to re-scan every time they navigate away. roleType drives the
+// backend query (intern | fulltime | all) and is included in the cache key
+// so changing role type triggers a fresh scan.
+const PORTAL_CACHE_KEY = 'careerOps:portalScan:v2'
+function readPortalCache() {
+  try {
+    const raw = sessionStorage.getItem(PORTAL_CACHE_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed?.at || Date.now() - parsed.at > 60 * 60 * 1000) return null // 1h TTL
+    return parsed
+  } catch { return null }
+}
+function writePortalCache(payload) {
+  try { sessionStorage.setItem(PORTAL_CACHE_KEY, JSON.stringify({ at: Date.now(), ...payload })) } catch {}
+}
+function formatAgo(date) {
+  const ms = Date.now() - date.getTime()
+  if (ms < 60000) return 'just now'
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`
+  return `${Math.floor(ms / 86400000)}d ago`
+}
+
 function PortalScanner({ hasResume, onSendToEvaluate }) {
+  const cached = readPortalCache()
   const [scanning, setScanning] = useState(false)
-  const [jobs, setJobs]         = useState([])
-  const [bySource, setBySource] = useState({})
+  const [jobs, setJobs]         = useState(cached?.jobs || [])
+  const [bySource, setBySource] = useState(cached?.bySource || {})
   const [filter, setFilter]     = useState('all')
+  const [roleType, setRoleType] = useState(cached?.roleType || 'intern')
   const [error, setError]       = useState(null)
   const [sending, setSending]   = useState(null)
+  const [bulkRunning, setBulkRunning] = useState(false)
+  const [bulkProgress, setBulkProgress] = useState(null)
+  const scannedAt = cached?.at ? new Date(cached.at) : null
 
-  async function handleScan() {
+  async function handleScan(typeOverride = roleType) {
     setScanning(true); setError(null); setJobs([])
     try {
-      const r = await api.career.scanPortals()
-      setJobs(r.jobs || []); setBySource(r.bySource || {})
+      const r = await api.career.scanPortals(typeOverride)
+      const nextJobs = r.jobs || []
+      const nextBySource = r.bySource || {}
+      setJobs(nextJobs); setBySource(nextBySource)
+      writePortalCache({ jobs: nextJobs, bySource: nextBySource, roleType: typeOverride })
     } catch (err) { setError(err.message) }
     finally { setScanning(false) }
+  }
+
+  function changeRoleType(t) {
+    setRoleType(t)
+    handleScan(t)
+  }
+
+  // Evaluate all currently-filtered scanned roles via batch-evaluate.
+  // Caps at 10 (backend's max). Hides the list afterward and routes to History.
+  async function evaluateAll() {
+    const urls = filtered.map(j => j.applyUrl).filter(Boolean).slice(0, 10)
+    if (!urls.length) return
+    setBulkRunning(true); setBulkProgress(`Evaluating ${urls.length} role${urls.length !== 1 ? 's' : ''}…`)
+    try {
+      const r = await api.career.batchEvaluate(urls)
+      const ok = (r.results || []).filter(x => x.status === 'done').length
+      setBulkProgress(`✓ Evaluated ${ok}/${urls.length} — see History tab`)
+      setTimeout(() => setBulkProgress(null), 6000)
+    } catch (err) {
+      setBulkProgress(`✗ Batch failed: ${err.message}`)
+      setTimeout(() => setBulkProgress(null), 6000)
+    } finally { setBulkRunning(false) }
   }
 
   const filtered = filter === 'all' ? jobs : jobs.filter(j => j.source === filter)
@@ -648,19 +703,36 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
 
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18, flexWrap:'wrap', gap:12 }}>
         <div>
           <div style={{ fontSize:15, fontWeight:700, color:'#0f172a', marginBottom:3 }}>Live Portal Scanner</div>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>Scans Greenhouse, Lever & Ashby for CS/engineering roles posted this week</div>
+          <div style={{ fontSize:12, color:'#94a3b8' }}>
+            Scans Greenhouse, Lever & Ashby for {roleType === 'all' ? 'all roles' : roleType === 'fulltime' ? 'full-time roles' : 'internship roles'} posted this week
+            {scannedAt && jobs.length > 0 && <> · last scanned {formatAgo(scannedAt)}</>}
+          </div>
         </div>
-        <button onClick={handleScan} disabled={scanning}
+        <button onClick={() => handleScan()} disabled={scanning}
           style={{ padding:'10px 22px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: scanning ? 'default':'pointer', display:'flex', alignItems:'center', gap:8 }}>
-          {scanning ? <><Spin size={14} color="#fff" /> Scanning…</> : '🔍 Scan Now'}
+          {scanning ? <><Spin size={14} color="#fff" /> Scanning…</> : (jobs.length > 0 ? '↻ Re-scan' : '🔍 Scan Now')}
         </button>
       </div>
 
+      {/* Role-type filter — drives the backend query. Changing it auto-rescans. */}
+      <div style={{ display:'inline-flex', background:'#f1f5f9', borderRadius:9, padding:3, marginBottom:14, gap:3 }}>
+        {[['intern','🎓 Internship'], ['fulltime','💼 Full-Time'], ['all','📋 All Roles']].map(([k, l]) => (
+          <button key={k} onClick={() => changeRoleType(k)} disabled={scanning}
+            style={{ padding:'7px 16px', fontSize:12, fontWeight:700, cursor: scanning ? 'default' : 'pointer', border:'none', borderRadius:7,
+              background: roleType === k ? '#fff' : 'transparent',
+              color: roleType === k ? '#6366f1' : '#64748b',
+              boxShadow: roleType === k ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+              transition: 'all 0.12s' }}>
+            {l}
+          </button>
+        ))}
+      </div>
+
       {jobs.length > 0 && (
-        <div style={{ display:'flex', gap:8, marginBottom:18, flexWrap:'wrap' }}>
+        <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap', alignItems:'center' }}>
           {[{ k:'all', l:`All ${jobs.length}` }, ...Object.entries(bySource).filter(([,n])=>n>0).map(([src,n]) => ({ k:src, l:`${src.charAt(0).toUpperCase()+src.slice(1)} ${n}` }))].map(({ k, l }) => (
             <button key={k} onClick={() => setFilter(k)}
               style={{ padding:'5px 16px', fontSize:12, fontWeight:700, border:'none', borderRadius:20, cursor:'pointer', transition:'all 0.12s',
@@ -669,6 +741,18 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
               {l}
             </button>
           ))}
+          {hasResume && filtered.length > 0 && (
+            <button onClick={evaluateAll} disabled={bulkRunning}
+              style={{ marginLeft:'auto', padding:'6px 14px', fontSize:12, fontWeight:700, background:'#eef2ff', color:'#6366f1', border:'1px solid #c7d2fe', borderRadius:8, cursor: bulkRunning ? 'default' : 'pointer', display:'flex', alignItems:'center', gap:6 }}>
+              {bulkRunning ? <><Spin size={11} /> Evaluating…</> : `⚡ Evaluate ${Math.min(10, filtered.length)} role${Math.min(10, filtered.length) !== 1 ? 's' : ''}`}
+            </button>
+          )}
+        </div>
+      )}
+
+      {bulkProgress && (
+        <div style={{ padding:'10px 14px', background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:9, fontSize:13, color:'#1e40af', marginBottom:14, fontWeight:600 }}>
+          {bulkProgress}
         </div>
       )}
 
@@ -678,7 +762,11 @@ function PortalScanner({ hasResume, onSendToEvaluate }) {
         <div style={{ textAlign:'center', padding:'72px 0', color:'#94a3b8' }}>
           <div style={{ fontSize:44, marginBottom:14 }}>🔍</div>
           <div style={{ fontSize:14, fontWeight:600, color:'#64748b', marginBottom:6 }}>Ready to scan 50+ company portals</div>
-          <div style={{ fontSize:12 }}>Filters to CS/SWE internship roles posted in the last 7 days</div>
+          <div style={{ fontSize:12 }}>
+            {roleType === 'all'   && 'All roles posted in the last 7 days'}
+            {roleType === 'intern' && 'Internship roles posted in the last 7 days'}
+            {roleType === 'fulltime' && 'Full-time + new-grad roles posted in the last 7 days'}
+          </div>
         </div>
       )}
 

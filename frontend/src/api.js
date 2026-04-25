@@ -224,7 +224,7 @@ export const api = {
     tracker:     () => apiCall('/career/tracker'),
     stats:       () => apiCall('/career/stats'),
     ranked:      () => apiCall('/career/ranked'),
-    scanPortals: () => apiCall('/career/scan-portals', { method: 'POST' }),
+    scanPortals: (roleType = 'intern') => apiCall('/career/scan-portals', { method: 'POST', body: { roleType } }),
 
     // ── Profile + resumes library ────────────────────────────────────────────
     profile:        () => apiCall('/career/profile'),
