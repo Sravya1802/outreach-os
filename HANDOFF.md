@@ -118,6 +118,18 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Deploy script health-check race fixed
+- **What:** User ran `update.sh` and got "Backend not healthy — connection refused" on localhost:3001 after pm2 restart. Backend was actually live (`/api/health` returned ok within seconds; pm2 process stable), so it was a script race: pm2 restart returns before Node binds the port. Replaced the one-shot `curl` with a 15-attempt × 2s poll (30s budget).
+- **Files:** [../outreach-local/deploy/update.sh:59-71](../outreach-local/deploy/update.sh#L59-L71)
+- **Status:** committed and pushed on `phase-4-pg`: `c8c6d06`. `bash -n deploy/update.sh` passed.
+- **Follow-up:** The fix only applies to the deploy **after** the next one (since `update.sh` git-pulls into itself mid-run and the active shell already loaded the old script). The next run may still print the race error; the run after that will be clean.
+
+### 2026-04-25 — VM redeploy with security fix
+- **What:** User authorized + ran `update.sh` on VM. Fast-forwarded `phase-4-pg` from `86eaeed` → `54ddf62`, pm2 restarted. Script's localhost health check raced the boot (false alarm), but public `/api/health` returned ok and pm2 was stable at 34s.
+- **Files:** [../outreach-local/backend/routes/careerOps.js:823](../outreach-local/backend/routes/careerOps.js#L823), [../outreach-local/backend/routes/careerOps.js:837](../outreach-local/backend/routes/careerOps.js#L837), [../outreach-local/backend/routes/jobs.js:1409](../outreach-local/backend/routes/jobs.js#L1409)
+- **Status:** live on VM at commit `54ddf62`. The 3 JOIN scoping defenses are now in prod.
+- **Follow-up:** Browser-verify `/apply/ranked` and Job Dashboard "Recent Evaluations" links still work as `lakshmisravyar`.
+
 ### 2026-04-25 — Full-app audit + 4 fixes
 - **What:** End-to-end audit of repo state, builds, JWT coverage, per-user isolation, frontend↔backend contract, secret hygiene, and live VM. Fixed 4 issues uncovered.
   1. **JWT bypass** in [JobDashboard.jsx:192](frontend/src/components/JobDashboard.jsx#L192) — Recent Evaluations links rendered raw `<a href="/api/career/evaluations/X/report.html">` which 401s in enforce mode. Swapped to `api.career.reportHtmlUrl(e.id)` (same `withAuthQuery` helper used by CareerOps/Pipeline/CompanyDetail).
