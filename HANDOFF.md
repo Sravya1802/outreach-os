@@ -38,6 +38,7 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+0b59c6d  fix: cache companies dashboard counts
 4584276  fix: prevent company count flicker and route scrapes
 e986b4d  docs: record dashboard auto-apply queue widget
 8d87bf2  ux(dashboard): surface auto-apply queue counts with needs-review urgency
@@ -71,7 +72,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
 - ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; VM deployed and public health check passed on 2026-04-25.
 - ~~"Top Companies filter on Companies page is broken"~~ — fixed in frontend `463f756` + backend `86eaeed` (server-side sort + source/status filters); VM deployed through `d0016ee`.
-- ~~"Companies page shows 0 first then populates"~~ — fixed in `7f42c6d`; tightened again in `4584276` with explicit loaded flags so category counts/stats cannot briefly render as real zeros.
+- ~~"Companies page shows 0/loading first then populates"~~ — fixed in `7f42c6d`; tightened in `4584276`; final UX fix in `0b59c6d` uses per-user sessionStorage cache + parent stats snapshot so the page paints last known counts immediately and refreshes silently.
 - ~~"Job Scraper source buttons show 'no companies found'"~~ — fixed in frontend `4584276` + backend `d0016ee`; per-source scrapes now hit canonical `/jobs/scrape` and backend accepts selected sources.
 - ~~"Don't pre-load resume in Career Ops Evaluate"~~ — fixed in `6cf20ad` (Resume section now only renders on Auto-Apply Setup tab or when user has no resume).
 - ~~"Job Dashboard slow to load"~~ — improved in `c2eabdb` (stale-while-revalidate sessionStorage cache, 5min TTL; instant first paint on revisit, background refresh).
@@ -92,7 +93,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Browser-verify** Companies no longer flashes `0`, Job Scraper per-source buttons return real found/already-in-DB counts, Outreach CRM fix, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
+1. **Browser-verify** Companies no longer flashes `0`/loading on revisit, Job Scraper per-source buttons return real found/already-in-DB counts, Outreach CRM fix, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
 2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
 3. **Receive** Role Eligibility DevTools error → fix.
 4. **Quick wins left:** Login tabs, Supabase magic-link rate-limit config, and any browser-verified regressions.
@@ -119,6 +120,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-25 — Companies counts render from cache
+- **What:** Removed the visible loading/dash pass on `/discover/companies` by caching stats + category counts per user in `sessionStorage`, seeding from the parent App stats snapshot, and refreshing counts in the background.
+- **Files:** [frontend/src/components/CompanyDashboard.jsx:44](frontend/src/components/CompanyDashboard.jsx#L44), [frontend/src/components/CompanyDashboard.jsx:69](frontend/src/components/CompanyDashboard.jsx#L69), [frontend/src/App.jsx:341](frontend/src/App.jsx#L341)
+- **Status:** committed on `main`: `0b59c6d`; `npm run build --prefix frontend` passed; not browser-verified after Vercel deploy.
+- **Follow-up:** After Vercel deploy, visit `/discover/companies` once to seed the cache, then navigate away/back or refresh in the same tab and confirm the page does not show the intermediate loading/dash state.
 
 ### 2026-04-25 — Companies flicker + Job Scraper source fix
 - **What:** Prevented the Companies page from briefly rendering real-looking zero counts by tracking stats/category loaded flags. Routed Job Scraper per-source buttons through canonical `/jobs/scrape` so results land in the main `jobs` table, added selected-source backend support, added a LinkedIn direct Greenhouse fallback when Apify actors fail, and kept legacy `/companies/scrape/:src` from dropping `name`-shaped results.
