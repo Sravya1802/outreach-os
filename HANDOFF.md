@@ -38,23 +38,24 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
-c2eabdb  perf(job dashboard): stale-while-revalidate cache for instant revisit
-6cf20ad  ux(career ops): hide resume section on evaluate when already uploaded
-7f42c6d  fix(companies): suppress 0-flicker before counts load
-463f756  fix(companies): wire sort/source/status to backend + refetch on change
-d853c01  docs: record vm backend deploy
-a6fc28a  docs: record stats and apify status fixes
-346c0b2  fix: show real contact and api status counts
+4584276  fix: prevent company count flicker and route scrapes
+e986b4d  docs: record dashboard auto-apply queue widget
+8d87bf2  ux(dashboard): surface auto-apply queue counts with needs-review urgency
+dddee6f  docs: record nightly auto-apply pipeline + visible queue
+3682c1b  ux(auto-apply): visible queue card + nightly pipeline UI
+c755cf5  docs: record portal scanner UX bundle + auto-apply queue button
+b6e2030  feat(career ops): 'Add to Auto-Apply Queue' button on Evaluate result
 …
 ```
 
 phase-4-pg tip:
 ```
-86eaeed  feat(unified/companies): server-side sort + source/status filters
-53f0767  fix: deploy backend from phase branch
-f929862  fix: report total contacts and apify quota status
-624e6a3  perf: collapse N+1 count queries (4497→1 + 18→3)
-f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
+d0016ee  fix: scrape selected sources into jobs
+2890bf0  feat(career ops): nightly auto-apply pipeline + visible queue
+60615c5  feat(scrape): broaden role queries beyond CS + persist new-company names
+ee4b6e2  feat(scrape): clearer feedback + last-scrape widget data
+fa28694  fix(apify): export noteApifyError so scraper.js can import it
+d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ```
 
 ## Known gaps & open work
@@ -69,8 +70,9 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ### Deferred / acknowledged
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
 - ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; VM deployed and public health check passed on 2026-04-25.
-- ~~"Top Companies filter on Companies page is broken"~~ — fixed in frontend `463f756` + backend `86eaeed` (server-side sort + source/status filters). **Needs VM backend deploy.**
-- ~~"Companies page shows 0 first then populates"~~ — fixed in `7f42c6d` (null-sentinel for catCounts so loading state is distinct from empty).
+- ~~"Top Companies filter on Companies page is broken"~~ — fixed in frontend `463f756` + backend `86eaeed` (server-side sort + source/status filters); VM deployed through `d0016ee`.
+- ~~"Companies page shows 0 first then populates"~~ — fixed in `7f42c6d`; tightened again in `4584276` with explicit loaded flags so category counts/stats cannot briefly render as real zeros.
+- ~~"Job Scraper source buttons show 'no companies found'"~~ — fixed in frontend `4584276` + backend `d0016ee`; per-source scrapes now hit canonical `/jobs/scrape` and backend accepts selected sources.
 - ~~"Don't pre-load resume in Career Ops Evaluate"~~ — fixed in `6cf20ad` (Resume section now only renders on Auto-Apply Setup tab or when user has no resume).
 - ~~"Job Dashboard slow to load"~~ — improved in `c2eabdb` (stale-while-revalidate sessionStorage cache, 5min TTL; instant first paint on revisit, background refresh).
 
@@ -90,10 +92,10 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Browser-verify** Outreach CRM fix, Companies contact count, Apify red status, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
+1. **Browser-verify** Companies no longer flashes `0`, Job Scraper per-source buttons return real found/already-in-DB counts, Outreach CRM fix, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
 2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
 3. **Receive** Role Eligibility DevTools error → fix.
-4. **Quick wins**: Apify-status-red, Top-Companies-filter, Companies-flicker, Career-Ops-no-preload — these are 15-30 min each.
+4. **Quick wins left:** Login tabs, Supabase magic-link rate-limit config, and any browser-verified regressions.
 
 Confirm you can read `~/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/MEMORY.md` and the auto-loaded memory files, then ask me which item I want to start with.
 
@@ -117,6 +119,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-25 — Companies flicker + Job Scraper source fix
+- **What:** Prevented the Companies page from briefly rendering real-looking zero counts by tracking stats/category loaded flags. Routed Job Scraper per-source buttons through canonical `/jobs/scrape` so results land in the main `jobs` table, added selected-source backend support, added a LinkedIn direct Greenhouse fallback when Apify actors fail, and kept legacy `/companies/scrape/:src` from dropping `name`-shaped results.
+- **Files:** [frontend/src/components/CompanyDashboard.jsx:48](frontend/src/components/CompanyDashboard.jsx#L48), [frontend/src/components/ScraperPage.jsx:43](frontend/src/components/ScraperPage.jsx#L43), [frontend/src/api.js:106](frontend/src/api.js#L106), [../outreach-local/backend/routes/jobs.js:19](../outreach-local/backend/routes/jobs.js#L19), [../outreach-local/backend/services/scraper.js:519](../outreach-local/backend/services/scraper.js#L519), [../outreach-local/backend/services/scraper.js:1172](../outreach-local/backend/services/scraper.js#L1172), [../outreach-local/backend/routes/companies.js:293](../outreach-local/backend/routes/companies.js#L293)
+- **Status:** frontend committed/pushed on `main`: `4584276`; backend committed/pushed/deployed on `phase-4-pg`: `d0016ee`; `npm run build --prefix frontend` passed; `node --check` passed for changed backend files; VM deploy completed and public health returned `ok`.
+- **Follow-up:** Wait for Vercel deploy, hard-refresh `/discover/companies` and `/discover/scraper`, then retry LinkedIn/GitHub/Google source buttons while logged in.
 
 ### 2026-04-25 — Dashboard surfaces auto-apply queue counts
 - **What:** Compact card above the "Last scrape" widget on the Dashboard now shows queue counts (Needs Review / Queued / Submitted / Failed / Unsupported). Border + label flip red when `needs_review > 0` so profile-incomplete items are visible without navigating into Career Ops. Hidden entirely when nothing is in flight. Click → `/career-ops`.
