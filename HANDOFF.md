@@ -118,6 +118,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — VM backend deploy for sort/filter fix
+- **What:** Ran `sudo bash /home/ubuntu/outreach/deploy/update.sh` on the Mumbai VM (user-authorized SSH). Fast-forwarded `phase-4-pg` from `53f0767` → `86eaeed`, pm2 restarted `outreach-backend`. The in-script localhost health check raced the boot (connection-refused at 2s uptime), but the public `https://outreach-jt.duckdns.org/api/health` returned `{"status":"ok","auth_mode":"enforce"}` four seconds later and pm2 was stable at 22s/247mb.
+- **Files:** [../outreach-local/backend/routes/unified.js:50](../outreach-local/backend/routes/unified.js#L50)
+- **Status:** live on VM at commit `86eaeed`. Top Companies sort + source/status filters now active in prod.
+- **Follow-up:** Note the deploy script's localhost-health-check still races boot — could bump to a 5s sleep + retry loop, or trust the public health check that runs separately. Low priority. Browser-verify `/companies/[category]` sort dropdown works across all pages.
+
 ### 2026-04-25 — Quick-wins sweep (4 deferred items)
 - **What:** Cleared the four deferred green-pile items in one pass.
   1. **Top Companies filter** — sort dropdown only re-ordered the loaded 50 rows and `source`/`status` filter dropdowns were silently dropped by the backend. Added `sort` (hiring|contacts|recent|az|za) + `source` + `status` query params to `/api/unified/companies`, frontend now passes them and refetches via useEffect dep on `sortBy`.
