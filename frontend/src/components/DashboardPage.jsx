@@ -114,6 +114,35 @@ export default function DashboardPage({ onStatsChange }) {
         {/* Left column */}
         <div>
 
+          {/* Last scrape — populated by /jobs/scrape (writes meta.last_scrape_summary) */}
+          {stats?.lastScrape && (() => {
+            const ls = stats.lastScrape
+            const ageMs = Date.now() - new Date(ls.at).getTime()
+            const ageStr = ageMs < 60000 ? 'just now'
+              : ageMs < 3600000 ? `${Math.floor(ageMs / 60000)}m ago`
+              : ageMs < 86400000 ? `${Math.floor(ageMs / 3600000)}h ago`
+              : `${Math.floor(ageMs / 86400000)}d ago`
+            const allInDb = ls.added === 0 && ls.found > 0
+            const tint = allInDb ? '#94a3b8' : ls.added > 0 ? '#16a34a' : '#dc2626'
+            return (
+              <div onClick={() => navigate('/scraper')}
+                style={{ marginBottom:24, padding:'14px 18px', background:'#fff', border:`1px solid ${tint}30`, borderLeft:`3px solid ${tint}`, borderRadius:10, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16 }}>
+                <div>
+                  <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:3 }}>
+                    Last scrape · {ageStr}
+                  </div>
+                  <div style={{ fontSize:13, fontWeight:600, color:'#0f172a' }}>
+                    Found <strong>{ls.found}</strong>
+                    {ls.added > 0 && <> · <span style={{ color:'#16a34a' }}>+{ls.added} new</span></>}
+                    {ls.alreadyInDb > 0 && <> · <span style={{ color:'#64748b' }}>{ls.alreadyInDb} already in DB</span></>}
+                    {ls.failedSrc > 0 && <> · <span style={{ color:'#dc2626' }}>{ls.failedSrc} source{ls.failedSrc !== 1 ? 's' : ''} failed</span></>}
+                  </div>
+                </div>
+                <div style={{ fontSize:11, fontWeight:700, color: tint }}>↻ Scrape again</div>
+              </div>
+            )
+          })()}
+
           {/* Quick Actions */}
           <div style={{ marginBottom:28 }}>
             <div style={{ fontSize:14, fontWeight:800, color:'#0f172a', marginBottom:14 }}>Quick Actions</div>

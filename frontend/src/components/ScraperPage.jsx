@@ -43,9 +43,21 @@ export default function ScraperPage() {
       const r = src === 'all'
         ? await api.companies.scrape({ category, subcategory: category })
         : await api.companies.scrapeSource(src, { category, subcategory: category })
-      const added = r.added || r.imported || 0
-      setResults(prev => ({ ...prev, [src]: { ok: true, added } }))
-      setLog(l => [...l, `✓ ${src}: +${added} companies added`])
+      // Response shape varies between /jobs/scrape and /companies/scrape/:src.
+      // Normalize so the activity log reads honestly regardless of path:
+      //   - found   = total companies returned by all scrapers this run
+      //   - added   = newly inserted into DB
+      //   - inDb    = found that already existed (dedupe)
+      const added = r.added ?? r.imported ?? r.inserted ?? 0
+      const found = r.found ?? r.total ?? r.rawTotal ?? added
+      const inDb  = r.alreadyInDb ?? r.skipped ?? Math.max(0, found - added)
+      setResults(prev => ({ ...prev, [src]: { ok: true, added, found, inDb } }))
+      let line
+      if (added > 0 && inDb > 0)      line = `✓ ${src}: found ${found} (+${added} new, ${inDb} already in DB)`
+      else if (added > 0)             line = `✓ ${src}: +${added} companies added`
+      else if (found > 0)             line = `✓ ${src}: found ${found} — all already in DB`
+      else                            line = `✓ ${src}: no companies found`
+      setLog(l => [...l, line])
       if (r.newCompanies?.length) {
         setNewCompanies(prev => {
           const existing = new Set(prev.map(c => c.name.toLowerCase()))
@@ -120,7 +132,15 @@ export default function ScraperPage() {
                     <div style={{ fontSize:12, color:'#64748b' }}>{src.desc}</div>
                     {res && (
                       <div style={{ marginTop:6, fontSize:12, fontWeight:600, color: res.ok ? '#15803d' : '#dc2626' }}>
-                        {res.ok ? `✓ +${res.added} companies added` : `✗ ${res.error}`}
+                        {res.ok
+                          ? (res.added > 0 && res.inDb > 0
+                              ? `✓ found ${res.found} (+${res.added} new, ${res.inDb} already in DB)`
+                              : res.added > 0
+                                ? `✓ +${res.added} companies added`
+                                : res.found > 0
+                                  ? `✓ found ${res.found} — all already in DB`
+                                  : '✓ no companies found')
+                          : `✗ ${res.error}`}
                       </div>
                     )}
                   </div>
