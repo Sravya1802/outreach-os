@@ -1406,7 +1406,7 @@ router.post('/contacts/:contactId/generate', async (req, res) => {
     const contact = await one(`
       SELECT jc.*, j.name as company_name, j.category as company_type
       FROM job_contacts jc
-      JOIN jobs j ON j.id = jc.job_id
+      JOIN jobs j ON j.id = jc.job_id AND j.user_id = $2
       WHERE jc.id = $1 AND jc.user_id = $2
     `, [req.params.contactId, req.user.id]);
     if (!contact) return res.status(404).json({ error: 'Contact not found' });

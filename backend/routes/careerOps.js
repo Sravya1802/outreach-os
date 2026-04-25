@@ -820,7 +820,7 @@ router.get('/stats', async (req, res) => {
   try {
     const total    = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE user_id = $1", [req.user.id])).n);
     const avgRow   = await one("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL AND user_id = $1", [req.user.id]);
-    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL AND ca.user_id = $1 ORDER BY ca.fit_score DESC LIMIT 1", [req.user.id]);
+    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1 WHERE ca.fit_score IS NOT NULL AND ca.user_id = $1 ORDER BY ca.fit_score DESC LIMIT 1", [req.user.id]);
     const applyCount = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2 AND user_id = $1", [req.user.id])).n);
     res.json({ total, avgScore: avgRow?.avg ? Number(avgRow.avg).toFixed(1) : null, topPick: topRow, applyCount });
   } catch (err) {
@@ -834,7 +834,7 @@ router.get('/ranked', async (req, res) => {
     const rows = await all(`
       SELECT ca.*, j.name as company_name, j.category, j.location, j.website
       FROM company_applications ca
-      JOIN jobs j ON j.id = ca.company_id
+      JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1
       WHERE ca.user_id = $1
       ORDER BY ca.fit_score DESC NULLS LAST, ca.updated_at DESC
     `, [req.user.id]);
