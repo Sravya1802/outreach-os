@@ -795,8 +795,19 @@ export function AutoApplySetup() {
 }
 
 // ── History card ──────────────────────────────────────────────────────────────
-function EvalCard({ ev, onClick, onDelete }) {
+function EvalCard({ ev, onClick, onDelete, onQueue }) {
   const gc = gradeColor(ev.grade)
+  const initialQueued = ev.apply_mode === 'auto' && ['queued','submitted','needs_review','running'].includes(ev.apply_status || '')
+  const [queued, setQueued] = useState(initialQueued)
+  const [queuing, setQueuing] = useState(false)
+  async function handleQueueClick(e) {
+    e.stopPropagation()
+    if (queued || queuing) return
+    setQueuing(true)
+    try { await onQueue(ev.id); setQueued(true) }
+    catch (err) { alert('Queue failed: ' + err.message) }
+    finally { setQueuing(false) }
+  }
   return (
     <div className="co-card" onClick={onClick}
       style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:16, transition:'all 0.15s', marginBottom:10 }}>
@@ -808,6 +819,10 @@ function EvalCard({ ev, onClick, onDelete }) {
         <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{ev.company_name} · Score: {ev.score}/100</div>
         <div style={{ fontSize:11, color:'#94a3b8', marginTop:3 }}>{new Date(ev.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}</div>
       </div>
+      <button onClick={handleQueueClick} disabled={queued || queuing} title={queued ? 'Already queued for auto-apply' : 'Add to auto-apply queue'}
+        style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background: queued ? '#dcfce7' : '#fef3c7', color: queued ? '#15803d' : '#b45309', border:`1px solid ${queued ? '#86efac' : '#fcd34d'}`, borderRadius:7, cursor: queued || queuing ? 'default' : 'pointer', flexShrink:0, display:'flex', alignItems:'center', gap:4 }}>
+        {queuing ? <Spin size={11} /> : queued ? '✓ Queued' : '+ Auto-Apply'}
+      </button>
       <a href={api.career.reportHtmlUrl(ev.id)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
         style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background:'#eef2ff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, textDecoration:'none', flexShrink:0 }}>
         HTML ↗
@@ -1085,7 +1100,7 @@ function BatchEval({ hasResume }) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 export default function CareerOps() {
-  const [tab, setTab]               = useState('evaluate')
+  const [tab, setTab]               = useState('scanner')
   const [resumeInfo, setResumeInfo] = useState(null)
   const [jobInput, setJobInput]     = useState('')
   const [inputMode, setInputMode]   = useState('url')
@@ -1200,12 +1215,18 @@ export default function CareerOps() {
   }
 
   const TABS = [
-    { k:'evaluate', l:'⚡ Evaluate' },
     { k:'scanner',  l:'🔍 Portal Scanner' },
+    { k:'evaluate', l:'⚡ Evaluate' },
     { k:'batch',    l:'📦 Batch Evaluate' },
     { k:'history',  l:`📋 History${history.length > 0 ? ` (${history.length})`:''}`},
     { k:'profile',  l:'⚙ Auto-Apply Setup' },
   ]
+
+  // Add to auto-apply queue from a History row.
+  async function handleQueueFromHistory(id) {
+    await api.career.setApplyMode(id, 'auto')
+    await api.career.setApplyStatus(id, 'queued')
+  }
 
   return (
     <div style={{ display:'flex', flexDirection:'column', height:'100%', overflow:'hidden', background:'#f8fafc' }}>
@@ -1364,7 +1385,7 @@ export default function CareerOps() {
                 )}
                 {/* Filtered Evaluations */}
                 {history.filter(ev => roleTypeFilter === 'all' || classifyRoleType(ev.jobTitle) === roleTypeFilter).map(ev => (
-                  <EvalCard key={ev.id} ev={ev} onClick={() => loadEvalFromHistory(ev)} onDelete={handleDeleteEval} />
+                  <EvalCard key={ev.id} ev={ev} onClick={() => loadEvalFromHistory(ev)} onDelete={handleDeleteEval} onQueue={handleQueueFromHistory} />
                 ))}
               </>
             )}

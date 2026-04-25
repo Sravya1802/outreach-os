@@ -72,7 +72,14 @@ export default function OutreachPage() {
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'#f8fafc' }}>
       {/* Header */}
       <div style={{ padding:'24px 32px 20px', background:'#fff', borderBottom:'1px solid #e2e8f0', flexShrink:0 }}>
-        <h1 style={{ fontSize:22, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Outreach CRM</h1>
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:16, marginBottom:4 }}>
+          <h1 style={{ fontSize:22, fontWeight:800, color:'#0f172a', margin:0 }}>Outreach CRM</h1>
+          <button type="button" onClick={() => navigate('/outreach/templates')}
+            title="Edit the email + LinkedIn DM templates the AI uses for generated outreach"
+            style={{ padding:'8px 14px', borderRadius:9, border:'1px solid #c7d2fe', background:'#eef2ff', color:'#4f46e5', fontSize:12, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap', flexShrink:0 }}>
+            ✏ Manage templates
+          </button>
+        </div>
         <p style={{ fontSize:13, color:'#64748b', margin:'0 0 16px' }}>
           {filtered.length} contact{filtered.length !== 1 ? 's' : ''}{company ? ` at ${company}` : ' across all companies'}
         </p>
