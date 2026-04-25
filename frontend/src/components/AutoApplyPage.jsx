@@ -5,6 +5,7 @@ import { AutoApplySetup } from './CareerOps'
 const TABS = [
   { id: 'setup',          label: '⚙ Setup',          desc: 'Profile + resume library used to fill applications' },
   { id: 'queue',          label: '📋 Queue',         desc: 'Bulk-queue evaluations + run the worker' },
+  { id: 'completed',      label: '✅ Completed',     desc: 'Applications the auto-apply worker submitted successfully' },
   { id: 'resume-folder',  label: '📁 Resume Folder', desc: 'Role-archetype PDFs: AIML / SWE / DS / DevOps / full stack / startup' },
   { id: 'history',        label: '📜 History',       desc: 'Past auto-apply runs and outcomes' },
 ]
@@ -38,6 +39,7 @@ export default function AutoApplyPage() {
         <div style={{ fontSize:12, color:'#94a3b8', marginBottom:18 }}>{TABS.find(t => t.id === tab)?.desc}</div>
         {tab === 'setup'         && <SetupTab />}
         {tab === 'queue'         && <QueueTab />}
+        {tab === 'completed'     && <CompletedTab />}
         {tab === 'resume-folder' && <ResumeFolderTab />}
         {tab === 'history'       && <HistoryTab />}
       </div>
@@ -168,6 +170,57 @@ function QueueTab() {
           {result.kind === 'error'  && `✗ ${result.msg}`}
         </div>
       )}
+    </div>
+  )
+}
+
+function CompletedTab() {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [err, setErr] = useState(null)
+
+  useEffect(() => {
+    api.career.pipeline()
+      .then(d => {
+        const items = Object.values(d?.columns || {}).flatMap(col => col.items || [])
+        const completed = items
+          .filter(r => r.apply_status === 'submitted')
+          .sort((a, b) => new Date(b.applied_at || b.created_at || 0) - new Date(a.applied_at || a.created_at || 0))
+        setRows(completed)
+      })
+      .catch(e => { setErr(e.message); setRows([]) })
+      .finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <div style={{ padding:'40px 0', textAlign:'center', color:'#94a3b8' }}>Loading…</div>
+
+  return (
+    <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:14, padding:'24px 28px' }}>
+      <h2 style={{ fontSize:15, fontWeight:700, color:'#0f172a', margin:'0 0 18px' }}>Completed Applications · {rows.length}</h2>
+
+      {err && <div style={{ padding:'10px 14px', background:'#fef2f2', border:'1px solid #fca5a5', borderRadius:8, fontSize:12, color:'#dc2626', marginBottom:16 }}>✗ {err}</div>}
+
+      {rows.length === 0 && !err && (
+        <div style={{ padding:'40px 0', textAlign:'center', color:'#94a3b8' }}>
+          <div style={{ fontSize:36, marginBottom:8 }}>✅</div>
+          <div style={{ fontSize:13, fontWeight:600 }}>No completed auto-applications yet</div>
+          <div style={{ fontSize:11, marginTop:4 }}>Submitted applications will appear here after the worker completes them.</div>
+        </div>
+      )}
+
+      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+        {rows.map(r => (
+          <div key={r.id} style={{ padding:'12px 16px', border:'1px solid #e2e8f0', borderRadius:10, display:'grid', gridTemplateColumns:'1fr 72px 120px 96px', gap:14, alignItems:'center', fontSize:13 }}>
+            <div>
+              <div style={{ fontWeight:700, color:'#0f172a' }}>{r.job_title || 'Untitled role'}</div>
+              <div style={{ fontSize:11, color:'#94a3b8' }}>{r.company_name || 'Unknown company'}</div>
+            </div>
+            <div style={{ fontWeight:700, color:'#16a34a' }}>{r.grade || '—'}</div>
+            <div style={{ fontSize:11, fontWeight:700, padding:'4px 8px', borderRadius:6, background:'#dcfce7', color:'#15803d', textAlign:'center' }}>submitted</div>
+            <div style={{ fontSize:11, color:'#94a3b8', textAlign:'right' }}>{r.applied_at ? new Date(r.applied_at).toLocaleDateString() : '—'}</div>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
