@@ -209,7 +209,9 @@ const LINKEDIN_ACTOR_CONFIGS = [
 ];
 
 export async function scrapeLinkedInJobs(subcategory = '', category = '') {
-  const query = [subcategory, 'Software Engineer Intern 2026'].filter(Boolean).join(' ');
+  // Role-agnostic by default — covers product, design, data, marketing, finance,
+  // not just SWE. Subcategory still narrows when caller provides one.
+  const query = [subcategory, 'Intern 2026'].filter(Boolean).join(' ');
   const cookie = process.env.LINKEDIN_SESSION_COOKIE || '';
   console.log(`[linkedin] starting — query: "${query}"`);
 
@@ -294,8 +296,8 @@ export async function scrapeLinkedInJobs(subcategory = '', category = '') {
 
 export async function scrapeGoogleJobs(subcategory = '', category = '') {
   const query = subcategory
-    ? `${subcategory} Software Engineer Internship 2026 United States`
-    : 'Software Engineer Internship 2026 site:jobs.lever.co OR site:greenhouse.io OR site:myworkdayjobs.com';
+    ? `${subcategory} Internship 2026 United States`
+    : 'Internship 2026 site:jobs.lever.co OR site:greenhouse.io OR site:myworkdayjobs.com';
 
   try {
     console.log(`[google_jobs] Serper search: "${query}"`);
@@ -330,13 +332,13 @@ export async function scrapeGoogleJobs(subcategory = '', category = '') {
 // Source 5: Wellfound — Apify with multiple actor fallbacks + Serper
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function scrapeWellfound(roleQuery = 'software engineer intern', subcategory = '', category = '') {
-  const role = subcategory ? `${subcategory} software engineer intern` : roleQuery;
+export async function scrapeWellfound(roleQuery = 'intern 2026', subcategory = '', category = '') {
+  const role = subcategory ? `${subcategory} intern 2026` : roleQuery;
 
   // Try multiple known actors in order
   const ACTORS = [
     { id: 'curious_coder/wellfound-scraper',  input: { role, location: 'United States', maxJobs: 100 } },
-    { id: 'clearpath/wellfound-api-ppe',       input: { role: 'Software Engineer Intern', location: 'United States', maxJobs: 50 } },
+    { id: 'clearpath/wellfound-api-ppe',       input: { role: 'Intern', location: 'United States', maxJobs: 50 } },
     { id: 'apify/rag-web-browser',             input: { startUrls: [{ url: 'https://wellfound.com/role/r/software-engineer-intern' }], maxCrawlDepth: 0, maxCrawlPages: 1, outputFormats: ['text'] } },
   ];
 
@@ -389,8 +391,8 @@ export async function scrapeWellfound(roleQuery = 'software engineer intern', su
   try {
     console.log('[wellfound] trying Serper fallback');
     const q = subcategory
-      ? `site:wellfound.com ${subcategory} software engineer intern`
-      : 'site:wellfound.com/companies software engineer intern 2026';
+      ? `site:wellfound.com ${subcategory} intern 2026`
+      : 'site:wellfound.com/companies intern 2026';
     const data = await serperSearch(q, 10);
     const organic = data.organic || [];
     return organic
@@ -439,8 +441,8 @@ export async function scrapeYCStartups(subcategory = '', category = '') {
   // Layer 1: Serper search on WorkAtAStartup
   try {
     const q = subcategory
-      ? `site:workatastartup.com "${subcategory}" intern`
-      : 'site:workatastartup.com software engineer intern 2026';
+      ? `site:workatastartup.com "${subcategory}" intern 2026`
+      : 'site:workatastartup.com intern 2026';
     console.log(`[yc] Serper: "${q}"`);
     const data = await serperSearch(q, 10);
     for (const item of (data.organic || [])) {
@@ -487,8 +489,8 @@ export async function scrapeYCStartups(subcategory = '', category = '') {
   if (results.length < 5) {
     try {
       const q2 = subcategory
-        ? `YC startup "${subcategory}" hiring software intern 2026 site:ycombinator.com`
-        : 'YC startup hiring software engineer intern 2026 site:ycombinator.com/companies';
+        ? `YC startup "${subcategory}" hiring intern 2026 site:ycombinator.com`
+        : 'YC startup hiring intern 2026 site:ycombinator.com/companies';
       const data2 = await serperSearch(q2, 10);
       for (const item of (data2.organic || [])) {
         const link = item.link || '';

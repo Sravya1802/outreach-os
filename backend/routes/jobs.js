@@ -144,13 +144,17 @@ router.post('/scrape', async (req, res) => {
        VALUES ($1, 'last_scrape_summary', $2)
        ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
       [req.user.id, JSON.stringify({
-        at:         new Date().toISOString(),
+        at:           new Date().toISOString(),
         found,
         added,
         alreadyInDb,
         succeeded,
         failedSrc,
         bySource,
+        // First 25 names so the Dashboard can show "Newly added: X, Y, Z + N more".
+        // Full list is the canonical jobs table; this is just for surfacing.
+        newCompanyNames: newCompanies.slice(0, 25).map(c => c.name),
+        errors:          scrapeErrors,
       })]
     );
   } catch (e) { console.warn('[scrape] failed to persist last_scrape_summary:', e.message); }

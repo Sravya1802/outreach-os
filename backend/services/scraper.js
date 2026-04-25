@@ -112,10 +112,14 @@ const SEARCH_TERMS_MAP = {
 };
 
 export function getSearchTerms(category = '', subcategory = '') {
+  // Search terms are intentionally role-agnostic by default so LinkedIn/Wellfound
+  // pick up product, design, data, marketing, finance interns — not just SWE.
+  // SEARCH_TERMS_MAP entries are role-specific by category (Quant Funds want
+  // quantitative roles, etc.) and should still take precedence when set.
   if (SEARCH_TERMS_MAP[subcategory]) return SEARCH_TERMS_MAP[subcategory];
-  if (subcategory) return [`${subcategory} software engineer intern 2026`, `${subcategory} intern`];
-  if (category)    return [`${category.split(/[&/]/)[0].trim()} software engineer intern 2026`];
-  return ['software engineer intern 2026'];
+  if (subcategory) return [`${subcategory} intern 2026`, `${subcategory} internship`, `${subcategory} new grad 2026`];
+  if (category)    return [`${category.split(/[&/]/)[0].trim()} intern 2026`, `${category.split(/[&/]/)[0].trim()} new grad 2026`];
+  return ['intern 2026', 'internship 2026', 'new grad 2026'];
 }
 
 // ─── Location parser ──────────────────────────────────────────────────────────
@@ -475,7 +479,7 @@ async function scrapeInternList() {
 
 async function scrapeLinkedInJobs(searchTerms = []) {
   console.log('[linkedin] started');
-  const query = searchTerms[0] || 'Software Engineer Intern 2026';
+  const query = searchTerms[0] || 'Intern 2026';
 
   // Apify made breaking changes:
   //  - bebity/linkedin-jobs-scraper went paid-only (free trial expired)
@@ -518,7 +522,7 @@ async function scrapeLinkedInJobs(searchTerms = []) {
 
 async function scrapeWellfound(searchTerms = []) {
   console.log('[wellfound] started');
-  const query = searchTerms[0] || 'software engineer intern';
+  const query = searchTerms[0] || 'intern 2026';
 
   const attempts = [
     { id: 'misceres/wellfound-scraper',            input: { role: query, type: 'internship' } },
@@ -555,7 +559,7 @@ async function scrapeWellfound(searchTerms = []) {
 
 async function scrapeIndeed(searchTerms = []) {
   console.log('[indeed] started');
-  const position = searchTerms[0] || 'Software Engineer Intern';
+  const position = searchTerms[0] || 'Intern 2026';
 
   const attempts = [
     { id: 'apify/indeed-scraper',            input: { country: 'US', position, maxItems: 100 } },
@@ -594,7 +598,7 @@ async function scrapeIndeed(searchTerms = []) {
 
 async function scrapeDice(searchTerms = []) {
   console.log('[dice] started');
-  const query = searchTerms[0] || 'Software Engineer Intern';
+  const query = searchTerms[0] || 'Intern 2026';
 
   // Try Dice's internal API first (no auth required)
   try {
@@ -659,7 +663,7 @@ async function scrapeDice(searchTerms = []) {
 
 async function scrapeGoogleJobs(searchTerms = []) {
   console.log('[google_jobs] started');
-  const query = searchTerms[0] || 'Software Engineer Internship 2026 United States';
+  const query = searchTerms[0] || 'Internship 2026 United States';
 
   const attempts = [
     { id: 'bebity/google-jobs-scraper', input: { queries: [query], countryCode: 'us', languageCode: 'en', maxPagesPerQuery: 3 } },
