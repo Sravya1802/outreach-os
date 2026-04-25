@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
-import { api, apiUrl } from '../api'
+import { api, rawApiFetch } from '../api'
 import { AutoApplySetup } from './CareerOps'
 
 const CD_CSS = `
@@ -513,7 +513,6 @@ const ROLE_FILTERS = [
 function JobScraperTab({ company, onTabSwitch }) {
   const [roles, setRoles]     = useState([])
   const [loading, setLoading] = useState(false)
-  const [scraping, setScraping] = useState(false)
   const [tracking, setTracking] = useState(null)
   const [scrapeResult, setScrapeResult] = useState(null)
   const [activeFilter, setActiveFilter] = useState('All')
@@ -1141,7 +1140,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     try {
       const controller = new AbortController()
       const timer = setTimeout(() => controller.abort(), 95000)
-      const res  = await fetch(apiUrl(`/career/company/${company.id}/score-fit`), { method:'POST', signal: controller.signal })
+      const res  = await rawApiFetch(`/career/company/${company.id}/score-fit`, { method:'POST', signal: controller.signal })
       clearTimeout(timer)
       const text = await res.text()
       let data
@@ -1182,7 +1181,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     try {
       const fd = new FormData()
       fd.append('resume', file)
-      const res = await fetch(apiUrl(`/companies/${company.id}/career-ops/resume`), { method:'POST', body: fd })
+      const res = await rawApiFetch(`/companies/${company.id}/career-ops/resume`, { method:'POST', body: fd })
       const data = await res.json()
       if (data.resume && data.application) {
         setApp(data.application)
@@ -1199,7 +1198,7 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   async function deleteResume() {
     setResumeDel(true)
     try {
-      await fetch(apiUrl(`/companies/${company.id}/career-ops/resume`), { method:'DELETE' })
+      await rawApiFetch(`/companies/${company.id}/career-ops/resume`, { method:'DELETE' })
       setApp(prev => ({ ...prev, resume_path:null, resume_original_name:null, resume_size:null }))
       setEval(null)
     } catch (_) {}

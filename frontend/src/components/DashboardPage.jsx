@@ -49,8 +49,8 @@ export default function DashboardPage({ onStatsChange }) {
   const [stats, setStats]       = useState(null)
   const [activity, setActivity] = useState([])
   const [catCounts, setCatCounts] = useState({})
-  const [ycCount, setYcCount]   = useState(null)
   const [queue, setQueue]       = useState(null)
+  const [now, setNow]           = useState(() => Date.now())
 
   useEffect(() => {
     const loadStats = () => {
@@ -64,11 +64,13 @@ export default function DashboardPage({ onStatsChange }) {
     }
     loadStats()
     api.activity().then(d => setActivity(d.activity || [])).catch(() => {})
-    fetch('https://yc-oss.github.io/api/companies/hiring.json')
-      .then(r => r.json()).then(d => setYcCount(Array.isArray(d) ? d.length : null))
-      .catch(() => {})
     window.addEventListener('stats-refresh', loadStats)
     return () => window.removeEventListener('stats-refresh', loadStats)
+  }, [])
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60000)
+    return () => clearInterval(timer)
   }, [])
 
   const statCards = stats ? [
@@ -146,7 +148,7 @@ export default function DashboardPage({ onStatsChange }) {
           {/* Last scrape — populated by /jobs/scrape (writes meta.last_scrape_summary) */}
           {stats?.lastScrape && (() => {
             const ls = stats.lastScrape
-            const ageMs = Date.now() - new Date(ls.at).getTime()
+            const ageMs = now - new Date(ls.at).getTime()
             const ageStr = ageMs < 60000 ? 'just now'
               : ageMs < 3600000 ? `${Math.floor(ageMs / 60000)}m ago`
               : ageMs < 86400000 ? `${Math.floor(ageMs / 3600000)}h ago`

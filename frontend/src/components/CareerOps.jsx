@@ -120,7 +120,7 @@ function ResumeUpload({ resumeInfo, onUploaded }) {
 }
 
 // ── Evaluation report — renders santifer's A-G schema ────────────────────────
-function EvaluationReport({ evaluation: e, evalId, onGeneratePDF, pdfLoading, pdfUrl, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
+function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfUrl, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
   const gc = gradeColor(e.grade)
   const gb = gradeBg(e.grade)
 
@@ -1311,7 +1311,6 @@ export default function CareerOps() {
             {evaluation && !evaluating && (
               <EvaluationReport
                 evaluation={evaluation}
-                evalId={evalId}
                 onGeneratePDF={handleGeneratePDF}
                 pdfLoading={pdfLoading}
                 pdfUrl={pdfUrl}

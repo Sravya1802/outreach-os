@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { api, apiUrl } from '../frontend/src/api.js'
+import { api, apiUrl, rawApiFetch } from '../frontend/src/api.js'
 
 function mockJsonFetch(check, payload = {}) {
   globalThis.fetch = async (url, init = {}) => {
@@ -62,4 +62,29 @@ test('career document/report URLs use the shared API base', () => {
   assert.equal(api.career.downloadUrl(5), '/api/career/download/5')
   assert.equal(api.career.reportHtmlUrl(5), '/api/career/evaluations/5/report.html')
   assert.equal(api.career.scoreFitUrl(9), '/api/career/company/9/score-fit')
+})
+
+test('raw API fetch keeps direct calls on the authenticated API helper path', async () => {
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/career/company/42/score-fit')
+    assert.equal(init.method, 'POST')
+  }, { ok: true })
+
+  const res = await rawApiFetch('/career/company/42/score-fit', { method: 'POST' })
+  assert.equal(res.ok, true)
+})
+
+test('outreach template endpoints use the generate API routes', async () => {
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/generate/templates')
+    assert.equal(init.method, 'GET')
+  }, { templates: { email: 'Email', linkedin: 'DM' } })
+  await api.generate.templates()
+
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/generate/templates')
+    assert.equal(init.method, 'PUT')
+    assert.deepEqual(JSON.parse(init.body), { email: 'Email', linkedin: 'DM' })
+  }, { templates: { email: 'Email', linkedin: 'DM' } })
+  await api.generate.saveTemplates({ email: 'Email', linkedin: 'DM' })
 })

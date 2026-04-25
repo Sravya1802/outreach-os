@@ -63,10 +63,11 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 
 ### Pending — needs my input or has an unfixed bug
 1. **Outreach CRM "0 contacts"** — code fix is committed (`8a55549`) so `/outreach` now calls the JWT-attaching API wrapper. After Vercel deploy, verify as `lakshmisravyar@gmail.com` that `/outreach` shows 36 contacts (14 with email). If still empty, check Settings page → red Account box and DevTools Network `all-contacts` `Authorization` header.
-2. **Email + DM templates** — placeholder page exists at `/outreach/templates`. I'll paste my preferred templates and you wire them into the AI prompt + populate the page.
-3. **Role Eligibility / Ranked Roles loading bug** — code fix committed and pushed (`0d0e534`) to prevent blank render when `/career/ranked` returns score values as strings. After Vercel deploy, verify `/apply/ranked` opens and renders rows or an empty state.
-4. **Sign in / Sign up UI** — currently one combined Login form, want a tabs-based UX.
+2. ~~**Email + DM templates**~~ — implemented in the current uncommitted stabilization pass: `/outreach/templates` is now an editable per-user template UI, backend stores templates in `meta.outreach_templates`, and `generate` routes pass saved templates into the AI prompt as style anchors.
+3. **Role Eligibility / Ranked Roles loading bug** — code fix committed and pushed (`0d0e534`) to prevent blank render when `/career/ranked` returns score values as strings, but user still saw a blank `/apply/ranked` screen. Audit pass mounted the existing root ErrorBoundary so the next browser repro should show an actionable stack trace instead of a blank page. After deploy, verify `/apply/ranked`; if it still fails, capture the rendered ErrorBoundary stack or DevTools Console.
+4. ~~**Sign in / Sign up UI**~~ — implemented in the current uncommitted stabilization pass: Login now has Sign in / Sign up tabs, with magic link kept as a secondary sign-in option.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
+6. **Audit follow-ups** — frontend lint now exits 0 but still prints 4 `exhaustive-deps` warnings; backend now has a package-lock and `npm audit --prefix backend --audit-level=high` passes; no typecheck/e2e scripts; authenticated browser flows remain unverified without a live session token.
 
 ### Deferred / acknowledged
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
@@ -80,6 +81,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ### Architectural follow-ups (no urgency)
 - Migration 005 to drop `user_id DEFAULT` after fixing 5 TODO(auth) markers in cron/startup paths (server.js daily refresh, jobs.js runReclassifyUnclassified, autoApplier comment).
 - "System user" concept for background paths that genuinely have no request context.
+- Schema follow-up: migration 003 added `user_id`, but several legacy UNIQUE constraints remain global, especially `jobs.name UNIQUE` plus `ON CONFLICT (name)` insert paths. This can silently block a clean second user from importing/scraping the same company. Needs a planned migration to replace global uniqueness with per-user uniqueness where intended.
 
 ## How I work
 
@@ -120,6 +122,18 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-25 — Production-readiness audit pass + narrow fixes
+- **What:** Ran repository/feature audit checks across frontend and deployed backend worktree. Fixed root `npm test` script, Vite ESM lint issue, Company Detail authenticated fetch bypasses for score-fit + per-company resume upload/delete, mounted the existing ErrorBoundary to avoid blank page crashes, and fixed backend `meta` upsert conflict target for company resume PDF parsing.
+- **Files:** [package.json:16](package.json#L16), [frontend/vite.config.js:5](frontend/vite.config.js#L5), [frontend/src/components/CompanyDetail.jsx:1144](frontend/src/components/CompanyDetail.jsx#L1144), [frontend/src/main.jsx:5](frontend/src/main.jsx#L5), [tests/api-client.test.mjs:67](tests/api-client.test.mjs#L67), [../outreach-local/backend/routes/companies.js:59](../outreach-local/backend/routes/companies.js#L59)
+- **Status:** uncommitted on frontend `main` and backend `phase-4-pg`; `npm test` passes (6/6), `npm run build --prefix frontend` passes with large-chunk warning, `node --check backend/routes/companies.js` passes, public backend `/api/health` ok, Vercel SPA rewrites for `/apply/ranked` and `/discover/companies` return 200. `npm run lint --prefix frontend` still fails with 51 errors / 4 warnings.
+- **Follow-up:** Commit/push both worktrees after review; deploy backend for the `meta` conflict fix; browser-verify `/apply/ranked`, Company Detail Career Ops score-fit/resume upload/delete, and scraper/status flows. Plan follow-up migration for per-user UNIQUE constraints before relying on clean second-user imports.
+
+### 2026-04-25 — Stabilization pass: templates, login tabs, audits
+- **What:** Completed the Templates feature end-to-end and turned the login form into Sign in / Sign up tabs. `/outreach/templates` now loads/saves per-user email + LinkedIn templates via `/api/generate/templates`, stores them in `meta`, and generation routes pass saved templates into the AI prompt as style anchors. Added frontend API tests and backend template normalization tests. Generated/tracked backend and frontend lockfiles so audits are reproducible.
+- **Files:** [frontend/src/components/TemplatesPage.jsx:1](frontend/src/components/TemplatesPage.jsx#L1), [frontend/src/components/Login.jsx:41](frontend/src/components/Login.jsx#L41), [frontend/src/api.js:134](frontend/src/api.js#L134), [tests/api-client.test.mjs:77](tests/api-client.test.mjs#L77), [../outreach-local/backend/routes/generate.js:18](../outreach-local/backend/routes/generate.js#L18), [../outreach-local/backend/services/outreachTemplates.js:1](../outreach-local/backend/services/outreachTemplates.js#L1), [../outreach-local/backend/tests/ai-templates.test.mjs:1](../outreach-local/backend/tests/ai-templates.test.mjs#L1)
+- **Status:** uncommitted on frontend `main` and backend `phase-4-pg`; `npm test` passes 7/7, `npm test --prefix backend` passes 2/2, frontend build passes, frontend audit passes, backend audit passes, backend changed files pass `node --check`. Local Vite preview served `/apply/ranked`, `/outreach/templates`, `/discover/scraper`, and `/discover/companies` with HTTP 200.
+- **Follow-up:** Commit/push both worktrees and deploy backend. Browser-verify saving templates as a logged-in user and generating email/LinkedIn copy uses the saved style.
 
 ### 2026-04-25 — Companies counts render from cache
 - **What:** Removed the visible loading/dash pass on `/discover/companies` by caching stats + category counts per user in `sessionStorage`, seeding from the parent App stats snapshot, and refreshing counts in the background.

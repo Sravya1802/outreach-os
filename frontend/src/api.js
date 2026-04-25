@@ -134,6 +134,8 @@ export const api = {
   generate: {
     email:    (body) => apiCall('/generate/email',    { method: 'POST', body }),
     linkedin: (body) => apiCall('/generate/linkedin', { method: 'POST', body }),
+    templates: () => apiCall('/generate/templates'),
+    saveTemplates: (body) => apiCall('/generate/templates', { method: 'PUT', body }),
     both: async (body) => {
       const [emailRes, linkedinRes] = await Promise.all([
         apiCall('/generate/email',    { method: 'POST', body }),

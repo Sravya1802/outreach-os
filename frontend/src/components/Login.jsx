@@ -41,6 +41,18 @@ export default function Login() {
 
   const label = { password: 'Sign in', signup: 'Create account', magic: 'Send magic link' }[mode]
   const switchTo = (m) => () => { setMode(m); setError(null); setInfo(null); setSent(false) }
+  const tabStyle = (active) => ({
+    flex: 1,
+    padding: '9px 12px',
+    border: 'none',
+    borderRadius: 8,
+    background: active ? '#fff' : 'transparent',
+    color: active ? '#0f172a' : '#64748b',
+    fontSize: 13,
+    fontWeight: 800,
+    cursor: 'pointer',
+    boxShadow: active ? '0 1px 3px rgba(15,23,42,0.12)' : 'none',
+  })
 
   return (
     <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg,#0f172a,#1e293b)', padding:20 }}>
@@ -53,6 +65,17 @@ export default function Login() {
             {mode === 'signup' ? 'Create an account' : 'Sign in to continue'}
           </div>
         </div>
+
+        {!sent && (
+          <div style={{ display:'flex', gap:4, padding:4, background:'#f1f5f9', borderRadius:10, marginBottom:20 }}>
+            <button type="button" onClick={switchTo('password')} style={tabStyle(mode !== 'signup')}>
+              Sign in
+            </button>
+            <button type="button" onClick={switchTo('signup')} style={tabStyle(mode === 'signup')}>
+              Sign up
+            </button>
+          </div>
+        )}
 
         {sent ? (
           <div style={{ textAlign:'center', padding:'20px 0' }}>
@@ -92,22 +115,16 @@ export default function Login() {
               {sending ? 'Working…' : label}
             </button>
 
-            <div style={{ marginTop:20, display:'flex', justifyContent:'center', gap:6, flexWrap:'wrap', fontSize:11 }}>
-              {mode !== 'password' && (
+            <div style={{ marginTop:18, display:'flex', justifyContent:'center', gap:6, flexWrap:'wrap', fontSize:11 }}>
+              {mode === 'magic' && (
                 <button type="button" onClick={switchTo('password')}
-                  style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:600, padding:'4px 8px' }}>
+                  style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:700, padding:'4px 8px' }}>
                   Sign in with password
                 </button>
               )}
-              {mode !== 'signup' && (
-                <button type="button" onClick={switchTo('signup')}
-                  style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:600, padding:'4px 8px' }}>
-                  Create account
-                </button>
-              )}
-              {mode !== 'magic' && (
+              {mode !== 'magic' && mode !== 'signup' && (
                 <button type="button" onClick={switchTo('magic')}
-                  style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:600, padding:'4px 8px' }}>
+                  style={{ background:'none', border:'none', color:'#6366f1', cursor:'pointer', fontWeight:700, padding:'4px 8px' }}>
                   Email me a magic link
                 </button>
               )}
