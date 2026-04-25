@@ -508,6 +508,14 @@ async function scrapeLinkedInJobs(searchTerms = []) {
           source:         'linkedin',
         }))
         .filter(r => r.name.length > 1);
+      if (results.length === 0) {
+        // Actor ignored the intern keyword and returned unrelated roles — try
+        // the next actor (which uses LinkedIn's own search URL and honors
+        // keywords) instead of returning [] and skipping the Greenhouse fallback.
+        const sample = (items[0]?.jobTitle || items[0]?.title || '').slice(0, 80);
+        console.warn(`[linkedin] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[linkedin] returned ${results.length} results (${id})`);
       return results;
     } catch (err) {
@@ -607,6 +615,11 @@ async function scrapeIndeed(searchTerms = []) {
           source:         'indeed',
         }))
         .filter(r => r.name.length > 1);
+      if (results.length === 0) {
+        const sample = (items[0]?.positionName || items[0]?.title || '').slice(0, 80);
+        console.warn(`[indeed] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[indeed] returned ${results.length} results`);
       return results;
     } catch (err) {
@@ -710,6 +723,11 @@ async function scrapeGoogleJobs(searchTerms = []) {
           source:         'google_jobs',
         }))
         .filter(r => r.name.length > 1);
+      if (results.length === 0) {
+        const sample = (items[0]?.title || items[0]?.jobTitle || '').slice(0, 80);
+        console.warn(`[google_jobs] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[google_jobs] returned ${results.length} results`);
       return results;
     } catch (err) {
