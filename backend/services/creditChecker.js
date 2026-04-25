@@ -47,19 +47,46 @@ async function checkApify() {
   try {
     const res = await fetch(`https://api.apify.com/v2/users/me?token=${token}`, { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
-    const plan = data?.data?.plan;
-    const usageUsd = (plan?.usageUsdCents || 0) / 100;
-    // Apify free plan has $5/month limit — show warning under $0.50
-    const balanceUsd = Math.max(0, 5 - usageUsd); // approximate remaining
+    if (!res.ok) {
+      const message = data?.error?.message || data?.message || `Apify HTTP ${res.status}`;
+      return {
+        configured: true,
+        error: message,
+        warning: true,
+        critical: /limit|quota|exhaust|insufficient|payment|billing|forbidden|unauthor/i.test(message) || [401, 402, 403, 429].includes(res.status),
+      };
+    }
+
+    const user = data?.data || {};
+    const plan = user.plan || {};
+    const billing = user.currentBillingPeriod || user.billing || {};
+    const usageUsd = Number(
+      billing.usageUsd ??
+      billing.usedUsd ??
+      user.usageUsd ??
+      (billing.usageUsdCents != null ? billing.usageUsdCents / 100 : null) ??
+      (plan.usageUsdCents != null ? plan.usageUsdCents / 100 : null) ??
+      0
+    );
+    const limitUsd = Number(
+      billing.usageLimitUsd ??
+      billing.limitUsd ??
+      plan.usageLimitUsd ??
+      plan.monthlyUsageLimitUsd ??
+      plan.monthlyUsageUsd ??
+      5
+    );
+    const balanceUsd = Math.max(0, limitUsd - usageUsd);
     return {
       configured: true,
       usedUsd: usageUsd,
+      limitUsd,
       balanceUsd,
-      warning: balanceUsd < 0.50,
-      critical: balanceUsd < 0.05,
+      warning: balanceUsd < Math.max(0.50, limitUsd * 0.1),
+      critical: balanceUsd < 0.05 || usageUsd >= limitUsd,
     };
   } catch (err) {
-    return { configured: true, error: err.message };
+    return { configured: true, error: err.message, warning: true, critical: true };
   }
 }
 

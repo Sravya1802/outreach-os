@@ -133,14 +133,20 @@ app.get('/api/jobs/last-refresh', async (req, res) => {
 app.get('/api/stats', async (req, res) => {
   try {
     const [
-      c1, c2, c3, c4, c5, c6, c7,
+      c1, c2, c3, c4, c5, c6, c7, c8,
     ] = await Promise.all([
       one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE user_id = $1", [req.user.id]),
       one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [req.user.id]),
       one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [req.user.id]),
       one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'sent' AND user_id = $1", [req.user.id]),
       one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'replied' AND user_id = $1", [req.user.id]),
-      one("SELECT COUNT(DISTINCT source)::int AS n FROM jobs WHERE source IS NOT NULL AND source != '' AND user_id = $1", [req.user.id]),
+      one(`
+        SELECT COUNT(DISTINCT trim(src))::int AS n
+        FROM jobs
+        CROSS JOIN LATERAL unnest(string_to_array(source, ',')) AS s(src)
+        WHERE source IS NOT NULL AND source != '' AND trim(s.src) != '' AND user_id = $1
+      `, [req.user.id]),
       one("SELECT COUNT(*)::int AS n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != '' AND user_id = $1", [req.user.id]),
     ]);
     let totalApplications = 0;
@@ -151,21 +157,22 @@ app.get('/api/stats', async (req, res) => {
       );
       totalApplications = r?.n || 0;
     } catch (_) {}
-    const totalSent = c4?.n || 0;
-    const totalReplied = c5?.n || 0;
+    const totalSent = c5?.n || 0;
+    const totalReplied = c6?.n || 0;
     res.json({
       totalCompanies: c1?.n || 0,
       totalContacts: c2?.n || 0,
-      totalLinkedInContacts: c3?.n || 0,
+      contactsWithEmail: c3?.n || 0,
+      totalLinkedInContacts: c4?.n || 0,
       totalSent,
       responseRate: totalSent > 0 ? Math.round((totalReplied / totalSent) * 100) : 0,
-      activeSources: c6?.n || 0,
-      ycImported: c7?.n || 0,
+      activeSources: c7?.n || 0,
+      ycImported: c8?.n || 0,
       totalApplications,
     });
   } catch (err) {
     console.error('[stats]', err);
-    res.json({ totalCompanies: 0, totalContacts: 0, totalSent: 0, responseRate: 0, activeSources: 0 });
+    res.json({ totalCompanies: 0, totalContacts: 0, contactsWithEmail: 0, totalLinkedInContacts: 0, totalSent: 0, responseRate: 0, activeSources: 0 });
   }
 });
 
