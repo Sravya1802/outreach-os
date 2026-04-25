@@ -38,12 +38,12 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+b3bc61c  feat: add completed auto-apply tab
+8a55549  fix: attach auth to outreach contacts fetch
 bfcea63  Phase C: IA refactor — DISCOVER / APPLY / OUTREACH sections + Auto Apply page
 3c5be1b  docs: align README with current architecture + deprecate stale guides
 ae6cbb0  Security/hygiene: untrack PDFs, HTMLs, and empty DB files
 7355933  auth/frontend: send Supabase JWT on every backend call
-f214229  audit/lint: fix the 3 issues lint pinpointed from the original audit
-058a247  audit/recover: reconstruct api.js helpers + unbreak frontend fetches
 …
 ```
 
@@ -57,7 +57,7 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ## Known gaps & open work
 
 ### Pending — needs my input or has an unfixed bug
-1. **Outreach CRM "0 contacts"** — user logged in as `lakshmisravyar` but Outreach page still shows 0. Last we checked, the most recent backend [auth] OK lines were from `rls180202`. Likely the browser session didn't actually swap (Supabase localStorage caching). Diagnostic: check Settings page → red Account box → confirm email shown matches expected user. If it says wrong account, walk through clearing localStorage + re-login. If it says lakshmisravyar but Outreach is still empty, check DevTools Network tab for the `all-contacts` request's `Authorization` header.
+1. **Outreach CRM "0 contacts"** — code fix is committed (`8a55549`) so `/outreach` now calls the JWT-attaching API wrapper. After Vercel deploy, verify as `lakshmisravyar@gmail.com` that `/outreach` shows 36 contacts (14 with email). If still empty, check Settings page → red Account box and DevTools Network `all-contacts` `Authorization` header.
 2. **Email + DM templates** — placeholder page exists at `/outreach/templates`. I'll paste my preferred templates and you wire them into the AI prompt + populate the page.
 3. **Role Eligibility loading bug** — earlier marked broken. Backend returns 200; needs DevTools Console screenshot from `/apply/ranked` to see the frontend error.
 4. **Sign in / Sign up UI** — currently one combined Login form, want a tabs-based UX.
@@ -87,7 +87,7 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Diagnose** the Outreach CRM "0 contacts" issue (account switch / cached session).
+1. **Verify deploy** for Outreach CRM fix and Auto Apply Completed tab on `/apply/auto-apply`.
 2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
 3. **Receive** Role Eligibility DevTools error → fix.
 4. **Quick wins**: Apify-status-red, Top-Companies-filter, Companies-flicker, Career-Ops-no-preload — these are 15-30 min each.
@@ -115,11 +115,23 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Outreach fix committed + Phase C linearized onto main
+- **What:** Committed the Outreach CRM JWT-fetch fix, then replayed local work on top of remote `main` after GitHub advanced to Phase C (`bfcea63`) during the session.
+- **Files:** [frontend/src/components/OutreachPage.jsx:34](frontend/src/components/OutreachPage.jsx#L34), [HANDOFF.md:38](HANDOFF.md#L38)
+- **Status:** committed on `main`: `8a55549`; Phase C is now in `main` via `bfcea63`; not browser-tested.
+- **Follow-up:** Push `main` and verify `/outreach` on the deployed Vercel app after deployment.
+
+### 2026-04-25 — Auto Apply Completed tab
+- **What:** Added a `Completed` tab to `/apply/auto-apply`. It reads `api.career.pipeline()`, filters `apply_status === 'submitted'`, and shows submitted roles sorted by applied date.
+- **Files:** [frontend/src/components/AutoApplyPage.jsx:5](frontend/src/components/AutoApplyPage.jsx#L5), [frontend/src/components/AutoApplyPage.jsx:177](frontend/src/components/AutoApplyPage.jsx#L177)
+- **Status:** committed on `main`: `b3bc61c`; `npm run build --prefix frontend` passed. Full `npm run lint --prefix frontend` still fails on pre-existing repo lint debt (`react-hooks/set-state-in-effect`, unused vars, empty catches, `vite.config.js` `__dirname`).
+- **Follow-up:** Push `main`; verify the Completed tab in browser after Vercel deploy.
+
 ### 2026-04-25 — Context refresh + memory confirmation
 - **What:** Read `HANDOFF.md`, confirmed `MEMORY.md` and `feedback_keep_handoff_updated.md` are accessible, and checked frontend/backend worktree state.
 - **Files:** [HANDOFF.md:1](HANDOFF.md#L1), `/Users/lakshmisravyarachakonda/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/MEMORY.md`, `/Users/lakshmisravyarachakonda/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/feedback_keep_handoff_updated.md`
-- **Status:** uncommitted/untracked handoff update on frontend `main`; frontend also still has uncommitted `frontend/src/components/OutreachPage.jsx` from the Outreach CRM fix. Backend worktree is on `phase-4-pg`.
-- **Follow-up:** Ask user which open item to start with; do not switch branches until the existing frontend WIP is committed or stashed.
+- **Status:** included in `8a55549` after `HANDOFF.md` was added to git; backend worktree is on `phase-4-pg`.
+- **Follow-up:** Keep appending dated entries before ending each unit of work.
 
 ### 2026-04-24 — Outreach CRM "0 contacts" root cause + fix
 - **What:** `OutreachPage.jsx` was calling raw `fetch('/api/unified/all-contacts?…')` which bypassed the JWT-attaching `api.js` wrapper. Backend in `AUTH_MODE=enforce` returned 401; the `.then(r => r.ok ? r.json() : { contacts: [] })` handler silently swallowed it → empty list, no error UI. Swapped to `api.unified.allContacts(params)` which attaches `Authorization: Bearer <jwt>` from the current Supabase session. Added `console.error` on failure so the next silent-empty case isn't silent. Swept the rest of `frontend/src` — this was the only naked `/api/` fetch.
