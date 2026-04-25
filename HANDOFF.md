@@ -118,6 +118,13 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Sidebar rename + Apify scrape diagnosis
+- **What:** User asked to rename sidebar "Evaluate a Role" to "Career Ops" since `/discover/evaluate` already houses the full Career Ops tab UI (Evaluate / Portal Scanner / Batch / History / Auto-Apply Setup). Single label change, route untouched.
+- **Files:** [frontend/src/App.jsx:258](frontend/src/App.jsx#L258)
+- **Status:** committed and pushed on `main`: `3e570ef`. Build passes.
+- **Apify finding (open issue):** User reported "no jobs are getting scraped". Backend stderr shows `Monthly usage hard limit exceeded` on every Apify actor — LinkedIn (valig, bebity, curious_coder) AND Wellfound (curious_coder, clearpath, apify/rag-web-browser). New Apify token rotated to fresh `marbled_geothermal` FREE account validates against Apify API but `monthlyUsageLimitUsd` reports 0 — free tier credits insufficient for these actors. Greenhouse fallback IS working (returned 92 roles per logs at 03:11/03:13), so portal-scan paths still surface jobs. Real fix: upgrade Apify to a paid plan, switch to cheaper actors, or accept Greenhouse-only coverage. Not a code bug.
+- **Follow-up:** Decision needed on Apify spend vs scrape coverage — if you want LinkedIn + Wellfound back, we need a paid plan or different actors.
+
 ### 2026-04-25 — Deploy script health-check race fixed
 - **What:** User ran `update.sh` and got "Backend not healthy — connection refused" on localhost:3001 after pm2 restart. Backend was actually live (`/api/health` returned ok within seconds; pm2 process stable), so it was a script race: pm2 restart returns before Node binds the port. Replaced the one-shot `curl` with a 15-attempt × 2s poll (30s budget).
 - **Files:** [../outreach-local/deploy/update.sh:59-71](../outreach-local/deploy/update.sh#L59-L71)
