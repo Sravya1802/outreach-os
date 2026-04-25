@@ -115,11 +115,17 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Apply nav overlay fix pushed
+- **What:** Pushed the sidebar overlay fix and handoff update to `origin/main`.
+- **Files:** [frontend/src/App.jsx:210](frontend/src/App.jsx#L210), [HANDOFF.md:116](HANDOFF.md#L116)
+- **Status:** pushed to `origin/main`; local branch matches remote except unrelated untracked files.
+- **Follow-up:** Wait for Vercel deploy, hard-refresh the app, and retry the Apply nav items.
+
 ### 2026-04-25 — Apply sidebar clicks blocked by overlay
 - **What:** User reported Apply nav items were not opening. Live Vercel routes returned 200 and the deployed JS contained the Apply routes, so patched the sidebar to sit above non-modal content overlays that can intercept clicks.
 - **Files:** [frontend/src/App.jsx:210](frontend/src/App.jsx#L210)
-- **Status:** committed on `main`: `fcb908b`; `npm run build --prefix frontend` passed; not yet browser-confirmed by user.
-- **Follow-up:** Push `main`; after Vercel deploy, user should hard-refresh and retry `/apply/auto-apply`, `/apply/pipeline`, and `/apply/ranked`.
+- **Status:** committed and pushed on `main`: `fcb908b`; `npm run build --prefix frontend` passed; not yet browser-confirmed by user.
+- **Follow-up:** After Vercel deploy, user should hard-refresh and retry `/apply/auto-apply`, `/apply/pipeline`, and `/apply/ranked`.
 
 ### 2026-04-25 — Push state revalidated
 - **What:** Rechecked `git status`, `git log --oneline -6`, and `git push origin main` after a stale handoff said `main` was still 4 commits ahead. GitHub was already up to date.
