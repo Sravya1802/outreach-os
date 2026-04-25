@@ -4,7 +4,7 @@ I'm continuing work on **OutreachOS** — AI-powered job-search automation. Memo
 
 ---
 
-## Stack & deployment (live as of 2026-04-24)
+## Stack & deployment (live as of 2026-04-25)
 
 ```
 Vercel (outreach-jt.vercel.app)
@@ -38,6 +38,7 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+a6fc28a  docs: record stats and apify status fixes
 346c0b2  fix: show real contact and api status counts
 c36bb39  docs: record ranked roles fix
 0d0e534  fix: stabilize ranked roles rendering
@@ -49,6 +50,7 @@ fcb908b  fix: keep sidebar nav above content overlays
 
 phase-4-pg tip:
 ```
+53f0767  fix: deploy backend from phase branch
 f929862  fix: report total contacts and apify quota status
 624e6a3  perf: collapse N+1 count queries (4497→1 + 18→3)
 f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
@@ -66,7 +68,7 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 
 ### Deferred / acknowledged
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
-- ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; verify after Vercel + VM deploy.
+- ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; VM deployed and public health check passed on 2026-04-25.
 - "Top Companies filter on Companies page is broken" — small frontend bug.
 - "Companies page shows 0 first then populates" — loading-state flicker.
 - "Don't pre-load resume in Career Ops Evaluate" — UX preference.
@@ -88,7 +90,7 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Verify deploy** for Outreach CRM fix, Companies contact count, Apify red status, Auto Apply tab order, Completed tab, and `/apply/ranked`.
+1. **Browser-verify** Outreach CRM fix, Companies contact count, Apify red status, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
 2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
 3. **Receive** Role Eligibility DevTools error → fix.
 4. **Quick wins**: Apify-status-red, Top-Companies-filter, Companies-flicker, Career-Ops-no-preload — these are 15-30 min each.
@@ -116,11 +118,23 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — VM backend deployed for stats + Apify status
+- **What:** Fast-forwarded the Oracle VM checkout from the accidental `origin/local-backup` reset back to `origin/phase-4-pg`, restarted `pm2` app `outreach-backend`, and confirmed public backend health is `ok`.
+- **Files:** [../outreach-local/backend/server.js:133](../outreach-local/backend/server.js#L133), [../outreach-local/backend/services/creditChecker.js:44](../outreach-local/backend/services/creditChecker.js#L44)
+- **Status:** live VM is on `phase-4-pg` commit `f929862` for runtime code; `https://outreach-jt.duckdns.org/api/health` returned `{"status":"ok",...,"auth_mode":"enforce"}`.
+- **Follow-up:** User should hard-refresh Vercel app and verify Companies contacts show total contact count/subtext and API Status marks Apify red or amber when quota/API failure is reported.
+
+### 2026-04-25 — Backend deploy script corrected
+- **What:** Fixed `deploy/update.sh` so future VM deploys fast-forward `origin/phase-4-pg` instead of resetting to `origin/local-backup`; dependency install now runs only when backend package files change and uses legacy peer handling for the existing OpenAI/Zod peer conflict.
+- **Files:** [../outreach-local/deploy/update.sh:19](../outreach-local/deploy/update.sh#L19)
+- **Status:** committed and pushed on `phase-4-pg`: `53f0767`; VM checkout also fast-forwarded to `53f0767`; `bash -n deploy/update.sh` passed.
+- **Follow-up:** Future backend deploys can use `sudo bash /home/ubuntu/outreach/deploy/update.sh` again without rolling the VM back to `local-backup`.
+
 ### 2026-04-25 — Companies contacts count + Apify status
 - **What:** Fixed misleading Companies/Dashboard contact stats by enriching frontend stats from job metrics and patched backend `/api/stats` to return total contacts plus email/LinkedIn counts. Wired API Status to `/api/credits/status` so Apify turns red on quota/error instead of green just because a token exists.
 - **Files:** [frontend/src/api.js:70](frontend/src/api.js#L70), [frontend/src/components/CompanyDashboard.jsx:151](frontend/src/components/CompanyDashboard.jsx#L151), [frontend/src/App.jsx:130](frontend/src/App.jsx#L130), [../outreach-local/backend/server.js:133](../outreach-local/backend/server.js#L133), [../outreach-local/backend/services/creditChecker.js:44](../outreach-local/backend/services/creditChecker.js#L44)
 - **Status:** frontend committed on `main`: `346c0b2`; backend committed on `phase-4-pg`: `f929862`; `npm run build --prefix frontend`, `node --check backend/server.js`, and `node --check backend/services/creditChecker.js` passed.
-- **Follow-up:** Push both branches. Vercel deploy updates frontend; VM backend still needs `phase-4-pg` pulled/restarted for source-of-truth `/api/stats` and Apify quota detection to update.
+- **Follow-up:** Branches were pushed and VM backend was deployed later on 2026-04-25. Browser-verify after Vercel deploy.
 
 ### 2026-04-25 — Ranked Roles blank page + Completed tab order
 - **What:** Moved Auto Apply `Completed` tab after `History`. Hardened `/apply/ranked` against backend score values arriving as strings by normalizing `fit_score`, response shape, average score, best-match, and score rendering.
