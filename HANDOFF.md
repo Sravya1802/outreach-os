@@ -38,6 +38,7 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+d853c01  docs: record vm backend deploy
 a6fc28a  docs: record stats and apify status fixes
 346c0b2  fix: show real contact and api status counts
 c36bb39  docs: record ranked roles fix
@@ -127,7 +128,7 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ### 2026-04-25 — Backend deploy script corrected
 - **What:** Fixed `deploy/update.sh` so future VM deploys fast-forward `origin/phase-4-pg` instead of resetting to `origin/local-backup`; dependency install now runs only when backend package files change and uses legacy peer handling for the existing OpenAI/Zod peer conflict.
 - **Files:** [../outreach-local/deploy/update.sh:19](../outreach-local/deploy/update.sh#L19)
-- **Status:** committed and pushed on `phase-4-pg`: `53f0767`; VM checkout also fast-forwarded to `53f0767`; `bash -n deploy/update.sh` passed.
+- **Status:** committed and pushed on `phase-4-pg`: `53f0767`; VM checkout also fast-forwarded to `53f0767`; `bash -n deploy/update.sh` passed; VM no-op deploy script run returned `Already up to date`.
 - **Follow-up:** Future backend deploys can use `sudo bash /home/ubuntu/outreach/deploy/update.sh` again without rolling the VM back to `local-backup`.
 
 ### 2026-04-25 — Companies contacts count + Apify status
