@@ -38,24 +38,23 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+c2eabdb  perf(job dashboard): stale-while-revalidate cache for instant revisit
+6cf20ad  ux(career ops): hide resume section on evaluate when already uploaded
+7f42c6d  fix(companies): suppress 0-flicker before counts load
+463f756  fix(companies): wire sort/source/status to backend + refetch on change
 d853c01  docs: record vm backend deploy
 a6fc28a  docs: record stats and apify status fixes
 346c0b2  fix: show real contact and api status counts
-c36bb39  docs: record ranked roles fix
-0d0e534  fix: stabilize ranked roles rendering
-509d859  docs: record apply nav fix push
-7540f13  docs: record apply nav overlay fix
-fcb908b  fix: keep sidebar nav above content overlays
 …
 ```
 
 phase-4-pg tip:
 ```
+86eaeed  feat(unified/companies): server-side sort + source/status filters
 53f0767  fix: deploy backend from phase branch
 f929862  fix: report total contacts and apify quota status
 624e6a3  perf: collapse N+1 count queries (4497→1 + 18→3)
 f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
-8571f6c  migration 004: tighten user_id NOT NULL
 ```
 
 ## Known gaps & open work
@@ -70,10 +69,10 @@ f02ff10  Phase A.2: scope every DB query by req.user.id (17 files, 707/-480)
 ### Deferred / acknowledged
 - Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
 - ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; VM deployed and public health check passed on 2026-04-25.
-- "Top Companies filter on Companies page is broken" — small frontend bug.
-- "Companies page shows 0 first then populates" — loading-state flicker.
-- "Don't pre-load resume in Career Ops Evaluate" — UX preference.
-- "Job Dashboard slow to load" — already partially addressed by Phase B perf, may need more.
+- ~~"Top Companies filter on Companies page is broken"~~ — fixed in frontend `463f756` + backend `86eaeed` (server-side sort + source/status filters). **Needs VM backend deploy.**
+- ~~"Companies page shows 0 first then populates"~~ — fixed in `7f42c6d` (null-sentinel for catCounts so loading state is distinct from empty).
+- ~~"Don't pre-load resume in Career Ops Evaluate"~~ — fixed in `6cf20ad` (Resume section now only renders on Auto-Apply Setup tab or when user has no resume).
+- ~~"Job Dashboard slow to load"~~ — improved in `c2eabdb` (stale-while-revalidate sessionStorage cache, 5min TTL; instant first paint on revisit, background refresh).
 
 ### Architectural follow-ups (no urgency)
 - Migration 005 to drop `user_id DEFAULT` after fixing 5 TODO(auth) markers in cron/startup paths (server.js daily refresh, jobs.js runReclassifyUnclassified, autoApplier comment).
@@ -118,6 +117,16 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-25 — Quick-wins sweep (4 deferred items)
+- **What:** Cleared the four deferred green-pile items in one pass.
+  1. **Top Companies filter** — sort dropdown only re-ordered the loaded 50 rows and `source`/`status` filter dropdowns were silently dropped by the backend. Added `sort` (hiring|contacts|recent|az|za) + `source` + `status` query params to `/api/unified/companies`, frontend now passes them and refetches via useEffect dep on `sortBy`.
+  2. **Companies page 0-flicker** — initial render showed "0 companies" + every category card at "0" before stats/categoryCounts resolved. Switched `catCounts` initial state from `{}` to `null` so the renderer can distinguish "still loading" from "loaded empty"; show "Loading…" / "—" placeholders during load.
+  3. **Career Ops resume preload** — "Your Resume" section was always visible at the top of every tab including Evaluate. Now only renders on Auto-Apply Setup tab or when user has no resume yet.
+  4. **Job Dashboard perf** — first paint blocked on `/dashboard/job-metrics`. Added sessionStorage SWR cache (5min TTL): instant first paint on revisit, background refresh shown by spinner in Refresh button.
+- **Files:** [../outreach-local/backend/routes/unified.js:50-95](../outreach-local/backend/routes/unified.js#L50-L95), [frontend/src/api.js:151](frontend/src/api.js#L151), [frontend/src/components/CategoryView.jsx:247](frontend/src/components/CategoryView.jsx#L247), [frontend/src/components/CompanyDashboard.jsx:47](frontend/src/components/CompanyDashboard.jsx#L47), [frontend/src/components/CareerOps.jsx:936](frontend/src/components/CareerOps.jsx#L936), [frontend/src/components/JobDashboard.jsx:48](frontend/src/components/JobDashboard.jsx#L48)
+- **Status:** committed and pushed. Frontend on `main`: `463f756`, `7f42c6d`, `6cf20ad`, `c2eabdb`. Backend on `phase-4-pg`: `86eaeed`. `npm run build --prefix frontend` and `node --check backend/routes/unified.js` both passed. Not browser-tested.
+- **Follow-up:** **VM backend deploy required** for Top Companies filter to actually work — `sudo bash /home/ubuntu/outreach/deploy/update.sh` on the Mumbai VM. Frontend already pushed; Vercel will auto-deploy. After both, browser-verify on `/companies/[category]` (sort dropdown should reshuffle results across all pages, not just current page) and on `/dashboard` (no "0 companies" flash before counts load).
 
 ### 2026-04-25 — VM backend deployed for stats + Apify status
 - **What:** Fast-forwarded the Oracle VM checkout from the accidental `origin/local-backup` reset back to `origin/phase-4-pg`, restarted `pm2` app `outreach-backend`, and confirmed public backend health is `ok`.
