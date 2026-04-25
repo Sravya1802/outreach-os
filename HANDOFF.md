@@ -118,6 +118,11 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Dashboard surfaces auto-apply queue counts
+- **What:** Compact card above the "Last scrape" widget on the Dashboard now shows queue counts (Needs Review / Queued / Submitted / Failed / Unsupported). Border + label flip red when `needs_review > 0` so profile-incomplete items are visible without navigating into Career Ops. Hidden entirely when nothing is in flight. Click → `/career-ops`.
+- **Files:** [frontend/src/components/DashboardPage.jsx:48](frontend/src/components/DashboardPage.jsx#L48)
+- **Status:** committed and pushed `main`: `8d87bf2`. Build passes. No backend changes — reads from the existing `/api/career/auto-apply-queue` endpoint.
+
 ### 2026-04-25 — Nightly auto-apply pipeline + visible queue (DEPLOYED)
 - **What:** End-to-end nightly automation. Cron at 07:00 UTC iterates over every user with `nightly_pipeline_settings.enabled=true` and runs the orchestrator: scan Greenhouse/Lever/Ashby (per `roleType`) → skip URLs already evaluated → evaluate new ones via OpenAI → if `score >= minScore` → set apply_mode=auto + apply_status=queued → run Playwright worker against up to `maxApps` queued items. Worker uses **library resume** (no per-role tailoring) when `useLibraryResume=true` so the pipeline runs fast and unattended. Profile-incomplete items now flag `needs_review` instead of `failed` so the user can fix and retry.
 - **New endpoints:** GET `/api/career/auto-apply-queue` (queue + counts), GET/PUT `/api/career/nightly-settings`, POST `/api/career/nightly-pipeline`, GET `/api/career/nightly-pipeline/last-run`. Orchestrator extracted to [services/nightlyPipeline.js](../outreach-local/backend/services/nightlyPipeline.js) so route + cron share code. `scanGreenhouse/Lever/Ashby` were promoted from file-local to exported in `routes/careerOps.js`.
