@@ -118,11 +118,11 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
-### 2026-04-25 — Apify quota-burn surfaces in /credits/status
+### 2026-04-25 — Apify quota-burn surfaces in /credits/status (DEPLOYED)
 - **What:** Apify's `/v2/users/me` reports the *account's* platform credit balance (reliably 0/0 on FREE accounts) — it doesn't expose the actor-side monthly limits that actually trip with `Monthly usage hard limit exceeded`. So `checkApify()` couldn't detect a burn and the sidebar Apify dot stayed green while every scrape failed silently. Fixed: module-level `apifyQuotaBurn` sentinel in `services/apify.js` is bumped by `noteApifyError(actor, err)` whenever an actor catch fires with a quota-shaped error (regex matches `hard limit|monthly usage|quota|exhausted|insufficient.*credit|402|payment required`). `creditChecker.checkAllCredits()` overlays this on top of the cached result every read — recent burns (<6h) flip `apify.critical = true` regardless of the 30-min result cache. Wired into all actor catch paths (linkedin, wellfound, people/linkedin, profile-scrape) plus `runActor()` itself as defense in depth.
 - **Files:** [../outreach-local/backend/services/apify.js:13](../outreach-local/backend/services/apify.js#L13), [../outreach-local/backend/services/creditChecker.js:7](../outreach-local/backend/services/creditChecker.js#L7)
-- **Status:** committed and pushed on `phase-4-pg`: `5660817`. `node --check` passes for both files. **NOT yet redeployed** to VM.
-- **Follow-up:** Run `sudo bash /home/ubuntu/outreach/deploy/update.sh` on VM to ship. After deploy, the sidebar Apify dot will turn red within seconds of the next quota-failed scrape — no need to manually monitor logs. Frontend already renders `critical:true` as red via existing `serviceStatus()` in App.jsx.
+- **Status:** committed `phase-4-pg`: `5660817`; live on VM (verified `noteApifyError` × 7 in deployed apify.js, pm2 stable, `/api/health` ok).
+- **Follow-up:** Sidebar Apify dot will turn red within seconds of the next quota-failed scrape. Stays red 6h post-burn (or until pm2 restart). No manual monitoring needed.
 
 ### 2026-04-25 — Sidebar rename + Apify scrape diagnosis
 - **What:** User asked to rename sidebar "Evaluate a Role" to "Career Ops" since `/discover/evaluate` already houses the full Career Ops tab UI (Evaluate / Portal Scanner / Batch / History / Auto-Apply Setup). Single label change, route untouched.
