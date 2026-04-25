@@ -38,11 +38,12 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+fcb908b  fix: keep sidebar nav above content overlays
+aceba4e  docs: record push state recheck
 bc996ce  docs: record main push status
 0b26615  docs: update handoff after auto-apply work
 b3bc61c  feat: add completed auto-apply tab
 8a55549  fix: attach auth to outreach contacts fetch
-bfcea63  Phase C: IA refactor — DISCOVER / APPLY / OUTREACH sections + Auto Apply page
 …
 ```
 
@@ -113,6 +114,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-25 — Apply sidebar clicks blocked by overlay
+- **What:** User reported Apply nav items were not opening. Live Vercel routes returned 200 and the deployed JS contained the Apply routes, so patched the sidebar to sit above non-modal content overlays that can intercept clicks.
+- **Files:** [frontend/src/App.jsx:210](frontend/src/App.jsx#L210)
+- **Status:** committed on `main`: `fcb908b`; `npm run build --prefix frontend` passed; not yet browser-confirmed by user.
+- **Follow-up:** Push `main`; after Vercel deploy, user should hard-refresh and retry `/apply/auto-apply`, `/apply/pipeline`, and `/apply/ranked`.
 
 ### 2026-04-25 — Push state revalidated
 - **What:** Rechecked `git status`, `git log --oneline -6`, and `git push origin main` after a stale handoff said `main` was still 4 commits ahead. GitHub was already up to date.
