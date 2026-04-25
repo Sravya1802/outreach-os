@@ -118,6 +118,16 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Portal Scanner role-type filter + persistence + bulk evaluate + Add-to-Queue button
+- **What:** Career Ops UX bundle responding to four user asks at once.
+  1. **Portal Scanner role-type filter** — segmented control (🎓 Internship / 💼 Full-Time / 📋 All) drives the existing backend `roleType` param. Backend already supported `intern|fulltime|all`; frontend just exposed it. Changing the toggle auto-rescans.
+  2. **Portal Scanner persistence** — sessionStorage cache keyed `careerOps:portalScan:v2` (1h TTL) preserves jobs/bySource/roleType across tab switches. Header shows "last scanned 5m ago" and the button label flips to "↻ Re-scan" when cached results exist.
+  3. **Bulk evaluate scanned roles** — "Evaluate N roles" button on the Portal Scanner triggers `api.career.batchEvaluate` against the visible filtered list (capped at 10 per backend limit). Inline progress banner reports outcome and points the user to History.
+  4. **"Add to Auto-Apply Queue" button on EvaluationReport** — queue-without-running path. Sets `apply_mode='auto'` + `apply_status='queued'` via existing PATCH endpoints. Hidden once queued/submitted. Resume archetype matching still happens at run-time inside the worker (`pickResumeForRole` in `services/resumeRegistry.js`) — picks from the user's 6 archetype PDFs based on the role archetype detected by the evaluator.
+- **Files:** [frontend/src/api.js:227](frontend/src/api.js#L227), [frontend/src/components/CareerOps.jsx:628](frontend/src/components/CareerOps.jsx#L628), [frontend/src/components/CareerOps.jsx:123](frontend/src/components/CareerOps.jsx#L123)
+- **Status:** committed and pushed on `main`: `a415306` + `b6e2030`. Build passes. **No backend changes** — all reuses existing endpoints, so no VM deploy needed; Vercel auto-deploys.
+- **Follow-up:** After Vercel deploys, verify (a) Portal Scanner filter works, (b) cache persists across History/Evaluate tab navigation, (c) bulk evaluate routes to History, (d) "Add to Auto-Apply Queue" button shows up when status is not_started.
+
 ### 2026-04-25 — Broader role queries + per-source breakdown + new-company names (DEPLOYED)
 - **What:** Three things the user asked for in one pass.
   1. **Broadened ALL scraper default queries** so internships outside CS get returned. `getSearchTerms` defaults to `['intern 2026', 'internship 2026', 'new grad 2026']` instead of `'software engineer intern 2026'`. Subcategory + category branches drop the SWE prefix too — e.g. picking "Marketing & Creative" now searches `Marketing intern 2026`, not `Marketing software engineer intern`. scraper.js linkedin/wellfound/indeed/dice/google_jobs and apify.js linkedin/google_jobs/wellfound/yc-Serper-fallback all role-agnostic now. SEARCH_TERMS_MAP role-specific entries (Quant, IB, etc.) intentionally untouched.
