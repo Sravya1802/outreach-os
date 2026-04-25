@@ -3,6 +3,8 @@
  * Results are cached for 30 minutes to avoid hammering APIs on every request.
  */
 
+import { getApifyQuotaBurn } from './apify.js';
+
 // Cache: { result, fetchedAt }
 let cache = null;
 const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
@@ -118,8 +120,40 @@ async function checkProspeo() {
   return { configured: true, working: true };
 }
 
+// Apify's /v2/users/me account view doesn't expose actor-side monthly limits,
+// so a "Monthly usage hard limit exceeded" burn looks fine in checkApify() —
+// the green dot in the sidebar lies. apify.js exports a sentinel that's bumped
+// every time an actor call throws a quota-shaped error; we overlay it on top
+// of (or in lieu of) the cached result so the sidebar flips red within seconds
+// of the next failed scrape, regardless of the 30-min cache.
+function applyApifyBurn(apify) {
+  const burn = getApifyQuotaBurn();
+  if (!burn?.recent) return apify;
+  const base = apify || { configured: true };
+  return {
+    ...base,
+    warning: true,
+    critical: true,
+    burn: {
+      lastError:  burn.lastError,
+      lastActor:  burn.lastActor,
+      ageMinutes: Math.round(burn.ageMs / 60000),
+    },
+    error: base.error || `Apify actor failed with quota error: ${burn.lastError}`,
+  };
+}
+
 export async function checkAllCredits(forceRefresh = false) {
   if (!forceRefresh && cache && Date.now() - cache.fetchedAt < CACHE_TTL) {
+    // Re-evaluate Apify burn on every read — the sentinel is in-memory and free.
+    const burnedApify = applyApifyBurn(cache.result.apify);
+    if (burnedApify !== cache.result.apify) {
+      return {
+        ...cache.result,
+        apify: burnedApify,
+        hasWarnings: true,
+      };
+    }
     return cache.result;
   }
 
@@ -138,14 +172,16 @@ export async function checkAllCredits(forceRefresh = false) {
     critical: false,
   };
 
+  const apifyResult = applyApifyBurn(apify.value || { configured: false, error: apify.reason?.message });
+
   const result = {
     hunter:  hunter.value  || { configured: false, error: hunter.reason?.message },
-    apify:   apify.value   || { configured: false, error: apify.reason?.message },
+    apify:   apifyResult,
     apollo:  apollo.value  || { configured: false, error: apollo.reason?.message },
     prospeo: prospeo.value || { configured: false, error: prospeo.reason?.message },
     gemini,
     checkedAt: new Date().toISOString(),
-    hasWarnings: [hunter.value, apify.value, apollo.value, gemini].some(s => s?.warning || s?.critical),
+    hasWarnings: [hunter.value, apifyResult, apollo.value, gemini].some(s => s?.warning || s?.critical),
   };
 
   cache = { result, fetchedAt: Date.now() };

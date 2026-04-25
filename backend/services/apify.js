@@ -10,6 +10,31 @@ setTimeout(() => {
   console.log(`[serper] key present: ${(process.env.SERPER_API_KEY || '').length > 10}`);
 }, 0);
 
+// ── Quota-burn sentinel ─────────────────────────────────────────────────────
+// Apify's /v2/users/me endpoint reports the *account's* platform credit balance,
+// which is reliably 0/0 on FREE accounts even when the actor-side monthly limit
+// has been blown. So creditChecker can't detect a burn from the Apify API
+// alone. We track it here: every actor-failure path that throws with a
+// quota-shaped message bumps a module-level timestamp + last error. The
+// /api/credits/status route reads this via getApifyQuotaBurn() and flags
+// `critical: true` when the burn was recent (last 6h). The sidebar Apify dot
+// turns red within seconds of the next failed scrape — no polling needed.
+const apifyQuotaBurn = { lastFailureAt: 0, lastError: null, lastActor: null };
+const QUOTA_RE = /hard limit|monthly usage|quota|exhausted|insufficient.*credit|402|payment required/i;
+function noteApifyError(actor, err) {
+  const msg = err?.message || String(err);
+  if (QUOTA_RE.test(msg)) {
+    apifyQuotaBurn.lastFailureAt = Date.now();
+    apifyQuotaBurn.lastError     = msg.slice(0, 200);
+    apifyQuotaBurn.lastActor     = actor || null;
+  }
+}
+export function getApifyQuotaBurn() {
+  if (!apifyQuotaBurn.lastFailureAt) return null;
+  const ageMs = Date.now() - apifyQuotaBurn.lastFailureAt;
+  return { ...apifyQuotaBurn, ageMs, recent: ageMs < 6 * 60 * 60 * 1000 };
+}
+
 // ── Serper.dev Google search (replaces Apify google-search-scraper) ──────────
 // Returns { organic: [{ title, link, snippet }] }
 async function serperSearch(query, num = 10) {
@@ -34,14 +59,21 @@ async function serperSearch(query, num = 10) {
 async function runActor(actorId, input, waitSecs = 120) {
   const client = getClient();
   console.log(`[apify] starting actor ${actorId}...`);
-  const run = await client.actor(actorId).call(input, { waitSecs });
-  console.log(`[apify] run ID: ${run.id} — status: ${run.status}`);
-  if (run.status !== 'SUCCEEDED') {
-    throw new Error(`Actor ${actorId} finished with status ${run.status}`);
+  try {
+    const run = await client.actor(actorId).call(input, { waitSecs });
+    console.log(`[apify] run ID: ${run.id} — status: ${run.status}`);
+    if (run.status !== 'SUCCEEDED') {
+      throw new Error(`Actor ${actorId} finished with status ${run.status}`);
+    }
+    const { items } = await client.dataset(run.defaultDatasetId).listItems();
+    console.log(`[apify] dataset items: ${items.length}`);
+    return items;
+  } catch (err) {
+    // Defense in depth: even if the caller forgets to call noteApifyError,
+    // central runActor catches any quota-shaped error before re-throwing.
+    noteApifyError(actorId, err);
+    throw err;
   }
-  const { items } = await client.dataset(run.defaultDatasetId).listItems();
-  console.log(`[apify] dataset items: ${items.length}`);
-  return items;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,6 +246,7 @@ export async function scrapeLinkedInJobs(subcategory = '', category = '') {
 
     } catch (err) {
       lastError = err;
+      noteApifyError(actorId, err);
       console.error(`[linkedin] actor ${actorId} failed: ${err.message}`);
     }
   }
@@ -347,6 +380,7 @@ export async function scrapeWellfound(roleQuery = 'software engineer intern', su
           source:      'wellfound',
         }));
     } catch (err) {
+      noteApifyError(id, err);
       console.error(`[wellfound] ${id} failed: ${err.message}`);
     }
   }
@@ -760,6 +794,7 @@ export async function findPeopleAtLinkedInCompany(
             .filter(p => p.name && p.name.length > 2);
         }
       } catch (err) {
+        noteApifyError(actorId, err);
         console.warn(`[people/linkedin] ${actorId} failed: ${err.message}`);
       }
     }
@@ -852,6 +887,7 @@ export async function scrapeLinkedInProfile(linkedinUrl) {
     const p = items[0];
     return { name: p.fullName || p.name || '', title: p.headline || p.title || '', linkedin_url: linkedinUrl, summary: p.summary || '', company: p.currentCompany || p.company || '' };
   } catch (err) {
+    noteApifyError('curious_coder/linkedin-profile-scraper', err);
     console.error('[profile] scrape failed:', err.message);
     return null;
   }
