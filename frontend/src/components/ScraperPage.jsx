@@ -41,8 +41,8 @@ export default function ScraperPage() {
     setLog(l => [...l, `Starting ${src === 'all' ? 'all sources' : src}…`])
     try {
       const r = src === 'all'
-        ? await api.companies.scrape({ category, subcategory: category })
-        : await api.companies.scrapeSource(src, { category, subcategory: category })
+        ? await api.jobs.scrape({ category, subcategory: category })
+        : await api.jobs.scrape({ category, subcategory: category, source: src })
       // Response shape varies between /jobs/scrape and /companies/scrape/:src.
       // Normalize so the activity log reads honestly regardless of path:
       //   - found   = total companies returned by all scrapers this run

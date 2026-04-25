@@ -106,12 +106,11 @@ export const api = {
     list:         () => apiCall('/jobs'),
     categories:   () => apiCall('/companies/categories'),
     searchByName: (companyName) => apiCall('/companies/search-by-name', { method: 'POST', body: { companyName } }),
-    // "All sources" scrape: use /jobs/scrape — it reads category/subcategory,
-    // classifies via the AI classifier, and writes to the canonical `jobs` table
-    // (matches what the category listing reads).
+    // Scrapes write to the canonical `jobs` table used by the Companies grid.
+    // Pass { source } for a single source, or omit it for all sources.
     scrape:       (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
-    // Per-source scrape still uses the legacy /companies/scrape/:src path; category
-    // filtering isn't supported here, so rows land in the legacy `companies` table.
+    // Back-compat only; ScraperPage uses jobs.scrape so per-source results
+    // appear in the main Companies grid.
     scrapeSource: (src, params) => apiCall(`/companies/scrape/${encodeURIComponent(src)}`, { method: 'POST', body: params }),
   },
 

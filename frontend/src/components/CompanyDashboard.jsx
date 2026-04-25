@@ -45,6 +45,8 @@ export default function CompanyDashboard({ onStatsChange }) {
   const navigate = useNavigate()
   const [stats, setStats]         = useState(null)
   const [catCounts, setCatCounts] = useState(null)
+  const [statsLoaded, setStatsLoaded] = useState(false)
+  const [catCountsLoaded, setCatCountsLoaded] = useState(false)
   const [ycCount, setYcCount]     = useState(null)
   const [search, setSearch]       = useState('')
   const [results, setResults]     = useState([])
@@ -60,8 +62,8 @@ export default function CompanyDashboard({ onStatsChange }) {
       const map = {}
       for (const row of (d.counts || [])) map[row.category] = row.count
       setCatCounts(map)
-    }).catch(() => setCatCounts({}))
-    api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {})
+    }).catch(() => setCatCounts({})).finally(() => setCatCountsLoaded(true))
+    api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {}).finally(() => setStatsLoaded(true))
   }
 
   // Inject CSS
@@ -75,12 +77,12 @@ export default function CompanyDashboard({ onStatsChange }) {
   // Load stats + category counts (re-runs on `stats-refresh` events)
   useEffect(() => {
     const loadStats = () => {
-      api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {})
+      api.stats().then(s => { setStats(s); onStatsChange?.(s) }).catch(() => {}).finally(() => setStatsLoaded(true))
       api.unified.categoryCounts().then(d => {
         const map = {}
         for (const r of (d.counts || [])) map[r.category] = r.count
         setCatCounts(map)
-      }).catch(() => setCatCounts({}))
+      }).catch(() => setCatCounts({})).finally(() => setCatCountsLoaded(true))
     }
     loadStats()
     fetch('https://yc-oss.github.io/api/companies/hiring.json')
@@ -125,9 +127,9 @@ export default function CompanyDashboard({ onStatsChange }) {
   // Build sorted category list with counts.
   // Use stats.totalCompanies (authoritative COUNT(*) from jobs table) as the
   // single source of truth so the header count matches the stats card below.
-  const initialLoading = catCounts === null && stats === null
+  const countsLoading = !statsLoaded || !catCountsLoaded
   const cc = catCounts || {}
-  const totalInDb = stats?.totalCompanies ?? Object.values(cc).reduce((a, b) => a + b, 0)
+  const totalInDb = stats?.totalCompanies ?? (statsLoaded ? Object.values(cc).reduce((a, b) => a + b, 0) : 0)
   const maxCount  = Math.max(...CATEGORIES.map(c => cc[c.label] || 0), 1)
 
   const sortedCats = [...CATEGORIES]
@@ -146,8 +148,8 @@ export default function CompanyDashboard({ onStatsChange }) {
         <div style={{ marginBottom:4 }}>
           <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:0 }}>Companies</h1>
           <p style={{ fontSize:13, color:'#64748b', margin:'4px 0 0' }}>
-            {initialLoading
-              ? 'Loading…'
+            {countsLoading
+              ? 'Loading company counts…'
               : `${totalInDb.toLocaleString()} companies · ${sortedCats.filter(c => c.count > 0).length} industries`}
           </p>
         </div>
@@ -239,7 +241,7 @@ export default function CompanyDashboard({ onStatsChange }) {
         {/* Controls */}
         <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
           <span style={{ fontSize:13, color:'#64748b', fontWeight:600 }}>
-            {catCounts === null
+            {!catCountsLoaded
               ? 'Loading categories…'
               : `${sortedCats.filter(c => c.count > 0).length} active${!hideEmpty ? ` · ${sortedCats.filter(c => c.count === 0).length} empty` : ''}`}
           </span>
@@ -273,7 +275,7 @@ export default function CompanyDashboard({ onStatsChange }) {
               </div>
             </div>
             <div style={{ fontSize:24, fontWeight:800, color:'#F26625', marginBottom:4 }}>
-              {(stats?.ycImported ?? 0).toLocaleString()}
+              {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : '—'}
             </div>
             <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4 }}>
               YC-backed companies you've imported
@@ -298,7 +300,7 @@ export default function CompanyDashboard({ onStatsChange }) {
                   <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.3 }}>{cat.label}</div>
                 </div>
                 <div style={{ fontSize:24, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, marginBottom:4 }}>
-                  {catCounts === null ? '—' : cat.count.toLocaleString()}
+                  {!catCountsLoaded ? '—' : cat.count.toLocaleString()}
                 </div>
                 <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
                   {cat.desc}
