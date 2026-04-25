@@ -38,12 +38,11 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+bc996ce  docs: record main push status
 0b26615  docs: update handoff after auto-apply work
 b3bc61c  feat: add completed auto-apply tab
 8a55549  fix: attach auth to outreach contacts fetch
 bfcea63  Phase C: IA refactor — DISCOVER / APPLY / OUTREACH sections + Auto Apply page
-3c5be1b  docs: align README with current architecture + deprecate stale guides
-ae6cbb0  Security/hygiene: untrack PDFs, HTMLs, and empty DB files
 …
 ```
 
@@ -115,10 +114,16 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-25 — Push state revalidated
+- **What:** Rechecked `git status`, `git log --oneline -6`, and `git push origin main` after a stale handoff said `main` was still 4 commits ahead. GitHub was already up to date.
+- **Files:** [HANDOFF.md:38](HANDOFF.md#L38)
+- **Status:** committed on `main` as a handoff-only update; unrelated untracked files remain: `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, `supabase/migrations/003_per_user_isolation.sql`.
+- **Follow-up:** Browser-verify `/outreach` and `/apply/auto-apply` after Vercel deployment.
+
 ### 2026-04-25 — Main pushed after Auto Apply work
 - **What:** Pushed `main` to GitHub after rebasing local Outreach/Completed/HANDOFF commits on top of the remote Phase C commit (`bfcea63`).
 - **Files:** [HANDOFF.md:38](HANDOFF.md#L38)
-- **Status:** pushed to `origin/main` through `0b26615`; local worktree still has unrelated untracked files `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, and `supabase/migrations/003_per_user_isolation.sql`.
+- **Status:** pushed to `origin/main` through `bc996ce`; local worktree still has unrelated untracked files `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, and `supabase/migrations/003_per_user_isolation.sql`.
 - **Follow-up:** Wait for Vercel deployment, then verify `/outreach` and `/apply/auto-apply` in browser.
 
 ### 2026-04-25 — Outreach fix committed + Phase C linearized onto main
