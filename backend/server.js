@@ -429,6 +429,32 @@ cron.schedule('0 6 * * *', () => {
   runDailyRefresh(null).catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
 });
 
+// ── Cron: nightly auto-apply pipeline at 07:00 UTC (≈2am Central) ────────────
+// Runs scan → evaluate → fit-filter (score ≥ minScore) → queue → submit for
+// every user who has nightly_pipeline_settings.enabled=true. Honors per-user
+// settings: roleType, minScore, maxApps, useLibraryResume. The pipeline body
+// lives in routes/careerOps.js but the cron context has no req object, so we
+// call the underlying services directly via runNightlyPipelineForUser
+// (imported at top of file). Skipped silently if user has no resume or no
+// settings row at all.
+import { runNightlyPipelineForUser } from './services/nightlyPipeline.js';
+cron.schedule('0 7 * * *', async () => {
+  try {
+    const users = await all(
+      `SELECT user_id, value FROM meta WHERE key = 'nightly_pipeline_settings'`
+    );
+    for (const u of users) {
+      try {
+        const cfg = u.value ? JSON.parse(u.value) : {};
+        if (!cfg.enabled) continue;
+        console.log(`[nightly-cron] starting pipeline for user ${u.user_id}`);
+        const summary = await runNightlyPipelineForUser(u.user_id, cfg);
+        console.log(`[nightly-cron] user ${u.user_id} — applied=${summary.applied} fits=${summary.fits} needsReview=${summary.needsReview}`);
+      } catch (e) { console.error(`[nightly-cron] user ${u.user_id} failed:`, e.message); }
+    }
+  } catch (err) { console.error('[nightly-cron] dispatcher failed:', err.message); }
+});
+
 // ── DB wipe on start (one-shot, auto-disables itself) ────────────────────────
 // NOTE: wipe is a dev-only bootstrap; it intentionally clears all rows across
 // all users and is gated by WIPE_DB_ON_START=true.

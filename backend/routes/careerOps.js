@@ -14,6 +14,7 @@ import { tailorResume, generateResumePDF } from '../services/resumeGenerator.js'
 import { saveEvaluationReport, syncTracker, getTrackerRows } from '../services/reportManager.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from '../services/resumeRegistry.js';
 import { processOneEvaluation, runQueueOnce } from '../services/autoApplier.js';
+import { runNightlyPipelineForUser } from '../services/nightlyPipeline.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESUME_DIR = path.join(__dirname, '..', 'data', 'resume');
@@ -623,7 +624,7 @@ function isRecent(timestamp) {
   return !isNaN(posted) && (Date.now() - posted.getTime()) <= SEVEN_DAYS_MS;
 }
 
-async function scanGreenhouse(roleType = 'intern') {
+export async function scanGreenhouse(roleType = 'intern') {
   const jobs = [];
   for (const token of SCAN_GREENHOUSE) {
     try {
@@ -651,7 +652,7 @@ async function scanGreenhouse(roleType = 'intern') {
   return jobs;
 }
 
-async function scanLever(roleType = 'intern') {
+export async function scanLever(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_LEVER) {
     try {
@@ -679,7 +680,7 @@ async function scanLever(roleType = 'intern') {
   return jobs;
 }
 
-async function scanAshby(roleType = 'intern') {
+export async function scanAshby(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_ASHBY) {
     try {
@@ -745,6 +746,113 @@ router.post('/scan-portals', async (req, res) => {
     console.error('[careerOps] scan-portals error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ── GET /api/career/auto-apply-queue — visible queue + needs-review ──────────
+// Returns evaluations the auto-apply worker is interested in: queued for the
+// next run, recently submitted, currently running, and any flagged
+// needs_review (worker couldn't fill required form fields). Includes
+// source so the user can see whether each item came from Portal Scanner,
+// the Job Scraper, the nightly pipeline, or a manual evaluation.
+router.get('/auto-apply-queue', async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT id, job_url, job_title, company_name, grade, score,
+             apply_mode, apply_status, applied_at, source, apply_platform,
+             apply_error, apply_resume_used, created_at, pdf_path
+      FROM evaluations
+      WHERE user_id = $1
+        AND (apply_status IN ('queued','needs_review','platform_unsupported','failed','submitted')
+             AND apply_mode = 'auto')
+      ORDER BY
+        CASE apply_status
+          WHEN 'needs_review' THEN 1
+          WHEN 'queued'       THEN 2
+          WHEN 'failed'       THEN 3
+          WHEN 'submitted'    THEN 4
+          ELSE 5
+        END,
+        created_at DESC
+      LIMIT 200
+    `, [req.user.id]);
+    const counts = {
+      queued:        rows.filter(r => r.apply_status === 'queued').length,
+      needs_review:  rows.filter(r => r.apply_status === 'needs_review').length,
+      submitted:     rows.filter(r => r.apply_status === 'submitted').length,
+      failed:        rows.filter(r => r.apply_status === 'failed').length,
+      unsupported:   rows.filter(r => r.apply_status === 'platform_unsupported').length,
+    };
+    res.json({ items: rows, counts });
+  } catch (err) {
+    console.error('[auto-apply-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET / PUT /api/career/nightly-settings — pipeline configuration ──────────
+// Stored in meta as JSON under key 'nightly_pipeline_settings'. Defaults
+// chosen for safety: enabled=false (user must opt in), score=85, max=50,
+// roleType='intern'. The cron skips the run when enabled=false.
+const NIGHTLY_DEFAULTS = {
+  enabled:  false,
+  roleType: 'intern',
+  minScore: 85,
+  maxApps:  50,
+  useLibraryResume: true,
+};
+router.get('/nightly-settings', async (req, res) => {
+  try {
+    const row = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_settings'", [req.user.id]);
+    const cur = row?.value ? JSON.parse(row.value) : {};
+    res.json({ settings: { ...NIGHTLY_DEFAULTS, ...cur } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.put('/nightly-settings', async (req, res) => {
+  try {
+    const incoming = req.body || {};
+    const merged = {
+      enabled:  !!incoming.enabled,
+      roleType: ['intern','fulltime','all'].includes(incoming.roleType) ? incoming.roleType : NIGHTLY_DEFAULTS.roleType,
+      minScore: Math.max(0, Math.min(100, Number(incoming.minScore) || NIGHTLY_DEFAULTS.minScore)),
+      maxApps:  Math.max(1, Math.min(200, Number(incoming.maxApps) || NIGHTLY_DEFAULTS.maxApps)),
+      useLibraryResume: incoming.useLibraryResume !== false,
+    };
+    await run(
+      `INSERT INTO meta (user_id, key, value)
+       VALUES ($1, 'nightly_pipeline_settings', $2)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+      [req.user.id, JSON.stringify(merged)]
+    );
+    res.json({ settings: merged });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/career/nightly-pipeline — manual trigger of the full chain ─────
+// Scans Greenhouse + Lever + Ashby with the configured roleType, evaluates
+// every URL not already in the user's evaluations table, filters by
+// minScore, queues those, and runs the auto-apply worker against up to
+// maxApps queued items. Each evaluation is tagged source='nightly_pipeline'
+// so the queue UI can show provenance. Body is in services/nightlyPipeline.js
+// so the cron (no req context) can call the same code.
+router.post('/nightly-pipeline', async (req, res) => {
+  try {
+    const settingsRow = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_settings'", [req.user.id]);
+    const cfg = { ...NIGHTLY_DEFAULTS, ...(settingsRow?.value ? JSON.parse(settingsRow.value) : {}), ...(req.body || {}) };
+    const summary = await runNightlyPipelineForUser(req.user.id, cfg);
+    if (summary.error) return res.status(400).json({ error: summary.error });
+    res.json(summary);
+  } catch (err) {
+    console.error('[nightly-pipeline route]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/career/nightly-pipeline/last-run — surface last run summary ─────
+router.get('/nightly-pipeline/last-run', async (req, res) => {
+  try {
+    const row = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_last_run'", [req.user.id]);
+    res.json({ lastRun: row?.value ? JSON.parse(row.value) : null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── POST /api/career/batch-evaluate — evaluate multiple URLs in parallel ──────
