@@ -49,7 +49,7 @@ router.get('/city-counts', async (req, res) => {
 
 router.get('/companies', async (req, res) => {
   try {
-    const { category, subcategory, search, page: pageStr, pageSize: pageSizeStr, cities: citiesStr, includeRemote } = req.query;
+    const { category, subcategory, search, page: pageStr, pageSize: pageSizeStr, cities: citiesStr, includeRemote, source, status, sort } = req.query;
     const page     = Math.max(0, parseInt(pageStr, 10) || 0);
     const pageSize = Math.min(200, Math.max(1, parseInt(pageSizeStr, 10) || 50));
     const offset   = page * pageSize;
@@ -62,6 +62,8 @@ router.get('/companies', async (req, res) => {
     if (subcategory)                          { where += ` AND subcategory = $${i++}`; params.push(subcategory); }
     else if (category && category !== 'All')  { where += ` AND category = $${i++}`;    params.push(category); }
     if (search) { where += ` AND name ILIKE $${i++}`; params.push(`%${search}%`); }
+    if (source) { where += ` AND source ILIKE $${i++}`; params.push(`%${source}%`); }
+    if (status) { where += ` AND status = $${i++}`; params.push(status); }
     if (cityList.length > 0) {
       const placeholders = cityList.map(() => `$${i++}`).join(',');
       if (withRemote) {
@@ -81,6 +83,18 @@ router.get('/companies', async (req, res) => {
     // j.user_id. Prepend the alias for the job rows query below.
     const whereJobAlias = where.replace(/\buser_id\b/g, 'j.user_id');
     const userIdParamIdx = 1; // req.user.id is params[0]
+
+    const SORT_CLAUSES = {
+      hiring:   'j.is_hiring DESC NULLS LAST, j.pay DESC NULLS LAST',
+      contacts: `(
+        (SELECT COUNT(*)::int FROM job_contacts WHERE job_id = j.id AND user_id = $${userIdParamIdx}) +
+        (SELECT COUNT(*)::int FROM prospects   WHERE company_name = j.name AND user_id = $${userIdParamIdx})
+      ) DESC, j.is_hiring DESC NULLS LAST`,
+      recent:   'j.created_at DESC NULLS LAST, j.id DESC',
+      az:       'j.name ASC',
+      za:       'j.name DESC',
+    };
+    const orderBy = SORT_CLAUSES[sort] || SORT_CLAUSES.hiring;
     const jobRows = await all(`
       SELECT
         'job'                AS source,
@@ -107,7 +121,7 @@ router.get('/companies', async (req, res) => {
         (SELECT COUNT(*)::int FROM prospects WHERE company_name = j.name AND user_id = $${userIdParamIdx})                    AS prospects_count
       FROM jobs j
       WHERE ${whereJobAlias}
-      ORDER BY j.is_hiring DESC NULLS LAST, j.pay DESC NULLS LAST
+      ORDER BY ${orderBy}
       LIMIT $${i++} OFFSET $${i++}
     `, [...params, pageSize, offset]);
 
