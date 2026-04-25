@@ -120,7 +120,7 @@ function ResumeUpload({ resumeInfo, onUploaded }) {
 }
 
 // ── Evaluation report — renders santifer's A-G schema ────────────────────────
-function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfUrl, applyMode, applyStatus, onApplyModeChange, onApply, applying }) {
+function EvaluationReport({ evaluation: e, evalId, onGeneratePDF, pdfLoading, pdfUrl, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
   const gc = gradeColor(e.grade)
   const gb = gradeBg(e.grade)
 
@@ -178,6 +178,21 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfUrl, ap
               ? 'Playwright worker submits for you'
               : 'Opens the job page — you submit'}
           </div>
+          {/* Queue-only path: sets mode=auto + status=queued without running.
+              Uses the user's resume archetype library — Auto-Apply Setup tab
+              picks which of the 6 archetype PDFs matches this role's archetype
+              (e.batch detected '{e.archetype?.primary}') when the worker runs. */}
+          {applyStatus !== 'submitted' && applyStatus !== 'queued' && (
+            <button onClick={onQueue} disabled={queuing}
+              style={{ padding:'7px 14px', fontSize:11, fontWeight:700, background:'#fff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:8, cursor: queuing ? 'default' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+              {queuing ? <><Spin size={11} color="#7c3aed" /> Queuing…</> : '＋ Add to Auto-Apply Queue'}
+            </button>
+          )}
+          {applyStatus === 'queued' && (
+            <div style={{ padding:'7px 14px', fontSize:11, fontWeight:700, background:'#f5f3ff', color:'#7c3aed', border:'1px solid #ddd6fe', borderRadius:8, textAlign:'center' }}>
+              ✓ In auto-apply queue
+            </div>
+          )}
           {pdfUrl ? (
             <a href={pdfUrl} download style={{ padding:'8px 14px', fontSize:11, fontWeight:700, background:'#16a34a', color:'#fff', borderRadius:8, textAlign:'center', textDecoration:'none' }}>
               ⬇ Download Tailored CV
@@ -904,6 +919,7 @@ export default function CareerOps() {
   const [applyMode, setApplyMode]   = useState('manual') // per-evaluation: 'manual' | 'auto'
   const [applyStatus, setApplyStatus] = useState('not_started')
   const [applying, setApplying]     = useState(false)
+  const [queuing, setQueuing]       = useState(false)
   const [roleTypeFilter, setRoleTypeFilter] = useState('all') // 'all' | 'intern' | 'fulltime'
 
   // Classify job type from title
@@ -961,6 +977,23 @@ export default function CareerOps() {
     } catch (err) {
       alert('Apply failed: ' + err.message)
     } finally { setApplying(false) }
+  }
+
+  // Queue without running — flips mode → 'auto' and status → 'queued'
+  // so the Auto-Apply Setup tab's "Run Auto-Apply Queue" button picks it
+  // up later. Resume archetype matching happens at run time inside the
+  // worker via pickResumeForRole.
+  async function handleQueue() {
+    if (!evalId) return
+    setQueuing(true)
+    try {
+      await api.career.setApplyMode(evalId, 'auto')
+      await api.career.setApplyStatus(evalId, 'queued')
+      setApplyMode('auto')
+      setApplyStatus('queued')
+    } catch (err) {
+      alert('Queue failed: ' + err.message)
+    } finally { setQueuing(false) }
   }
 
   async function handleGeneratePDF() {
@@ -1106,6 +1139,8 @@ export default function CareerOps() {
                 onApplyModeChange={handleApplyModeChange}
                 onApply={handleApply}
                 applying={applying}
+                onQueue={handleQueue}
+                queuing={queuing}
               />
             )}
           </div>
