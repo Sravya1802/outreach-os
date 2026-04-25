@@ -21,7 +21,7 @@ setTimeout(() => {
 // turns red within seconds of the next failed scrape — no polling needed.
 const apifyQuotaBurn = { lastFailureAt: 0, lastError: null, lastActor: null };
 const QUOTA_RE = /hard limit|monthly usage|quota|exhausted|insufficient.*credit|402|payment required/i;
-function noteApifyError(actor, err) {
+export function noteApifyError(actor, err) {
   const msg = err?.message || String(err);
   if (QUOTA_RE.test(msg)) {
     apifyQuotaBurn.lastFailureAt = Date.now();
