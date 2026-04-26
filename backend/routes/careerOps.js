@@ -298,6 +298,96 @@ router.delete('/library/:archetype/:filename', async (req, res) => {
   }
 });
 
+// ── Queue all known intern roles for a company ──────────────────────────────
+// Per user ask: auto-apply should work on companies from /discover/companies,
+// not only on Career Ops evaluations. For each role we know about for this
+// company, create an evaluation row and mark it apply_mode='auto' / queued.
+// Skips URLs that already have a queued/in-progress/submitted evaluation.
+async function queueCompanyRoles(userId, companyId, { roleType = 'intern' } = {}) {
+  const company = await one('SELECT id, name FROM jobs WHERE id = $1 AND user_id = $2', [companyId, userId]);
+  if (!company) return { error: 'Company not found' };
+  const roles = await all(
+    `SELECT id, title, apply_url FROM roles
+     WHERE company_id = $1 AND user_id = $2 AND role_type = $3 AND apply_url IS NOT NULL AND apply_url <> ''
+     ORDER BY created_at DESC`,
+    [companyId, userId, roleType]
+  );
+  let queued = 0, skipped = 0;
+  for (const role of roles) {
+    const existing = await one(
+      `SELECT id, apply_status FROM evaluations WHERE user_id = $1 AND job_url = $2 LIMIT 1`,
+      [userId, role.apply_url]
+    );
+    if (existing) {
+      if (['queued', 'in_progress', 'submitted', 'needs_review'].includes(existing.apply_status || '')) {
+        skipped++;
+        continue;
+      }
+      // existing but in failed/not_started — re-queue it
+      await run(
+        `UPDATE evaluations SET apply_mode = 'auto', apply_status = 'queued', apply_error = NULL
+         WHERE id = $1 AND user_id = $2`,
+        [existing.id, userId]
+      );
+      queued++;
+      continue;
+    }
+    await run(
+      `INSERT INTO evaluations
+        (user_id, job_url, job_title, company_name, source, apply_mode, apply_status)
+       VALUES ($1, $2, $3, $4, 'company_quick_apply', 'auto', 'queued')`,
+      [userId, role.apply_url, role.title, company.name]
+    );
+    queued++;
+  }
+  return { company: company.name, totalRoles: roles.length, queued, skippedAlreadyInFlight: skipped };
+}
+
+router.post('/auto-apply-company/:companyId/queue', async (req, res) => {
+  try {
+    const result = await queueCompanyRoles(req.user.id, req.params.companyId, { roleType: req.body?.roleType || 'intern' });
+    if (result.error) return res.status(404).json(result);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[auto-apply-company/queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scrape the company's careers page first (reuses /api/jobs/:id/scrape-roles
+// logic via internal call), then queue everything that came back.
+router.post('/auto-apply-company/:companyId/scrape-and-queue', async (req, res) => {
+  try {
+    const company = await one('SELECT id, name FROM jobs WHERE id = $1 AND user_id = $2', [req.params.companyId, req.user.id]);
+    if (!company) return res.status(404).json({ error: 'Company not found' });
+    // Forward to the existing scrape-roles route handler — it knows about
+    // Apple direct, YC WaaS, Greenhouse/Lever/Ashby, etc. We construct a
+    // local sub-request rather than duplicating the logic.
+    const proto = req.headers['x-forwarded-proto'] || 'http';
+    const host  = req.headers['x-forwarded-host'] || req.get('host');
+    const scrapeUrl = `${proto}://${host}/api/jobs/${company.id}/scrape-roles`;
+    const scrapeRes = await fetch(scrapeUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // forward auth: pass the same JWT the caller used
+        Authorization: req.headers.authorization || '',
+      },
+      body: JSON.stringify({ roleType: req.body?.roleType || 'intern' }),
+    });
+    if (!scrapeRes.ok) {
+      const errText = await scrapeRes.text().catch(() => '');
+      return res.status(502).json({ error: `Scrape failed (${scrapeRes.status}): ${errText.slice(0, 200)}` });
+    }
+    // Now queue whatever's there
+    const queued = await queueCompanyRoles(req.user.id, company.id, { roleType: req.body?.roleType || 'intern' });
+    res.json({ ok: true, scraped: true, ...queued });
+  } catch (err) {
+    console.error('[auto-apply-company/scrape-and-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Auto-apply queue — trigger a worker run ──────────────────────────────────
 // The worker runs in-process (Playwright). This endpoint returns when all
 // currently-queued evaluations have been attempted. For large queues the caller
