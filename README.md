@@ -133,6 +133,19 @@ npm run lint --prefix frontend
 
 ---
 
+## 🗺️ Geographic scope
+
+**OutreachOS is intentionally US-focused.** It targets US-based internships and assumes US work authorization, so:
+
+- Scrapers pass `countryCode=US` / `location=United States` to LinkedIn, Wellfound, etc.
+- The Greenhouse / Lever / Ashby portal scanner drops non-US roles.
+- YC import filters Work-at-a-Startup to US.
+- Auto-Apply profiles default `country = 'US'` and offer US-style work-authorization options.
+
+This is a product decision, not a TODO. If you fork the project for a different region, removing the US filters is mechanical (search the codebase for `'US'` / `'United States'`) but you'll also need to add structured `country` columns on `roles` and `jobs`, expand the work-authorization vocabulary, and adjust Auto-Apply form fillers per locale.
+
+---
+
 ## ⚠️ Known gaps
 
 - **Backend is unauthenticated at the HTTP layer.** `/api/*` routes are open to anyone who can reach `outreach-jt.duckdns.org`. Supabase auth protects the frontend UI, but direct `curl` against the backend can mutate data, trigger scraping, and call auto-apply. If you're deploying for anyone outside a small trusted group, add JWT verification middleware (`supabase.auth.getUser(token)` server-side) before shipping.
