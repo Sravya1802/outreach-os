@@ -254,6 +254,9 @@ export const api = {
     autoApplyCompanyQueue:          (companyId, body = {}) => apiCall(`/career/auto-apply-company/${companyId}/queue`,            { method: 'POST', body }),
     autoApplyCompanyScrapeAndQueue: (companyId, body = {}) => apiCall(`/career/auto-apply-company/${companyId}/scrape-and-queue`, { method: 'POST', body }),
 
+    // Pick a resume for a per-company application from the user's storage library
+    setCompanyResumeFromLibrary:    (companyId, archetype, filename) => apiCall(`/companies/${companyId}/career-ops/resume/from-library`, { method: 'POST', body: { archetype, filename } }),
+
     // ── Career-Ops company page ──────────────────────────────────────────────
     getCompany:    (id) => apiCall(`/career/company/${id}`),
     updateCompany: (id, patch) => apiCall(`/career/company/${id}`, { method: 'PUT', body: patch }),

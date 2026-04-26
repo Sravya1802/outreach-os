@@ -535,7 +535,26 @@ function JobScraperTab({ company, onTabSwitch }) {
       setRoles(r.roles || [])
       if (r.careersPageUrl) setCareersPageUrl(r.careersPageUrl)
       const typeLabel = roleType === 'fulltime' ? 'full-time/new-grad' : 'intern'
-      setScrapeResult({ ok: true, added: r.added, found: r.found, careersPageUrl: r.careersPageUrl, typeLabel })
+      // Auto-queue the freshly scraped roles for auto-apply — every scrape
+      // implicitly updates the auto-apply queue, so the user doesn't have to
+      // remember to click a separate Queue button after each scrape.
+      let queuedSummary = null
+      try {
+        const q = await api.career.autoApplyCompanyQueue(company.id, { roleType })
+        queuedSummary = q
+      } catch (qerr) {
+        console.warn('[scrapeRoles] auto-queue failed (non-fatal):', qerr.message)
+      }
+      setScrapeResult({
+        ok: true,
+        added: r.added,
+        found: r.found,
+        careersPageUrl: r.careersPageUrl,
+        typeLabel,
+        message: r.added === 0
+          ? `✓ No ${typeLabel} roles found — try the Careers Page link`
+          : `✓ ${r.added} ${typeLabel} role${r.added !== 1 ? 's' : ''} scraped${queuedSummary && queuedSummary.queued > 0 ? ` · ${queuedSummary.queued} queued for auto-apply${queuedSummary.skippedAlreadyInFlight ? ` (${queuedSummary.skippedAlreadyInFlight} already in queue)` : ''}` : ''}`,
+      })
     } catch (err) {
       setScrapeResult({ ok: false, error: err.message })
     }
@@ -1138,6 +1157,9 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   const [evaluation, setEval]             = useState(null)
   const [evalError, setEvalErr]           = useState(null)
   const [resumeUploading, setResumeUp]    = useState(false)
+  const [libraryItems, setLibraryItems]   = useState([])
+  const [showLibraryPicker, setShowLibraryPicker] = useState(false)
+  const [pickingLibrary, setPickingLibrary] = useState('')   // archetype/filename being saved
   const [resumeDeleting, setResumeDel]    = useState(false)
   const [activeBlock, setActiveBlock]     = useState('b')
   const [rightPanel, setRightPanel]       = useState('eval') // 'eval' | 'tracker' | 'reports'
@@ -1161,7 +1183,36 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
         fit_score:'', salary:'', location_type:'onsite', start_date:'', end_date:'',
         resume_original_name:'', resume_size:0, job_title:'', job_url:'', job_source:''
       }))
+    // Load the user's storage-backed resume library so the picker can show options
+    api.career.storageLibrary().then(d => setLibraryItems(d.items || [])).catch(() => {})
   }, [company.id])
+
+  // Heuristic: best library archetype for a given role title. Mirrors the
+  // backend resumeRegistry.pickResumeForRole logic in spirit (frontend-side
+  // for the suggestion; backend does final selection at apply time).
+  function suggestArchetype(roleTitle) {
+    const t = (roleTitle || '').toLowerCase()
+    if (/\b(ml|ai|nlp|llm|computer.?vision|deep.?learning|machine.?learning|research)\b/.test(t)) return 'aiml'
+    if (/\b(data scien|data analyst|analytics|business intel)\b/.test(t)) return 'ds'
+    if (/\b(devops|sre|infra|cloud|platform|reliability)\b/.test(t)) return 'devops'
+    if (/\b(full.?stack|frontend|backend|web|mobile)\b/.test(t)) return 'fullstack'
+    if (/\b(founding|startup|early.?stage)\b/.test(t)) return 'startup'
+    if (/\b(software|engineer|swe|sde|developer|programmer)\b/.test(t)) return 'swe'
+    return 'misc'
+  }
+
+  async function pickFromLibrary(archetype, filename) {
+    setPickingLibrary(`${archetype}/${filename}`)
+    try {
+      const r = await api.career.setCompanyResumeFromLibrary(company.id, archetype, filename)
+      setApp(prev => ({ ...prev, resume_path: r.resume?.resume_path || null, resume_original_name: filename, resume_size: 0 }))
+      setShowLibraryPicker(false)
+    } catch (err) {
+      alert('Pick failed: ' + err.message)
+    } finally {
+      setPickingLibrary('')
+    }
+  }
 
   // Auto-trigger analysis when coming from Job Scraper "Track" with resume already uploaded
   // Works with both per-company resume (resume_original_name) and globally uploaded resume (hasGlobalResume)
@@ -1272,7 +1323,15 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   const score   = app.fit_score ? Number(app.fit_score) : null
   const grade   = evaluation?.grade || null
   const hasRole = !!app.job_title
-  const hasResume = !!app.resume_original_name || hasGlobalResume
+  // Distinguish between three states:
+  //   - perCompany: user explicitly attached a resume to THIS company (upload or library pick)
+  //   - global:     user has a default resume saved in Career Ops Auto-Apply Setup
+  //   - neither:    needs to upload or pick from library
+  const perCompanyResume = !!app.resume_original_name
+  const isLibraryResume  = perCompanyResume && (app.resume_path || '').startsWith('storage://')
+  const hasResume        = perCompanyResume || hasGlobalResume
+  const suggestedArchetype = suggestArchetype(app.job_title)
+  const suggestedFile      = libraryItems.find(i => i.archetype === suggestedArchetype) || libraryItems[0]
 
   // ── Eval block tabs (santifer/career-ops A–G) ──
   const BLOCKS = [
@@ -1330,17 +1389,19 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
           )}
         </div>
 
-        {/* ── Resume ── */}
+        {/* ── Resume — clean picker: upload OR pick from library ── */}
         <div>
           <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:6 }}>Resume</div>
           <input id={`co-resume-${company.id}`} type="file" onChange={onResumeChange} accept=".pdf,.docx" style={{ display:'none' }} />
-          {hasResume ? (
+
+          {perCompanyResume ? (
+            // Resume is explicitly attached to this company (upload OR library pick).
             <div style={{ background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:10, padding:'12px' }}>
               <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-                <span style={{ fontSize:16 }}>✅</span>
+                <span style={{ fontSize:16 }}>{isLibraryResume ? '📚' : '✅'}</span>
                 <div style={{ minWidth:0 }}>
                   <div style={{ fontSize:12, fontWeight:600, color:'#15803d', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{app.resume_original_name}</div>
-                  <div style={{ fontSize:10, color:'#86efac' }}>{((app.resume_size||0)/1024).toFixed(0)} KB</div>
+                  <div style={{ fontSize:10, color:'#86efac' }}>{isLibraryResume ? 'From library' : `${((app.resume_size||0)/1024).toFixed(0)} KB`}</div>
                 </div>
               </div>
               <div style={{ display:'flex', gap:6 }}>
@@ -1348,6 +1409,10 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
                   style={{ flex:1, padding:'5px 0', textAlign:'center', background:'#fff', color:'#475569', border:'1px solid #d1fae5', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer' }}>
                   Replace
                 </label>
+                <button onClick={() => setShowLibraryPicker(true)}
+                  style={{ flex:1, padding:'5px 0', background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer' }}>
+                  Library
+                </button>
                 <button onClick={deleteResume} disabled={resumeDeleting}
                   style={{ flex:1, padding:'5px 0', background:'#fff', color:'#dc2626', border:'1px solid #fecaca', borderRadius:6, fontSize:11, fontWeight:600, cursor:'pointer' }}>
                   {resumeDeleting ? '…' : 'Remove'}
@@ -1355,15 +1420,61 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
               </div>
             </div>
           ) : (
-            <label htmlFor={`co-resume-${company.id}`}
-              style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6, border:'2px dashed #e2e8f0', borderRadius:10, padding:'18px 12px', textAlign:'center', cursor:'pointer', background:'#fafafa', transition:'all 0.15s' }}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor='#a5b4fc';e.currentTarget.style.background='#f5f3ff'}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor='#e2e8f0';e.currentTarget.style.background='#fafafa'}}>
-              {resumeUploading
-                ? <><Spin color="#6366f1" size={20}/><span style={{fontSize:12,color:'#6366f1'}}>Uploading…</span></>
-                : <><span style={{fontSize:28}}>📄</span><span style={{fontSize:12,fontWeight:600,color:'#475569'}}>Upload Resume</span><span style={{fontSize:10,color:'#94a3b8'}}>PDF or DOCX · max 10MB</span></>
-              }
-            </label>
+            // No per-company resume yet — show two clear paths: upload OR library.
+            // (The global default resume from Auto-Apply Setup is no longer
+            // implicitly used here; user must explicitly pick a source.)
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              <label htmlFor={`co-resume-${company.id}`}
+                style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:8, border:'1px solid #c7d2fe', borderRadius:8, padding:'10px 12px', cursor:'pointer', background:'#eef2ff', color:'#4f46e5', fontSize:12, fontWeight:700, transition:'all 0.15s' }}>
+                {resumeUploading
+                  ? <><Spin color="#4f46e5" size={14}/> Uploading…</>
+                  : <>📎 Upload PDF</>
+                }
+              </label>
+              <button onClick={() => setShowLibraryPicker(true)}
+                disabled={libraryItems.length === 0}
+                title={libraryItems.length === 0 ? 'No library yet — add archetype PDFs in Career Ops → Auto-Apply Setup' : 'Pick from your saved archetype PDFs'}
+                style={{ padding:'10px 12px', border:'1px solid #ddd6fe', borderRadius:8, background:'#f5f3ff', color: libraryItems.length === 0 ? '#cbd5e1' : '#7c3aed', fontSize:12, fontWeight:700, cursor: libraryItems.length === 0 ? 'not-allowed' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+                📚 From Library {libraryItems.length > 0 ? `(${libraryItems.length} saved)` : '(empty)'}
+              </button>
+              {hasGlobalResume && (
+                <div style={{ padding:'6px 10px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, fontSize:10, color:'#94a3b8' }}>
+                  💡 You also have a default resume saved in Auto-Apply Setup — pick one above to use it for this company specifically.
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Library picker modal — shown when user clicks "From Library" or "Library" */}
+          {showLibraryPicker && (
+            <div style={{ marginTop:10, padding:12, background:'#f5f3ff', border:'1px solid #ddd6fe', borderRadius:10 }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:8 }}>
+                <div style={{ fontSize:11, fontWeight:700, color:'#7c3aed' }}>Pick from library</div>
+                <button onClick={() => setShowLibraryPicker(false)} style={{ padding:'2px 6px', fontSize:10, background:'none', border:'none', color:'#94a3b8', cursor:'pointer' }}>✕</button>
+              </div>
+              {libraryItems.length === 0 ? (
+                <div style={{ fontSize:11, color:'#7c3aed' }}>No PDFs in your library. Go to Career Ops → Auto-Apply Setup to upload archetype resumes first.</div>
+              ) : (
+                <div style={{ display:'flex', flexDirection:'column', gap:5, maxHeight:240, overflowY:'auto' }}>
+                  {libraryItems.map((item, i) => {
+                    const isSuggested = suggestedFile && item.archetype === suggestedFile.archetype && item.filename === suggestedFile.filename
+                    const key = `${item.archetype}/${item.filename}`
+                    return (
+                      <button key={i} onClick={() => pickFromLibrary(item.archetype, item.filename)} disabled={pickingLibrary !== ''}
+                        style={{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', border: isSuggested ? '1.5px solid #7c3aed' : '1px solid #e2e8f0', borderRadius:7, background: isSuggested ? '#fff' : '#fafafa', cursor: pickingLibrary ? 'default' : 'pointer', textAlign:'left' }}>
+                        <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:'#eef2ff', color:'#4f46e5', textTransform:'uppercase', flexShrink:0 }}>{item.archetype}</span>
+                        <span style={{ fontSize:11, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1, fontFamily:'monospace' }}>{item.filename}</span>
+                        {isSuggested && <span style={{ fontSize:9, fontWeight:700, color:'#7c3aed', flexShrink:0 }}>✨ best for {app.job_title ? 'this role' : 'most roles'}</span>}
+                        {pickingLibrary === key && <Spin color="#7c3aed" size={11} />}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {hasRole && libraryItems.length > 0 && !suggestedFile && (
+                <div style={{ marginTop:6, fontSize:10, color:'#94a3b8' }}>No exact archetype match for "{app.job_title}" — pick whichever fits best.</div>
+              )}
+            </div>
           )}
         </div>
 
