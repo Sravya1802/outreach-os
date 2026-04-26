@@ -216,6 +216,14 @@ router.get('/profile', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Demographic fields are only persisted when the user has set demographic_consent=1.
+// Withdrawing consent (setting it back to 0) also clears any previously-stored values.
+const DEMOGRAPHIC_FIELDS = ['gender', 'race', 'veteran_status', 'disability_status'];
+
+function isTruthyConsent(v) {
+  return v === 1 || v === '1' || v === true || v === 'true';
+}
+
 router.put('/profile', async (req, res) => {
   try {
     const ALLOWED = [
@@ -227,7 +235,33 @@ router.put('/profile', async (req, res) => {
       'gender','race','veteran_status','disability_status','demographic_consent','auto_apply_consent',
       'resume_dir',
     ];
-    const data = req.body || {};
+    const data = { ...(req.body || {}) };
+
+    // ── Demographic consent gate ────────────────────────────────────────────
+    // 1. If the request writes any demographic field, consent must already be
+    //    granted (existing row) OR be granted in this same request.
+    // 2. If the request *withdraws* consent (consent → 0), force-null all
+    //    demographic fields so withdrawal is a real erasure.
+    const writesDemographics = DEMOGRAPHIC_FIELDS.some(k => Object.prototype.hasOwnProperty.call(data, k));
+    const consentInPatch     = Object.prototype.hasOwnProperty.call(data, 'demographic_consent');
+    const consentNowTrue     = consentInPatch && isTruthyConsent(data.demographic_consent);
+    const consentBeingWithdrawn = consentInPatch && !isTruthyConsent(data.demographic_consent);
+
+    if (writesDemographics && !consentNowTrue) {
+      const existing = await one('SELECT demographic_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
+      if (!isTruthyConsent(existing?.demographic_consent)) {
+        return res.status(403).json({
+          error: 'Demographic fields require demographic_consent=1. Set consent in the same request or first.',
+        });
+      }
+    }
+
+    if (consentBeingWithdrawn) {
+      // Force every demographic field to NULL on consent withdrawal, regardless
+      // of what the client sent.
+      for (const k of DEMOGRAPHIC_FIELDS) data[k] = null;
+    }
+
     const cols = [], placeholders = [], updates = [], args = [];
     let i = 1;
     // user_id is always first param for both INSERT + UPDATE WHERE
