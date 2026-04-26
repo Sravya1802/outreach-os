@@ -278,10 +278,15 @@ router.put('/profile', async (req, res) => {
     }
     if (!cols.length) return res.status(400).json({ error: 'No fields to update' });
     // Upsert on user_id (one row per user). user_id stays out of the SET clause.
+    // The unique index on user_profile.user_id is partial (`WHERE user_id IS
+    // NOT NULL`, from migration 003), so the ON CONFLICT clause must repeat
+    // the predicate for Postgres to recognize it as the conflict target.
+    // See issue #14.
     const sql = `
       INSERT INTO user_profile (user_id, ${cols.join(', ')}, updated_at)
       VALUES ($${userIdPos}, ${placeholders.join(', ')}, NOW())
-      ON CONFLICT (user_id) DO UPDATE SET ${updates.join(', ')}, updated_at = NOW()
+      ON CONFLICT (user_id) WHERE user_id IS NOT NULL
+      DO UPDATE SET ${updates.join(', ')}, updated_at = NOW()
     `;
     await run(sql, args);
     res.json(await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id]));
