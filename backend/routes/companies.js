@@ -85,12 +85,47 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
   }
 });
 
+// POST /api/companies/:id/career-ops/resume/from-library
+// Pick a resume from the user's storage library instead of uploading. Records
+// resume_path with the `storage://` prefix so the auto-apply worker knows to
+// download from Supabase Storage at run time.
+router.post('/:id/career-ops/resume/from-library', async (req, res) => {
+  try {
+    const { archetype, filename } = req.body || {};
+    if (!archetype || !filename) return res.status(400).json({ error: 'archetype + filename required' });
+    const safeArch = String(archetype).toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32) || 'misc';
+    const safeFile = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    // resume_path format: storage://library/<userId>/<archetype>/<filename>
+    // The autoApplier detects the storage:// prefix and downloads to a temp
+    // file before handing the path to Playwright.
+    const storagePath = `storage://library/${req.user.id}/${safeArch}/${safeFile}`;
+    await run(`
+      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
+      VALUES ($1, 'interested', $2, $3, NULL, NOW(), $4)
+      ON CONFLICT(company_id) DO UPDATE SET
+        resume_path = EXCLUDED.resume_path,
+        resume_original_name = EXCLUDED.resume_original_name,
+        resume_size = NULL,
+        updated_at = NOW()
+    `, [req.params.id, storagePath, safeFile, req.user.id]);
+    const app = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    res.json({ ok: true, resume: { original_name: app.resume_original_name, archetype: safeArch, source: 'library', resume_path: app.resume_path }, application: app });
+  } catch (err) {
+    console.error('[companies] career-ops resume from-library failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // DELETE /api/companies/:id/career-ops/resume
 router.delete('/:id/career-ops/resume', async (req, res) => {
   try {
     const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row?.resume_path) return res.status(404).json({ error: 'Resume not found' });
-    try { fs.unlinkSync(row.resume_path); } catch (_) {}
+    // Skip filesystem unlink for storage:// paths — those reference Supabase
+    // Storage objects which the user manages via the library UI.
+    if (!row.resume_path.startsWith('storage://')) {
+      try { fs.unlinkSync(row.resume_path); } catch (_) {}
+    }
     await run(`
       UPDATE company_applications SET resume_path = NULL, resume_original_name = NULL, resume_size = NULL, updated_at = NOW()
       WHERE company_id = $1 AND user_id = $2
