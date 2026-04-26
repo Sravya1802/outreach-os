@@ -693,6 +693,34 @@ function matchesRoleType(title, roleType) {
   return CS_TITLE_RE.test(title); // 'all' / undefined → keep any CS-ish title
 }
 
+// US-only filter for the Portal Scanner. Mirrors services/scraper.js#isUSLocation
+// but lives here because routes/careerOps.js is its own scrape path. Drops
+// items whose location explicitly names a non-US country/city. "Remote" /
+// empty / unknown stay (assume US since SCAN_* lists are US-targeted ATS).
+const NON_US_TOKENS_PORTAL = /\b(canada|toronto|vancouver|montreal|ottawa|calgary|waterloo|mississauga|edmonton|quebec|brampton|surrey|ontario|alberta|british columbia|united kingdom|england|britain|\buk\b|london|manchester|edinburgh|glasgow|cambridge|oxford|dublin|ireland|france|paris|germany|berlin|munich|hamburg|netherlands|amsterdam|rotterdam|belgium|brussels|spain|madrid|barcelona|portugal|lisbon|italy|rome|milan|switzerland|zurich|geneva|sweden|stockholm|denmark|copenhagen|norway|oslo|finland|helsinki|israel|tel aviv|india|bangalore|bengaluru|mumbai|delhi|noida|gurgaon|gurugram|hyderabad|chennai|pune|china|beijing|shanghai|shenzhen|hong kong|taiwan|taipei|japan|tokyo|osaka|south korea|seoul|singapore|malaysia|indonesia|thailand|bangkok|vietnam|philippines|manila|australia|sydney|melbourne|brisbane|perth|new zealand|auckland|brazil|são paulo|rio de janeiro|argentina|buenos aires|mexico city|south africa|johannesburg|cape town|nigeria|lagos|kenya|nairobi|egypt|cairo|uae|dubai|saudi arabia|riyadh)\b/i;
+function isUSLocationPortal(loc) {
+  if (!loc) return true;
+  const s = String(loc).toLowerCase().trim();
+  if (!s) return true;
+  if (/^(remote|anywhere|us remote|usa|united states|us only|remote, usa|remote - us|remote \(us\))$/.test(s)) return true;
+  return !NON_US_TOKENS_PORTAL.test(s);
+}
+
+// Best location string for a Greenhouse job — prefers job.offices[].location
+// over the freeform job.location.name, which often holds multi-city strings.
+function greenhouseUsLocation(job) {
+  // If any office is non-US → return that string so the filter drops it.
+  // If any office is US → return that.
+  const offices = Array.isArray(job.offices) ? job.offices : [];
+  if (offices.length > 0) {
+    const us = offices.find(o => isUSLocationPortal(o?.location || o?.name || ''));
+    if (us) return us.location || us.name || job.location?.name || 'USA';
+    // No US office — return the first non-US so isUSLocationPortal drops it.
+    return offices[0]?.location || offices[0]?.name || job.location?.name || '';
+  }
+  return job.location?.name || '';
+}
+
 function isRecent(timestamp) {
   if (!timestamp) return true; // no timestamp — include anyway
   const posted = new Date(typeof timestamp === 'number' && timestamp < 1e12
@@ -715,10 +743,12 @@ export async function scanGreenhouse(roleType = 'intern') {
         if (!matchesRoleType(job.title, roleType)) continue;
         const ts = job.updated_at || job.created_at;
         if (!isRecent(ts)) continue;
+        const location = greenhouseUsLocation(job);
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.title,
           company:  token,
-          location: job.location?.name || '',
+          location,
           postedAt: ts || null,
           applyUrl: job.absolute_url || `https://boards.greenhouse.io/${token}`,
           source:   'greenhouse',
@@ -743,10 +773,12 @@ export async function scanLever(roleType = 'intern') {
         if (!matchesRoleType(job.text || '', roleType)) continue;
         const ts = job.createdAt; // epoch ms
         if (!isRecent(ts)) continue;
+        const location = job.categories?.location || job.country || '';
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.text,
           company:  company,
-          location: job.categories?.location || job.country || '',
+          location,
           postedAt: ts ? new Date(ts).toISOString() : null,
           applyUrl: job.hostedUrl || `https://jobs.lever.co/${company}`,
           source:   'lever',
@@ -776,10 +808,12 @@ export async function scanAshby(roleType = 'intern') {
         if (!matchesRoleType(job.title || '', roleType)) continue;
         const ts = job.publishedAt || job.createdAt || job.updatedAt;
         if (!isRecent(ts)) continue;
+        const location = job.location || job.locationName || '';
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.title,
           company:  company,
-          location: job.location || job.locationName || '',
+          location,
           postedAt: ts || null,
           applyUrl: job.jobUrl || job.applyUrl || `https://jobs.ashbyhq.com/${company}`,
           source:   'ashby',
