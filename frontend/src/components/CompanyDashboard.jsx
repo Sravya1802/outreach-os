@@ -128,6 +128,9 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
       .catch(() => setYcCount(null))
     window.addEventListener('stats-refresh', refreshCounts)
     return () => window.removeEventListener('stats-refresh', refreshCounts)
+  // refreshCounts intentionally reads the current cached state; userId is the
+  // only key that should reset the dashboard cache subscription.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
 
   useEffect(() => {
@@ -135,6 +138,8 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
     setStats(statsSnapshot)
     setStatsLoaded(true)
     writeCache(userId, { stats: statsSnapshot, catCounts: catCounts || readCache(userId)?.catCounts || null })
+  // Existing catCounts are only used as a cache fallback here.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statsSnapshot, userId])
 
   // Debounced search

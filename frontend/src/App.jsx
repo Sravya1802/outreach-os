@@ -175,8 +175,13 @@ export default function App() {
 
   useEffect(() => {
     if (!session) return
-    api.health().then(setHealth).catch(() => {})
-    api.credits.status().then(setCredits).catch(() => {})
+    const refreshCredits = () => {
+      api.health().then(setHealth).catch(() => {})
+      api.credits.status(true).then(setCredits).catch(() => {})
+    }
+    refreshCredits()
+    window.addEventListener('credits-refresh', refreshCredits)
+    return () => window.removeEventListener('credits-refresh', refreshCredits)
   }, [session])
   useEffect(() => {
     if (!session) return
@@ -217,10 +222,10 @@ export default function App() {
   )
 
   return (
-    <div style={{ height:'100vh', display:'flex', overflow:'hidden', fontFamily:'var(--font)', background:'var(--bg)' }}>
+    <div className="app-shell" style={{ height:'100vh', display:'flex', overflow:'hidden', fontFamily:'var(--font)', background:'var(--bg)' }}>
 
       {/* ── Sidebar ── */}
-      <aside style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
+      <aside className="app-sidebar" style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
 
         {/* Logo */}
         <div style={{ padding:'20px 18px 16px', borderBottom:'1px solid #1e293b' }}>
@@ -330,7 +335,7 @@ export default function App() {
       </aside>
 
       {/* ── Main content ── */}
-      <main style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+      <main className="app-main" style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
         <Routes>
           {/* Top-level */}
           <Route path="/"               element={<Navigate to="/dashboard" replace />} />

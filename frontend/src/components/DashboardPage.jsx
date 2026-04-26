@@ -66,6 +66,9 @@ export default function DashboardPage({ onStatsChange }) {
     api.activity().then(d => setActivity(d.activity || [])).catch(() => {})
     window.addEventListener('stats-refresh', loadStats)
     return () => window.removeEventListener('stats-refresh', loadStats)
+  // onStatsChange is a parent setter; rerunning this effect for identity churn
+  // would refetch the dashboard unnecessarily.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {

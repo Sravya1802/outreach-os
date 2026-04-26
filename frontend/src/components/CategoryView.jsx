@@ -78,6 +78,8 @@ function YCCategoryView() {
     setLoading(false)
   }, [filters])
 
+  // Initial YC load only; filter changes call load() through applyFilter.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(0, filters) }, [])
 
   function applyFilter(key, val) {

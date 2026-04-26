@@ -60,6 +60,11 @@ function SetupTab() {
 function QueueTab() {
   const [minGrade, setMinGrade] = useState('B')
   const [minScore, setMinScore] = useState(70)
+  const [jobType, setJobType]   = useState('intern')
+  const [workLocation, setWorkLocation] = useState('any')
+  const [country, setCountry]   = useState('US')
+  const [location, setLocation] = useState('')
+  const [supportedOnly, setSupportedOnly] = useState(true)
   const [preview, setPreview]   = useState({ count: 0, rows: [] })
   const [loadingPreview, setLP] = useState(false)
   const [queuing, setQueuing]   = useState(false)
@@ -74,17 +79,22 @@ function QueueTab() {
         const params = new URLSearchParams()
         if (minGrade) params.set('minGrade', minGrade)
         if (minScore) params.set('minScore', String(minScore))
+        if (jobType) params.set('jobType', jobType)
+        if (workLocation) params.set('workLocation', workLocation)
+        if (country) params.set('country', country)
+        if (location) params.set('location', location)
+        params.set('supportedOnly', String(supportedOnly))
         const r = await api.career.bulkQueuePreview(params)
         setPreview(r)
       } catch (e) { console.warn('preview err:', e); setPreview({ count: 0, rows: [] }) }
       setLP(false)
     }, 250)
     return () => clearTimeout(t)
-  }, [minGrade, minScore])
+  }, [minGrade, minScore, jobType, workLocation, country, location, supportedOnly])
 
   async function queueAll() {
     setQueuing(true)
-    try { const r = await api.career.bulkQueue({ minGrade, minScore }); setResult({ kind:'queued', n: r.queued }) }
+    try { const r = await api.career.bulkQueue({ minGrade, minScore, jobType, workLocation, country, location, supportedOnly }); setResult({ kind:'queued', n: r.queued }) }
     catch (e) { setResult({ kind:'error', msg: e.message }) }
     setQueuing(false)
   }
@@ -125,12 +135,49 @@ function QueueTab() {
               style={{ width:'100%', accentColor:'#6366f1' }}/>
           </div>
         </div>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:12, marginBottom:16 }}>
+          <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+            Job type
+            <select value={jobType} onChange={e => setJobType(e.target.value)}
+              style={{ marginTop:6, width:'100%', padding:'8px 10px', border:'1px solid #e2e8f0', borderRadius:8, background:'#fff' }}>
+              <option value="intern">Internship</option>
+              <option value="new_grad">New grad / entry-level</option>
+              <option value="full_time">Full-time</option>
+              <option value="any">Any</option>
+            </select>
+          </label>
+          <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+            Work mode
+            <select value={workLocation} onChange={e => setWorkLocation(e.target.value)}
+              style={{ marginTop:6, width:'100%', padding:'8px 10px', border:'1px solid #e2e8f0', borderRadius:8, background:'#fff' }}>
+              <option value="any">Any</option>
+              <option value="remote">Remote</option>
+              <option value="hybrid">Hybrid</option>
+              <option value="onsite">On-site</option>
+            </select>
+          </label>
+          <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+            Country
+            <input value={country} onChange={e => setCountry(e.target.value)} placeholder="US"
+              style={{ marginTop:6, width:'100%', padding:'8px 10px', border:'1px solid #e2e8f0', borderRadius:8, background:'#fff' }} />
+          </label>
+          <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+            Location text
+            <input value={location} onChange={e => setLocation(e.target.value)} placeholder="Remote, New York, SF"
+              style={{ marginTop:6, width:'100%', padding:'8px 10px', border:'1px solid #e2e8f0', borderRadius:8, background:'#fff' }} />
+          </label>
+        </div>
+        <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:12, color:'#475569', marginBottom:16 }}>
+          <input type="checkbox" checked={supportedOnly} onChange={e => setSupportedOnly(e.target.checked)}
+            style={{ width:14, height:14 }} />
+          Only queue supported ATS links (Greenhouse, Lever, Ashby)
+        </label>
 
         <div style={{ padding:'14px 16px', background: preview.count > 0 ? '#f0fdf4' : '#f8fafc', border:`1px solid ${preview.count > 0 ? '#bbf7d0' : '#e2e8f0'}`, borderRadius:10, marginBottom:16, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div style={{ fontSize:13, fontWeight:600, color: preview.count > 0 ? '#15803d' : '#64748b' }}>
-            {loadingPreview ? '…' : `${preview.count} evaluation${preview.count === 1 ? '' : 's'} match${preview.count === 1 ? 'es' : ''}`}
+            {loadingPreview ? '…' : preview.consentRequired ? 'Save Auto Apply consent in Setup before queueing' : `${preview.count} evaluation${preview.count === 1 ? '' : 's'} match${preview.count === 1 ? 'es' : ''}`}
           </div>
-          <button onClick={queueAll} disabled={queuing || preview.count === 0}
+          <button onClick={queueAll} disabled={queuing || preview.count === 0 || preview.consentRequired}
             style={{ padding:'8px 18px', fontSize:13, fontWeight:700, border:'none', borderRadius:8, cursor: queuing || preview.count === 0 ? 'default' : 'pointer',
               background: preview.count > 0 ? 'linear-gradient(135deg,#6366f1,#7c3aed)' : '#e2e8f0',
               color: preview.count > 0 ? '#fff' : '#94a3b8', opacity: queuing ? 0.6 : 1 }}>

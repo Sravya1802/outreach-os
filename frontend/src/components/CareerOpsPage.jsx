@@ -42,6 +42,7 @@ export default function CareerOpsPage() {
   const [applications, setApplications] = useState([])
   const [loading, setLoading]   = useState(true)
   const [filter, setFilter]     = useState('all')
+  const [error, setError]       = useState(null)
 
   useEffect(() => {
     api.career.ranked()
@@ -50,7 +51,7 @@ export default function CareerOpsPage() {
         setApplications(rows)
         setLoading(false)
       })
-      .catch(e => { console.warn('Career ranked fetch error:', e); setLoading(false) })
+      .catch(e => { console.warn('Career ranked fetch error:', e); setError(e.message || 'Failed to load ranked roles'); setLoading(false) })
   }, [])
 
   const filtered = applications.filter(a => {
@@ -110,6 +111,16 @@ export default function CareerOpsPage() {
 
         {loading ? (
           <div style={{ display:'flex', justifyContent:'center', paddingTop:60 }}><Spin /></div>
+        ) : error ? (
+          <div style={{ textAlign:'center', paddingTop:60, background:'#fff', borderRadius:16, border:'1px solid #fecaca', padding:'60px 40px' }}>
+            <div style={{ fontSize:40, marginBottom:16 }}>⚠</div>
+            <div style={{ fontSize:18, fontWeight:700, color:'#991b1b', marginBottom:8 }}>Ranked roles failed to load</div>
+            <div style={{ fontSize:13, color:'#b91c1c', marginBottom:24 }}>{error}</div>
+            <button onClick={() => window.location.reload()}
+              style={{ padding:'10px 24px', background:'#dc2626', color:'#fff', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor:'pointer' }}>
+              Retry
+            </button>
+          </div>
         ) : filtered.length === 0 ? (
           <div style={{ textAlign:'center', paddingTop:60, background:'#fff', borderRadius:16, border:'1px solid #e2e8f0', padding:'60px 40px' }}>
             <div style={{ fontSize:40, marginBottom:16 }}>📋</div>
@@ -153,7 +164,7 @@ export default function CareerOpsPage() {
                     </div>
                     {app.fit_assessment && (
                       <div style={{ fontSize:12, color:'#475569', lineHeight:1.5, marginBottom:10, padding:'10px 12px', background:'#f8fafc', borderRadius:8 }}>
-                        {app.fit_assessment.slice(0, 200)}{app.fit_assessment.length > 200 ? '…' : ''}
+                        {String(app.fit_assessment).slice(0, 200)}{String(app.fit_assessment).length > 200 ? '…' : ''}
                       </div>
                     )}
                     {app.notes && (

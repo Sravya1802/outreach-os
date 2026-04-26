@@ -99,7 +99,7 @@ export const api = {
   jobMetrics: () => apiCall('/dashboard/job-metrics'),
 
   credits: {
-    status: () => apiCall('/credits/status').catch(() => ({})),
+    status: (force = false) => apiCall('/credits/status' + (force ? '?refresh=true' : '')).catch(() => ({})),
   },
 
   companies: {
@@ -264,7 +264,7 @@ export const api = {
     scoreFitUrl:   (id) => withAuthQuery(apiUrl(`/career/company/${id}/score-fit`)),
 
     // ── Auto-apply ───────────────────────────────────────────────────────────
-    autoApplyRun:           () => apiCall('/career/auto-apply/run', { method: 'POST' }),
+    autoApplyRun:           (body = {}) => apiCall('/career/auto-apply/run', { method: 'POST', body }),
     autoApplyDirect:        (body) => apiCall('/career/auto-apply-direct',        { method: 'POST', body }),
     autoApplyResumePreview: (jobUrls) => apiCall('/career/auto-apply/resume-preview', { method: 'POST', body: { jobUrls } }),
 

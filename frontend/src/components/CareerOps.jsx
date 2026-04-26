@@ -545,6 +545,15 @@ export function AutoApplySetup() {
         style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13, outline:'none', background:'#fff' }} />
     </div>
   )
+  const select = (label, key, options) => (
+    <div style={{ marginBottom:12 }}>
+      <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>{label}</label>
+      <select value={p[key] || options[0]?.[0] || ''} onChange={e => set(key, e.target.value)}
+        style={{ width:'100%', padding:'8px 12px', border:'1px solid #e2e8f0', borderRadius:8, fontSize:13, outline:'none', background:'#fff' }}>
+        {options.map(([value, labelText]) => <option key={value} value={value}>{labelText}</option>)}
+      </select>
+    </div>
+  )
 
   return (
     <div>
@@ -576,6 +585,12 @@ export function AutoApplySetup() {
           {field('GitHub URL',   'github_url',   { placeholder:'https://github.com/yourname' })}
           {field('Portfolio URL','portfolio_url')}
           {field('Location (City, ST)', 'location')}
+          {field('Address', 'address')}
+          {field('City', 'city')}
+          {field('State / Province', 'state_province')}
+          {field('Country', 'country', { placeholder:'US' })}
+          {field('ZIP / Postal Code', 'postal_code')}
+          {field('Preferred Locations', 'preferred_locations', { placeholder:'Remote; New York; San Francisco' })}
         </div>
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginTop:4 }}>
           <div style={{ marginBottom:12 }}>
@@ -585,6 +600,18 @@ export function AutoApplySetup() {
               {['US Citizen','Permanent Resident','F-1 (OPT/STEM)','H-1B','TN Visa','Other'].map(o => <option key={o}>{o}</option>)}
             </select>
           </div>
+          {select('Work Location Preference', 'work_location_preference', [
+            ['any', 'Any'],
+            ['remote', 'Remote'],
+            ['hybrid', 'Hybrid'],
+            ['onsite', 'On-site'],
+          ])}
+          {select('Target Job Type', 'target_job_type', [
+            ['intern', 'Internship'],
+            ['new_grad', 'New grad / entry-level'],
+            ['full_time', 'Full-time'],
+            ['any', 'Any'],
+          ])}
           <div style={{ marginBottom:12 }}>
             <label style={{ fontSize:11, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', display:'block', marginBottom:4 }}>Needs Sponsorship?</label>
             <select value={p.needs_sponsorship ? '1' : '0'} onChange={e => set('needs_sponsorship', e.target.value === '1' ? 1 : 0)}
@@ -593,6 +620,58 @@ export function AutoApplySetup() {
               <option value="1">Yes</option>
             </select>
           </div>
+          {select('Willing To Relocate?', 'willing_to_relocate', [['0','No'], ['1','Yes']])}
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginTop:4 }}>
+          {field('School / University', 'education_school')}
+          {field('Degree', 'education_degree')}
+          {field('Major', 'education_major')}
+          {field('Graduation Date', 'graduation_date')}
+          {field('GPA', 'gpa')}
+          {field('Certifications', 'certifications')}
+          {field('Current Company', 'current_company')}
+          {field('Current Title', 'current_title')}
+          {field('Years Experience', 'years_experience')}
+          {field('Skills', 'skills')}
+          {field('Projects', 'projects')}
+          {select('Gender (optional)', 'gender', [
+            ['', 'Prefer not to answer'],
+            ['female', 'Female'],
+            ['male', 'Male'],
+            ['non_binary', 'Non-binary'],
+            ['self_describe', 'I prefer to self-describe'],
+          ])}
+          {select('Race / Ethnicity (optional)', 'race', [
+            ['', 'Prefer not to answer'],
+            ['asian', 'Asian'],
+            ['black', 'Black or African American'],
+            ['hispanic_latino', 'Hispanic or Latino'],
+            ['white', 'White'],
+            ['two_or_more', 'Two or more races'],
+            ['self_describe', 'I prefer to self-describe'],
+          ])}
+          {select('Veteran Status (optional)', 'veteran_status', [
+            ['', 'Prefer not to answer'],
+            ['not_veteran', 'I am not a protected veteran'],
+            ['protected_veteran', 'I identify as a protected veteran'],
+          ])}
+          {select('Disability Status (optional)', 'disability_status', [
+            ['', 'Prefer not to answer'],
+            ['no', 'No, I do not have a disability'],
+            ['yes', 'Yes, I have a disability'],
+          ])}
+        </div>
+        <div style={{ marginTop:8, display:'flex', flexDirection:'column', gap:8 }}>
+          <label style={{ display:'flex', gap:8, alignItems:'flex-start', fontSize:12, color:'#475569', lineHeight:1.5 }}>
+            <input type="checkbox" checked={!!p.auto_apply_consent} onChange={e => set('auto_apply_consent', e.target.checked ? 1 : 0)}
+              style={{ width:14, height:14, marginTop:2 }} />
+            I understand Auto Apply may submit real job applications using this profile and my selected resumes. Only queue roles that match my saved preferences.
+          </label>
+          <label style={{ display:'flex', gap:8, alignItems:'flex-start', fontSize:12, color:'#475569', lineHeight:1.5 }}>
+            <input type="checkbox" checked={!!p.demographic_consent} onChange={e => set('demographic_consent', e.target.checked ? 1 : 0)}
+              style={{ width:14, height:14, marginTop:2 }} />
+            I consent to saving optional demographic/self-identification answers if I choose to provide them. Prefer-not-to-answer is acceptable.
+          </label>
         </div>
       </div>
 

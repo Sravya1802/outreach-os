@@ -57,8 +57,14 @@ export default function ScraperPage() {
       if (added > 0 && inDb > 0)      line = `✓ ${src}: found ${found} (+${added} new, ${inDb} already in DB)`
       else if (added > 0)             line = `✓ ${src}: +${added} companies added`
       else if (found > 0)             line = `✓ ${src}: found ${found} — all already in DB`
+      else if (r.failedSrc > 0)        line = `✗ ${src}: no companies found — ${r.failedSrc} source${r.failedSrc === 1 ? '' : 's'} failed`
       else                            line = `✓ ${src}: no companies found`
       setLog(l => [...l, line])
+      if (r.errors && Object.keys(r.errors).length > 0) {
+        const details = Object.entries(r.errors).slice(0, 4).map(([k, v]) => `${k}: ${String(v).slice(0, 120)}`)
+        setLog(l => [...l, ...details.map(d => `✗ ${d}`)])
+        window.dispatchEvent(new Event('credits-refresh'))
+      }
       if (r.newCompanies?.length) {
         setNewCompanies(prev => {
           const existing = new Set(prev.map(c => c.name.toLowerCase()))
@@ -69,6 +75,7 @@ export default function ScraperPage() {
     } catch (err) {
       setResults(prev => ({ ...prev, [src]: { ok: false, error: err.message } }))
       setLog(l => [...l, `✗ ${src}: ${err.message}`])
+      window.dispatchEvent(new Event('credits-refresh'))
     }
     setScraping(null)
   }
