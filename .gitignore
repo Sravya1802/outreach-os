@@ -48,6 +48,9 @@ backend/resumes/
 coverage/
 .nyc_output/
 __pycache__/
+test-results/
+playwright-report/
+.playwright/
 
 # OS specific
 .DS_Store

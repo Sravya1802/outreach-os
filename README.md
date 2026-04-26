@@ -102,16 +102,22 @@ VITE_API_URL=https://outreach-jt.duckdns.org  # production only — leave unset 
 ## 🧪 Tests
 
 ```bash
-npm test  # runs node --test against tests/ (currently: tests/api-client.test.mjs)
+npm test                  # node --test against tests/*.test.mjs
+npm run typecheck         # node --check sweep + ESLint
+npm run verify-baseline   # probe prod for the audit-fix endpoints
+npm run verify-migrations # schema invariants (DATABASE_URL optional)
 ```
 
-Frontend build check:
+End-to-end (Playwright):
+```bash
+npm run test:e2e:install  # one-time: download chromium (~150 MB)
+npm run test:e2e          # runs against PLAYWRIGHT_BASE_URL (default: prod Vercel)
+PLAYWRIGHT_BASE_URL=http://localhost:5173 npm run test:e2e   # local dev
+```
+
+Frontend build / lint:
 ```bash
 npm run build --prefix frontend
-```
-
-Lint:
-```bash
 npm run lint --prefix frontend
 ```
 

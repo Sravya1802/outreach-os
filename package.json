@@ -14,6 +14,8 @@
     "lint": "npm run lint --prefix frontend",
     "preview": "npm run preview --prefix frontend",
     "test": "node --test tests/*.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "playwright install chromium",
     "typecheck": "node scripts/typecheck.mjs",
     "verify-migrations": "node scripts/verify-migrations.mjs",
     "verify-baseline": "node scripts/verify-baseline.mjs",
@@ -29,6 +31,7 @@
     "openai": "^4.26.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "concurrently": "^8.2.0"
   }
 }
