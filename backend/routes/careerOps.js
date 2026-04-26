@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 import { one, all, run, tx } from '../db.js';
 import { evaluateJob, fetchJobFromUrl } from '../services/jobEvaluator.js';
 import { tailorResume, generateResumePDF } from '../services/resumeGenerator.js';
-import { saveEvaluationReport, syncTracker, getTrackerRows } from '../services/reportManager.js';
+import { saveEvaluationReport, syncTracker } from '../services/reportManager.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from '../services/resumeRegistry.js';
 import { processOneEvaluation, runQueueOnce } from '../services/autoApplier.js';
 import { runNightlyPipelineForUser } from '../services/nightlyPipeline.js';
@@ -1484,23 +1484,48 @@ router.post('/company/:id/score-fit', async (req, res) => {
   }
 });
 
-// ── GET /api/career/tracker — applications.md as JSON rows ────────────────────
-router.get('/tracker', (req, res) => {
+// ── GET /api/career/tracker — per-user evaluations as JSON rows ──────────────
+// Reads from the per-user `evaluations` table. Previously this read a global
+// applications.md file on disk, which leaked across users.
+router.get('/tracker', async (req, res) => {
   try {
-    syncTracker(); // drain any pending TSV first
-    const rows = getTrackerRows();
+    const evals = await all(`
+      SELECT id, company_name, job_title, score, grade, apply_status,
+             report_path, pdf_path, created_at
+      FROM evaluations
+      WHERE user_id = $1
+      ORDER BY created_at ASC
+    `, [req.user.id]);
+
+    const rows = evals.map((e, i) => {
+      const date = e.created_at ? new Date(e.created_at).toISOString().slice(0, 10) : '';
+      const score = e.score != null ? Number(e.score).toFixed(1) : '';
+      const status = e.apply_status || 'not_started';
+      const pdf = e.pdf_path ? path.basename(e.pdf_path) : '';
+      const report = e.report_path ? path.basename(e.report_path) : '';
+      return {
+        num: String(i + 1),
+        date,
+        company: e.company_name || '',
+        role: e.job_title || '',
+        score,
+        status,
+        pdf,
+        report,
+      };
+    });
+
     res.json({ rows, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/career/tracker/raw — raw applications.md text ───────────────────
+// ── GET /api/career/tracker/raw — DEPRECATED ─────────────────────────────────
+// Previously served a global applications.md file. Removed to prevent cross-user
+// data leaks. Use GET /api/career/tracker for the per-user JSON feed.
 router.get('/tracker/raw', (req, res) => {
-  const p = path.join(__dirname, '..', 'data', 'applications.md');
-  if (!fs.existsSync(p)) return res.send('No evaluations yet.');
-  res.setHeader('Content-Type', 'text/plain');
-  res.send(fs.readFileSync(p, 'utf8'));
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/tracker (per-user JSON).' });
 });
 
 // ── GET /api/career/evaluations/:id/report.html — standalone styled HTML ─────
@@ -1704,58 +1729,17 @@ function renderEvaluationHtml(e, row) {
 </html>`;
 }
 
-// ── GET /api/career/reports — list saved reports ─────────────────────────────
-// Prefer the styled .html version per report; fall back to .md when HTML hasn't
-// been generated yet (e.g. reports saved before HTML generation was added).
+// ── GET /api/career/reports — DEPRECATED ─────────────────────────────────────
+// Previously listed every file in backend/data/reports/, which is shared across
+// users. Removed to prevent cross-user leakage. Use
+// /api/career/evaluations/:id/report.html for per-user, ownership-checked HTML
+// renders of saved evaluations.
 router.get('/reports', (req, res) => {
-  const dir = path.join(__dirname, '..', 'data', 'reports');
-  try {
-    const all = fs.readdirSync(dir);
-    const htmlNames = new Set(all.filter(f => f.endsWith('.html')).map(f => f.slice(0, -5)));
-    const mdStems   = all.filter(f => f.endsWith('.md')).map(f => f.slice(0, -3));
-    // Canonical list: one entry per stem, preferring the HTML variant.
-    const stems = Array.from(new Set([...htmlNames, ...mdStems])).sort().reverse();
-    const files = stems.map(stem => {
-      const isHtml = htmlNames.has(stem);
-      const filename = stem + (isHtml ? '.html' : '.md');
-      return {
-        filename,
-        format: isHtml ? 'html' : 'md',
-        url: `/api/career/reports/${filename}`,
-      };
-    });
-    res.json({ reports: files });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/evaluations/:id/report.html.' });
 });
 
-// ── GET /api/career/reports/:filename — serve a saved report ──────────────────
-// - *.html → text/html (browser renders it as a page)
-// - *.md   → text/html too (render markdown as a basic HTML page so users no
-//            longer see raw markdown in the browser)
 router.get('/reports/:filename', (req, res) => {
-  const safe = path.basename(req.params.filename);
-  const dir  = path.join(__dirname, '..', 'data', 'reports');
-  const p    = path.join(dir, safe);
-  if (!fs.existsSync(p)) return res.status(404).send('<h1>Report not found</h1>');
-
-  if (safe.endsWith('.html')) {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(fs.readFileSync(p, 'utf8'));
-  }
-
-  if (safe.endsWith('.md')) {
-    // Auto-upgrade: if a sibling .html already exists, redirect to it.
-    const htmlSibling = path.join(dir, safe.replace(/\.md$/, '.html'));
-    if (fs.existsSync(htmlSibling)) return res.redirect(`/api/career/reports/${safe.replace(/\.md$/, '.html')}`);
-    // Otherwise render the markdown as a simple styled HTML page on the fly.
-    const md = fs.readFileSync(p, 'utf8');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(renderMarkdownAsHtml(md, safe));
-  }
-
-  res.status(400).send('<h1>Unsupported report format</h1>');
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/evaluations/:id/report.html.' });
 });
 
 // Tiny, dependency-free markdown → HTML renderer. Covers the subset used in

@@ -7,8 +7,6 @@ import { Router } from 'express';
 import { one, run } from '../db.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { scrapeAllSources } from '../services/scraper.js';
-import { evaluateJob } from '../services/jobEvaluator.js';
-import { fetchJobFromUrl } from '../services/jobEvaluator.js';
 
 const router = Router();
 
@@ -225,206 +223,18 @@ router.post('/ai-search', async (req, res) => {
   }
 });
 
-// ── POST /api/automations/auto-apply ─────────────────────────────────────────
-router.post('/auto-apply', async (req, res) => {
-  const { jobs, mode = 'review' } = req.body;
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders();
-
-  let closed = false;
-  req.on('close', () => { closed = true; });
-  function emit(event, data) {
-    if (!closed) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  }
-
-  const id = 'auto-apply';
-  const resumeRow = await one(
-    "SELECT value FROM meta WHERE key = 'user_resume_text' AND user_id = $1",
-    [req.user.id]
-  );
-  const resumeText = resumeRow?.value;
-  if (!resumeText) {
-    emit('error', { error: 'No resume uploaded. Upload your resume in Career Ops first.' });
-    if (!closed) res.end();
-    return;
-  }
-
-  await logEntry(id, `Auto-apply started — ${jobs.length} jobs — mode: ${mode}`, req.user.id);
-  emit('log', { msg: `Starting ${mode === 'auto' ? 'Auto' : 'Review'} Mode for ${jobs.length} jobs…` });
-
-  const results = [];
-
-  for (const job of jobs) {
-    if (closed) break;
-    const applyUrl = job.applyUrl || '';
-
-    await logEntry(id, `Processing: ${job.title} at ${job.company}`, req.user.id);
-    emit('log', { msg: `Checking: ${job.title} at ${job.company}` });
-
-    let applyType = 'unknown';
-    if (applyUrl.includes('linkedin.com/jobs') || applyUrl.includes('linkedin.com/easy')) {
-      applyType = 'linkedin_easy_apply';
-    } else if (applyUrl.includes('greenhouse.io') || applyUrl.includes('boards.greenhouse')) {
-      applyType = 'greenhouse';
-    } else if (applyUrl.includes('lever.co')) {
-      applyType = 'lever';
-    } else if (applyUrl.includes('ashbyhq.com')) {
-      applyType = 'ashby';
-    }
-
-    emit('log', { msg: `  → Detected: ${applyType}` });
-    await logEntry(id, `Apply type: ${applyType} for ${applyUrl}`, req.user.id);
-
-    if (mode === 'review') {
-      emit('review', {
-        job: { ...job, applyType },
-        msg: `Review required: ${job.title} at ${job.company}`,
-      });
-      results.push({ job, status: 'pending_review', applyType });
-    } else {
-      try {
-        let status = 'skipped';
-        let note = '';
-
-        if (applyType === 'linkedin_easy_apply') {
-          const result = await applyLinkedIn(job, resumeText);
-          status = result.status;
-          note = result.note;
-        } else if (['greenhouse', 'lever', 'ashby'].includes(applyType)) {
-          const result = await applyATS(job, applyUrl, applyType, resumeText);
-          status = result.status;
-          note = result.note;
-        } else {
-          status = 'skipped';
-          note = 'Unknown apply type — manual application required';
-        }
-
-        await logEntry(id, `${job.company}: ${status} — ${note}`, req.user.id);
-        emit('log', { msg: `  → ${status}: ${note}` });
-        results.push({ job, status, note, applyType });
-
-        await run(`
-          INSERT INTO evaluations (job_url, job_title, company_name, grade, score, source, user_id)
-          VALUES ($1, $2, $3, 'N/A', 0, 'auto_apply', $4)
-        `, [applyUrl, job.title, job.company, req.user.id]);
-
-      } catch (err) {
-        await logEntry(id, `${job.company}: failed — ${err.message}`, req.user.id);
-        emit('log', { msg: `  → Failed: ${err.message}` });
-        results.push({ job, status: 'failed', note: err.message, applyType });
-      }
-
-      await new Promise(r => setTimeout(r, 2000));
-    }
-  }
-
-  emit('results', { results, total: results.length, mode });
-  emit('done', { msg: `${mode === 'review' ? 'Review mode complete' : 'Auto-apply complete'} — ${results.length} jobs processed` });
-  await logEntry(id, `Done — ${results.length} processed`, req.user.id);
-  if (!closed) res.end();
+// ── POST /api/automations/auto-apply — DEPRECATED ───────────────────────────
+// This legacy flow bypassed the consent gate, profile validation, sponsorship
+// check, and supported-ATS guards that the newer Career Ops auto-apply path
+// enforces. It also included a LinkedIn Easy Apply submitter that could submit
+// applications without those safeguards. Disabled to prevent silent submissions.
+//
+// Use POST /api/career/auto-apply/run (queue-driven) instead, which calls
+// processOneEvaluation() with the full safety pipeline.
+router.post('/auto-apply', (req, res) => {
+  res.status(410).json({
+    error: 'Endpoint removed. Use the Career Ops auto-apply queue (/api/career/auto-apply/run), which enforces consent and safety gates.',
+  });
 });
-
-// ── Playwright LinkedIn Easy Apply ───────────────────────────────────────────
-async function applyLinkedIn(job, resumeText) {
-  try {
-    const { chromium } = await import('playwright');
-    const cookie = process.env.LINKEDIN_SESSION_COOKIE;
-    if (!cookie) return { status: 'skipped', note: 'No LinkedIn session cookie configured' };
-
-    const browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext();
-    await context.addCookies([{ name: 'li_at', value: cookie.trim(), domain: '.linkedin.com', path: '/' }]);
-    const page = await context.newPage();
-
-    try {
-      await page.goto(job.applyUrl, { timeout: 15000 });
-      await page.waitForTimeout(2000);
-
-      const easyApplyBtn = page.locator('button:has-text("Easy Apply"), .jobs-apply-button').first();
-      if (!(await easyApplyBtn.isVisible({ timeout: 5000 }).catch(() => false))) {
-        return { status: 'skipped', note: 'No Easy Apply button found — requires manual application' };
-      }
-
-      await easyApplyBtn.click();
-      await page.waitForTimeout(1500);
-
-      const modal = page.locator('.jobs-easy-apply-modal, [data-test-modal-id="easy-apply-modal"]');
-      if (!(await modal.isVisible({ timeout: 5000 }).catch(() => false))) {
-        return { status: 'skipped', note: 'Easy Apply modal did not open' };
-      }
-
-      const phoneInput = page.locator('input[id*="phone"], input[name*="phone"]').first();
-      if (await phoneInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await phoneInput.fill(process.env.CANDIDATE_PHONE || '');
-      }
-
-      for (let step = 0; step < 5; step++) {
-        const nextBtn = page.locator('button:has-text("Next"), button:has-text("Continue"), button:has-text("Review")').first();
-        const submitBtn = page.locator('button:has-text("Submit application")').first();
-
-        if (await submitBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await submitBtn.click();
-          await page.waitForTimeout(2000);
-          return { status: 'submitted', note: 'LinkedIn Easy Apply submitted successfully' };
-        }
-        if (await nextBtn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await nextBtn.click();
-          await page.waitForTimeout(1000);
-        } else {
-          break;
-        }
-      }
-
-      return { status: 'partial', note: 'Reached review step — manual submission required' };
-    } finally {
-      await browser.close();
-    }
-  } catch (err) {
-    if (err.message.includes('Cannot find module')) {
-      return { status: 'skipped', note: 'Playwright not installed — run: npm install playwright && npx playwright install chromium' };
-    }
-    return { status: 'failed', note: err.message };
-  }
-}
-
-// ── ATS Apply (Greenhouse / Lever / Ashby) ────────────────────────────────────
-async function applyATS(job, applyUrl, type, resumeText) {
-  try {
-    const { chromium } = await import('playwright');
-    const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage();
-
-    try {
-      await page.goto(applyUrl, { timeout: 15000 });
-      await page.waitForTimeout(2000);
-
-      const nameInput = page.locator('input[name*="name"], input[id*="first_name"], input[placeholder*="First name"]').first();
-      if (await nameInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await nameInput.fill('Sravya');
-      }
-      const lastInput = page.locator('input[name*="last_name"], input[id*="last_name"], input[placeholder*="Last name"]').first();
-      if (await lastInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await lastInput.fill('Rachakonda');
-      }
-      const emailInput = page.locator('input[type="email"], input[name*="email"], input[id*="email"]').first();
-      if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await emailInput.fill(process.env.CANDIDATE_EMAIL || '');
-      }
-
-      return { status: 'filled', note: `Form filled on ${type} portal — manual submit required in Review mode` };
-    } finally {
-      await browser.close();
-    }
-  } catch (err) {
-    if (err.message.includes('Cannot find module')) {
-      return { status: 'skipped', note: 'Playwright not installed — run: npm install playwright && npx playwright install chromium' };
-    }
-    return { status: 'failed', note: err.message };
-  }
-}
 
 export default router;

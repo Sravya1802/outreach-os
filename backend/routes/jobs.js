@@ -896,26 +896,32 @@ router.get('/scraper-health', async (req, res) => {
 
 // ── Reclassify unclassified companies (exported for server startup) ────────────
 
-// TODO(auth): pass userId through from caller — this function is invoked from server
-// startup (no request context) as well as the HTTP handler below, so it can't read
-// req.user.id directly. Leaving queries un-scoped here; the HTTP wrapper is scoped.
-export async function runReclassifyUnclassified() {
+// User-scoped: caller MUST pass userId. Background callers (startup, cron) that
+// have no request context should pass an explicit user UUID or skip — global
+// reclassification across all users is no longer supported.
+export async function runReclassifyUnclassified(userId) {
+  if (!userId) {
+    console.log('[reclassify] skipped — no userId provided (background context)');
+    return { reclassified: 0, skipped: true };
+  }
+
   const rows = await all(`
     SELECT name, roles as jobTitle, '' as jobDescription
     FROM jobs
-    WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40
+    WHERE user_id = $1
+      AND (category = 'Unclassified' OR category IS NULL OR confidence < 0.40)
     ORDER BY name
-  `);
+  `, [userId]);
 
   if (rows.length === 0) { console.log('[reclassify] nothing to reclassify'); return { reclassified: 0 }; }
-  console.log(`[reclassify] reclassifying ${rows.length} companies...`);
+  console.log(`[reclassify] reclassifying ${rows.length} companies for user ${userId}...`);
 
   const classifiedMap = await classifyCompanies(rows);
   const updateSql = `
     UPDATE jobs SET
       category = $1, subcategory = $2, confidence = $3,
       classified_at = $4, wikipedia_summary = COALESCE(wikipedia_summary, $5)
-    WHERE name = $6
+    WHERE user_id = $6 AND name = $7
   `;
 
   let reclassified = 0;
@@ -923,7 +929,7 @@ export async function runReclassifyUnclassified() {
     for (const row of rows) {
       const cls = classifiedMap.get(row.name.toLowerCase());
       if (!cls) continue;
-      await client.query(updateSql, [cls.category, cls.subcategory, cls.confidence, cls.classified_at, cls.wikipedia || '', row.name]);
+      await client.query(updateSql, [cls.category, cls.subcategory, cls.confidence, cls.classified_at, cls.wikipedia || '', userId, row.name]);
       if (cls.category !== 'Unclassified') reclassified++;
     }
   });
@@ -934,7 +940,7 @@ export async function runReclassifyUnclassified() {
 
 router.post('/reclassify-unclassified', async (req, res) => {
   try {
-    const result = await runReclassifyUnclassified();
+    const result = await runReclassifyUnclassified(req.user.id);
     const breakdown = await all('SELECT category, COUNT(*) as n FROM jobs WHERE user_id = $1 GROUP BY category ORDER BY n DESC', [req.user.id]);
     res.json({ ...result, breakdown });
   } catch (err) {

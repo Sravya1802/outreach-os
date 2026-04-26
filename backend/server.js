@@ -395,12 +395,16 @@ async function runDailyRefresh(userId, onProgress = null) {
     log('Skipping startup sheet refresh: no userId in cron context');
   }
 
-  // 3. Reclassify unclassified companies
-  try {
-    log('Reclassifying unclassified companies...');
-    await runReclassifyUnclassified();
-  } catch (err) {
-    log('Reclassify failed: ' + err.message);
+  // 3. Reclassify unclassified companies (per-user only)
+  if (userId) {
+    try {
+      log('Reclassifying unclassified companies...');
+      await runReclassifyUnclassified(userId);
+    } catch (err) {
+      log('Reclassify failed: ' + err.message);
+    }
+  } else {
+    log('Skipping reclassify: no userId in cron context');
   }
 
   // 4. Refresh credit status cache
@@ -488,18 +492,9 @@ async function startup() {
 
   app.listen(PORT, () => {
     console.log(`Backend on port ${PORT}`);
-    if (process.env.WIPE_DB_ON_START !== 'true') {
-      // Auto-reclassify unclassified companies in the background on startup
-      (async () => {
-        try {
-          const r = await one("SELECT COUNT(*)::int AS n FROM jobs WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40");
-          if ((r?.n || 0) > 0) {
-            console.log(`[startup] ${r.n} unclassified/low-confidence companies — starting background reclassification...`);
-            runReclassifyUnclassified().catch(err => console.error('[startup reclassify]', err.message));
-          }
-        } catch (err) { console.error('[startup check]', err.message); }
-      })();
-    }
+    // Per-user reclassification now runs on demand via /api/jobs/reclassify-unclassified
+    // and as part of the daily refresh job (when a userId is supplied). The previous
+    // global startup pass mutated all users' jobs, so it has been removed.
   });
 }
 
