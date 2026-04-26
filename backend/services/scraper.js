@@ -770,6 +770,92 @@ async function scrapeGoogleJobs(searchTerms = []) {
   return [];
 }
 
+// ─── Handshake (school portal — requires session cookie) ────────────────────
+// Handshake is school-locked. Per user ask #6 option A: the user pastes their
+// session cookie into the VM .env as HANDSHAKE_SESSION_COOKIE (the value of
+// the `_session_id` cookie from app.joinhandshake.com). Optionally
+// HANDSHAKE_BASE_URL can override the default to point at a school-specific
+// subdomain (e.g. https://uic.joinhandshake.com).
+//
+// Cookies expire — when this returns 0 the user re-pastes a fresh cookie.
+async function scrapeHandshake(searchTerms = []) {
+  console.log('[handshake] started');
+  const cookie = process.env.HANDSHAKE_SESSION_COOKIE;
+  if (!cookie) {
+    console.warn('[handshake] HANDSHAKE_SESSION_COOKIE not set — skipping');
+    return [];
+  }
+  const baseUrl = process.env.HANDSHAKE_BASE_URL || 'https://app.joinhandshake.com';
+  const query = (searchTerms[0] || 'intern 2026').toLowerCase();
+  const isIntern = /intern/.test(query);
+  const params = new URLSearchParams({ keyword: query, 'locations[]': 'United States' });
+  if (isIntern) params.append('employmentTypeIds[]', 'intern');
+  const searchUrl = `${baseUrl}/job-search?${params.toString()}`;
+
+  let browser;
+  try {
+    const { chromium } = await import('playwright');
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const context = await browser.newContext();
+    // Set the session cookie on the Handshake domain.
+    const url = new URL(baseUrl);
+    await context.addCookies([
+      { name: '_session_id', value: cookie, domain: url.hostname, path: '/', httpOnly: true, secure: true, sameSite: 'Lax' },
+    ]);
+    const page = await context.newPage();
+    await page.goto(searchUrl, { waitUntil: 'load', timeout: 25000 });
+    // Detect login redirect (cookie expired) — Handshake bounces to /login or /students/sign_in
+    if (/\/(login|sign_in)/i.test(page.url())) {
+      console.warn('[handshake] cookie appears expired (redirected to login) — paste a fresh HANDSHAKE_SESSION_COOKIE');
+      return [];
+    }
+    // Wait for job cards. Handshake's markup changes; we use a few selector candidates.
+    await page.waitForSelector('a[href*="/jobs/"], [data-test*="job-card"], [data-hook*="job"]', { timeout: 12000 }).catch(() => {});
+    const items = await page.evaluate(() => {
+      const out = [];
+      const cards = document.querySelectorAll('a[href*="/jobs/"], [data-test*="job-card"], [data-hook*="job"]');
+      const seen = new Set();
+      for (const card of cards) {
+        const href = card.getAttribute('href') || card.querySelector('a[href*="/jobs/"]')?.getAttribute('href') || '';
+        if (!/\/jobs\//.test(href)) continue;
+        const url = href.startsWith('http') ? href : `https://app.joinhandshake.com${href}`;
+        if (seen.has(url)) continue;
+        seen.add(url);
+        const text = (card.innerText || card.textContent || '').trim();
+        const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+        // First line = title, second line = company, third line = location (best-effort)
+        out.push({
+          url,
+          title:    lines[0] || '',
+          company:  lines[1] || '',
+          location: lines[2] || 'USA',
+        });
+        if (out.length >= 100) break;
+      }
+      return out;
+    });
+    const results = items
+      .filter(i => i.company)
+      .filter(i => INTERN_RE.test(i.title || ''))
+      .map(i => norm({
+        name:       i.company.trim(),
+        jobTitle:   i.title || 'Intern',
+        location:   i.location || 'USA',
+        careersUrl: i.url || '',
+        source:     'handshake',
+      }))
+      .filter(r => r.name.length > 1)
+      .filter(r => isUSLocation(r.location));
+    console.log(`[handshake] returned ${results.length} results from ${items.length} cards`);
+    return results;
+  } catch (err) {
+    console.error(`[handshake] failed: ${err.message}`);
+    return [];
+  } finally {
+    if (browser) { try { await browser.close(); } catch {} }
+  }
+}
+
 // ─── Tier 4: Direct fetch ─────────────────────────────────────────────────────
 
 async function scrapeAIJobs() {
@@ -1223,6 +1309,7 @@ const SOURCES = [
   { key: 'google_jobs',  fn: (terms) => scrapeGoogleJobs(terms) },
   { key: 'ai_jobs',      fn: ()      => scrapeAIJobs() },
   { key: 'prosple',      fn: ()      => scrapeProsple() },
+  { key: 'handshake',    fn: (terms) => scrapeHandshake(terms) },
 ];
 
 const SOURCE_ALIASES = {

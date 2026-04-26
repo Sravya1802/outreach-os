@@ -15,6 +15,9 @@ import { saveEvaluationReport, syncTracker, getTrackerRows } from '../services/r
 import { scanResumes, pickResumeForRole, detectPlatform } from '../services/resumeRegistry.js';
 import { processOneEvaluation, runQueueOnce } from '../services/autoApplier.js';
 import { runNightlyPipelineForUser } from '../services/nightlyPipeline.js';
+import {
+  uploadLibraryArchetype, listLibrary, removeLibraryFile, isStorageConfigured,
+} from '../services/resumeStorage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESUME_DIR = path.join(__dirname, '..', 'data', 'resume');
@@ -90,17 +93,42 @@ router.post('/resume', upload.single('resume'), async (req, res) => {
   }
 });
 
+// ── POST /api/career/parse-resume — parse a PDF without saving anything ─────
+// Used by the Evaluate tab when the user picks "Upload PDF" so they can
+// evaluate against an ad-hoc resume without overwriting their saved default.
+router.post('/parse-resume', upload.single('resume'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const text = await extractPdfText(req.file.path);
+    fs.unlinkSync(req.file.path);
+    if (!text || text.length < 50) {
+      return res.status(400).json({ error: 'Could not extract text from PDF. Make sure it is not a scanned image.' });
+    }
+    res.json({ ok: true, name: req.file.originalname, chars: text.length, text });
+  } catch (err) {
+    console.error('[careerOps] parse-resume error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/career/evaluate — evaluate a job ───────────────────────────────
 router.post('/evaluate', async (req, res) => {
   try {
-    const { jobUrl, jobDescription: rawDescription } = req.body;
+    const { jobUrl, jobDescription: rawDescription, resumeText: bodyResumeText } = req.body;
     if (!jobUrl && !rawDescription) {
       return res.status(400).json({ error: 'Provide either a job URL or job description' });
     }
 
-    // Get resume
-    const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
-    if (!resumeText) return res.status(400).json({ error: 'No resume uploaded. Please upload your resume first.' });
+    // Resume: prefer ad-hoc text from the request body (Evaluate tab's Upload
+    // / Paste pills) over the saved default. Falls back to the saved default
+    // for any caller that hasn't been updated yet.
+    let resumeText = (typeof bodyResumeText === 'string' && bodyResumeText.trim().length >= 50)
+      ? bodyResumeText.trim()
+      : null;
+    if (!resumeText) {
+      resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
+    }
+    if (!resumeText) return res.status(400).json({ error: 'No resume provided. Upload, paste, or save a default resume first.' });
 
     // If URL given, fetch job content
     let jobDescription = rawDescription || '';
@@ -219,12 +247,55 @@ router.put('/profile', async (req, res) => {
 });
 
 // ── Resume registry — list available resumes in the configured folder ────────
+// Legacy filesystem-based read; Phase 2 of the storage migration will switch
+// scanResumes() to read from Supabase Storage.
 router.get('/resumes-library', async (req, res) => {
   try {
     const profile = await one('SELECT resume_dir FROM user_profile WHERE user_id = $1', [req.user.id]);
     const resumes = scanResumes(profile?.resume_dir);
     res.json({ resumeDir: profile?.resume_dir, resumes });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Per-user resume library backed by Supabase Storage ──────────────────────
+// Per user ask #7 option B. Each user uploads their own archetype PDFs into
+// resume-library/<user_id>/<archetype>/<filename>.pdf. Auth still gates the
+// API (the backend uses the service-role key under the hood) and the user_id
+// in the path is always req.user.id — never spoofable.
+router.get('/library', async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.json({ items: [], configured: false });
+    const items = await listLibrary(req.user.id);
+    res.json({ items, configured: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/library/upload', upload.single('resume'), async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.status(500).json({ error: 'Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing on backend)' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const archetype = String(req.body?.archetype || 'misc');
+    const filename  = req.file.originalname || `resume-${Date.now()}.pdf`;
+    const buf = await fs.promises.readFile(req.file.path);
+    await fs.promises.unlink(req.file.path).catch(() => {});
+    const out = await uploadLibraryArchetype(req.user.id, archetype, filename, buf);
+    res.json({ ok: true, ...out, sizeBytes: buf.length });
+  } catch (err) {
+    console.error('[careerOps] library upload error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/library/:archetype/:filename', async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.status(500).json({ error: 'Storage not configured' });
+    await removeLibraryFile(req.user.id, req.params.archetype, req.params.filename);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Auto-apply queue — trigger a worker run ──────────────────────────────────

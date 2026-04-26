@@ -25,6 +25,7 @@ import fs from 'fs';
 import db, { one, all, run } from '../db.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
 import { tailorResume, generateResumePDF } from './resumeGenerator.js';
+import { validateProfileForApply } from './applyValidation.js';
 
 // Status values we write back to evaluations.apply_status during processing.
 const STATUS = {
@@ -112,6 +113,70 @@ async function looksLikeLogin(page) {
   } catch (_) { return false; }
 }
 
+// ── Detect required form fields that were NOT auto-filled ────────────────────
+// Per user ask #5 extra: many Greenhouse/Lever/Ashby forms add custom required
+// questions ("Why this company?", "How did you hear about us?", demographic
+// questions, work auth dropdowns). Auto-fill only handles the common fields.
+// Submitting with these empty either errors out or quietly drops the
+// application. Scan the form, find required-but-empty fields, flag for review
+// with sample labels so the user can complete them manually.
+async function detectUnfilledRequired(page) {
+  try {
+    return await page.evaluate(() => {
+      const labelFor = (el) => {
+        // Try aria-label, then <label for="id">, then nearest preceding label/legend.
+        const aria = el.getAttribute('aria-label');
+        if (aria && aria.trim()) return aria.trim().slice(0, 120);
+        if (el.id) {
+          const lbl = document.querySelector(`label[for="${el.id}"]`);
+          if (lbl && lbl.textContent.trim()) return lbl.textContent.trim().slice(0, 120);
+        }
+        const wrap = el.closest('label, .field, .application-question, [role="group"], fieldset');
+        if (wrap) {
+          const txt = (wrap.querySelector('legend, label, .question, .label')?.textContent || wrap.textContent || '').trim();
+          if (txt) return txt.slice(0, 120);
+        }
+        return el.name || el.id || '(unknown field)';
+      };
+      const out = [];
+      // text/textarea/select required and empty
+      const required = document.querySelectorAll('input[required]:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]), textarea[required], select[required]');
+      for (const el of required) {
+        const val = (el.value || '').trim();
+        if (!val) {
+          out.push({ kind: el.tagName.toLowerCase(), label: labelFor(el), name: el.name || el.id || '' });
+          if (out.length >= 8) break;
+        }
+      }
+      // Required radio groups with nothing checked
+      const seenRadioGroups = new Set();
+      const radios = document.querySelectorAll('input[type=radio][required], fieldset[required] input[type=radio]');
+      for (const r of radios) {
+        if (!r.name || seenRadioGroups.has(r.name)) continue;
+        seenRadioGroups.add(r.name);
+        const anyChecked = document.querySelector(`input[type=radio][name="${CSS.escape(r.name)}"]:checked`);
+        if (!anyChecked) {
+          out.push({ kind: 'radio-group', label: labelFor(r), name: r.name });
+          if (out.length >= 8) break;
+        }
+      }
+      // Required checkbox groups (at least one)
+      const seenCheckboxGroups = new Set();
+      const checkboxes = document.querySelectorAll('input[type=checkbox][required], fieldset[required] input[type=checkbox]');
+      for (const c of checkboxes) {
+        if (!c.name || seenCheckboxGroups.has(c.name)) continue;
+        seenCheckboxGroups.add(c.name);
+        const anyChecked = document.querySelector(`input[type=checkbox][name="${CSS.escape(c.name)}"]:checked`);
+        if (!anyChecked) {
+          out.push({ kind: 'checkbox-group', label: labelFor(c), name: c.name });
+          if (out.length >= 8) break;
+        }
+      }
+      return out;
+    });
+  } catch (_) { return []; }
+}
+
 // ── Platform: Greenhouse ──────────────────────────────────────────────────────
 // Greenhouse ATS forms are the cleanest: standard field names (first_name,
 // last_name, email, phone) and a resume file input.
@@ -131,15 +196,7 @@ async function fillGreenhouse(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"][id*="resume"], input[type="file"][name*="resume"], input[type="file"]', resumePath);
   }
-
-  // Work authorization questions (common in Greenhouse custom fields) — best-effort.
-  // Questions typically appear as <select> or radio groups. We skip answers we can't
-  // confidently fill (the user can finish them manually if the form rejects).
-
-  // Submit
   await page.waitForTimeout(800);
-  const submitted = await tryClick(page, 'button[type="submit"], input[type="submit"], button:has-text("Submit Application")');
-  return submitted;
 }
 
 // ── Platform: Lever ──────────────────────────────────────────────────────────
@@ -155,9 +212,7 @@ async function fillLever(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"][name*="resume"], input[type="file"]', resumePath);
   }
-
   await page.waitForTimeout(800);
-  return await tryClick(page, 'button[type="submit"], .template-btn-submit, button:has-text("Submit application")');
 }
 
 // ── Platform: Ashby ──────────────────────────────────────────────────────────
@@ -171,10 +226,16 @@ async function fillAshby(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"]', resumePath);
   }
-
   await page.waitForTimeout(800);
-  return await tryClick(page, 'button[type="submit"], button:has-text("Submit Application"), button:has-text("Submit")');
 }
+
+// Per-platform submit selectors. Kept separate from the fillers so the main
+// flow can scan for unfilled required fields between fill and submit.
+const SUBMIT_SELECTORS = {
+  greenhouse: 'button[type="submit"], input[type="submit"], button:has-text("Submit Application")',
+  lever:      'button[type="submit"], .template-btn-submit, button:has-text("Submit application")',
+  ashby:      'button[type="submit"], button:has-text("Submit Application"), button:has-text("Submit")',
+};
 
 // ── Main: apply to a single evaluation ───────────────────────────────────────
 
@@ -193,11 +254,12 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
   const platform = detectPlatform(row.job_url);
   const profile  = await getProfile(userId);
 
-  // Validate profile completeness — flag as needs_review (not failed) so the
-  // user can fix their profile and retry, without losing the queued role.
-  if (!profile.first_name || !profile.last_name || !profile.email || !profile.phone) {
-    await setStatus(userId, evalId, STATUS.needs_review, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform });
-    return { ok: false, error: 'Profile incomplete', needsReview: true };
+  // Validate profile + JD compatibility (presence, email/phone format,
+  // sponsorship mismatch). Anything failing → needs_review with reason.
+  const profileCheck = validateProfileForApply(profile, row.job_description || '');
+  if (!profileCheck.ok) {
+    await setStatus(userId, evalId, STATUS.needs_review, { error: profileCheck.reason, platform });
+    return { ok: false, error: profileCheck.reason, needsReview: true };
   }
 
   // Resume selection.
@@ -297,11 +359,27 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
       return { ok: true, platform, dryRun: true };
     }
 
-    let submitted = false;
-    if (platform === 'greenhouse') submitted = await fillGreenhouse(page, profile, resume.absPath);
-    else if (platform === 'lever') submitted = await fillLever(page, profile, resume.absPath);
-    else if (platform === 'ashby') submitted = await fillAshby(page, profile, resume.absPath);
+    // Fill (no submit yet).
+    if (platform === 'greenhouse') await fillGreenhouse(page, profile, resume.absPath);
+    else if (platform === 'lever') await fillLever(page, profile, resume.absPath);
+    else if (platform === 'ashby') await fillAshby(page, profile, resume.absPath);
 
+    // Pre-submit scan: do not click Submit if there are required questions we
+    // didn't fill. Many apply forms add custom required fields ("Why this
+    // company?", "How did you hear about us?", visa/demographic questions);
+    // submitting blank either errors out or quietly drops the application.
+    // Flag for user review with the field labels we found.
+    const unfilled = await detectUnfilledRequired(page);
+    if (unfilled.length > 0) {
+      const labels = unfilled.map(f => f.label).filter(Boolean).slice(0, 5).join(' | ');
+      const reason = `Form has ${unfilled.length} additional required field${unfilled.length === 1 ? '' : 's'} we didn't auto-fill (${labels}). Open the URL and complete it manually, then mark as applied.`;
+      console.log(`[autoApply] eval ${evalId}: ${unfilled.length} unfilled required → needs_review`);
+      await setStatus(userId, evalId, STATUS.needs_review, { error: reason, platform, resumeUsed: resume.filename });
+      return { ok: false, platform, error: reason, needsReview: true };
+    }
+
+    // All required filled — click submit.
+    const submitted = await tryClick(page, SUBMIT_SELECTORS[platform]);
     await page.waitForTimeout(2500);
 
     // Heuristic confirmation — the page either navigates to a thank-you URL
