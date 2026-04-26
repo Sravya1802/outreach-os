@@ -4,10 +4,14 @@ package-lock.json
 !frontend/package-lock.json
 yarn.lock
 
-# Environment
+# Environment — never commit secrets, including ad-hoc backups
 .env
 .env.local
 .env.*.local
+.env.bak
+.env.save
+.env.swp
+.env.orig
 
 # Build outputs
 dist/
