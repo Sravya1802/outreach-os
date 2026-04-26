@@ -218,7 +218,15 @@ router.get('/profile', async (req, res) => {
 
 router.put('/profile', async (req, res) => {
   try {
-    const ALLOWED = ['first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url','location','work_authorization','needs_sponsorship','gender','race','veteran_status','disability_status','resume_dir'];
+    const ALLOWED = [
+      'first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url',
+      'location','address','city','state_province','country','postal_code','preferred_locations',
+      'work_authorization','needs_sponsorship','work_location_preference','willing_to_relocate',
+      'target_job_type','education_school','education_degree','education_major','graduation_date',
+      'gpa','certifications','current_company','current_title','years_experience','skills','projects',
+      'gender','race','veteran_status','disability_status','demographic_consent','auto_apply_consent',
+      'resume_dir',
+    ];
     const data = req.body || {};
     const cols = [], placeholders = [], updates = [], args = [];
     let i = 1;
@@ -395,6 +403,10 @@ router.post('/auto-apply-company/:companyId/scrape-and-queue', async (req, res) 
 router.post('/auto-apply/run', async (req, res) => {
   try {
     const { dryRun = false, headless = true, limit = 10 } = req.body || {};
+    const profile = await one('SELECT auto_apply_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
+    if (!profile?.auto_apply_consent) {
+      return res.status(400).json({ error: 'Auto Apply requires explicit consent in the profile before the worker can run.' });
+    }
     const summary = await runQueueOnce({ dryRun, headless, limit, userId: req.user.id });
     res.json(summary);
   } catch (err) {
@@ -413,13 +425,17 @@ router.post('/auto-apply/run', async (req, res) => {
 // Either or both may be specified. Rows already queued/applied are excluded.
 router.get('/bulk-queue/preview', async (req, res) => {
   try {
-    const { minGrade, minScore } = req.query;
-    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore, userId: req.user.id });
+    const profile = await getAutoApplyProfile(req.user.id);
+    const { minGrade, minScore, jobType, location, country, workLocation, supportedOnly } = req.query;
+    const { sql, params, consentRequired } = buildBulkQueueFilter({
+      minGrade, minScore, userId: req.user.id, profile,
+      jobType, location, country, workLocation, supportedOnly,
+    });
     const rows = await all(
-      `SELECT id, job_title, company_name, grade, score FROM evaluations WHERE ${sql} ORDER BY score DESC NULLS LAST LIMIT 500`,
+      `SELECT id, job_title, company_name, grade, score, job_url FROM evaluations WHERE ${sql} ORDER BY score DESC NULLS LAST LIMIT 500`,
       params
     );
-    res.json({ count: rows.length, rows });
+    res.json({ count: rows.length, rows, consentRequired });
   } catch (err) {
     console.error('[bulk-queue/preview]', err);
     res.status(500).json({ error: err.message });
@@ -430,8 +446,15 @@ router.get('/bulk-queue/preview', async (req, res) => {
 // Same filter as /preview. Returns { queued: N } = number of rows actually updated.
 router.post('/bulk-queue', async (req, res) => {
   try {
-    const { minGrade, minScore } = req.body || {};
-    const { sql, params } = buildBulkQueueFilter({ minGrade, minScore, userId: req.user.id });
+    const profile = await getAutoApplyProfile(req.user.id);
+    if (!profile?.auto_apply_consent) {
+      return res.status(400).json({ error: 'Auto Apply requires explicit consent in the profile before roles can be bulk queued.' });
+    }
+    const { minGrade, minScore, jobType, location, country, workLocation, supportedOnly } = req.body || {};
+    const { sql, params } = buildBulkQueueFilter({
+      minGrade, minScore, userId: req.user.id, profile,
+      jobType, location, country, workLocation, supportedOnly,
+    });
     const r = await run(
       `UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE ${sql}`,
       params
@@ -446,7 +469,11 @@ router.post('/bulk-queue', async (req, res) => {
 // Build the shared WHERE fragment for bulk-queue preview + apply.
 // Excludes rows that are already queued or past "not_started" (don't clobber
 // in-flight applications). Scoped to the caller's user_id.
-function buildBulkQueueFilter({ minGrade, minScore, userId }) {
+async function getAutoApplyProfile(userId) {
+  return (await one('SELECT * FROM user_profile WHERE user_id = $1', [userId])) || {};
+}
+
+function buildBulkQueueFilter({ minGrade, minScore, userId, profile = {}, jobType, location, country, workLocation, supportedOnly }) {
   const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F'];
   const params = [];
   let i = 1;
@@ -467,7 +494,52 @@ function buildBulkQueueFilter({ minGrade, minScore, userId }) {
       params.push(n);
     }
   }
-  return { sql: parts.join(' AND '), params };
+
+  const normalizedJobType = String(jobType || profile.target_job_type || '').toLowerCase();
+  const jobTypeNeedles = {
+    intern: ['intern', 'internship', 'co-op', 'coop'],
+    new_grad: ['new grad', 'new graduate', 'entry level', 'early career', 'university grad'],
+    full_time: ['full time', 'full-time', 'software engineer', 'engineer'],
+  }[normalizedJobType] || [];
+  if (jobTypeNeedles.length > 0) {
+    parts.push(`(${jobTypeNeedles.map(() => `COALESCE(job_title,'') || ' ' || COALESCE(job_description,'') ILIKE $${i++}`).join(' OR ')})`);
+    params.push(...jobTypeNeedles.map(s => `%${s}%`));
+  }
+
+  const targetLocation = String(location || profile.preferred_locations || profile.location || '').trim();
+  if (targetLocation) {
+    const firstLocation = targetLocation.split(/[,;\n]/).map(s => s.trim()).find(Boolean);
+    if (firstLocation) {
+      parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(company_name,'') ILIKE $${i++})`);
+      params.push(`%${firstLocation}%`, `%${firstLocation}%`);
+    }
+  }
+
+  const targetCountry = String(country || profile.country || '').trim();
+  if (targetCountry && !/^any$/i.test(targetCountry)) {
+    const countryNeedle = /^us|usa|united states$/i.test(targetCountry) ? 'United States' : targetCountry;
+    parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(job_description,'') = '')`);
+    params.push(`%${countryNeedle}%`);
+  }
+
+  const remotePref = String(workLocation || profile.work_location_preference || 'any').toLowerCase();
+  if (remotePref && remotePref !== 'any') {
+    parts.push(`COALESCE(job_description,'') ILIKE $${i++}`);
+    params.push(`%${remotePref === 'onsite' ? 'on-site' : remotePref}%`);
+  }
+
+  if (profile.needs_sponsorship) {
+    parts.push(`COALESCE(job_description,'') !~* $${i++}`);
+    params.push('no (visa|sponsorship)|cannot sponsor|will not sponsor|unable to sponsor|us citizens? only|us citizenship required|must be (a )?us citizen|do(es)? not (offer|provide)( visa)? sponsorship');
+  }
+
+  const onlySupported = supportedOnly === undefined || supportedOnly === null || supportedOnly === '' || String(supportedOnly) === 'true';
+  if (onlySupported) {
+    parts.push(`job_url ~* $${i++}`);
+    params.push('greenhouse|lever|ashby');
+  }
+
+  return { sql: parts.join(' AND '), params, consentRequired: !profile.auto_apply_consent };
 }
 
 // ── Preview which resume a URL will use when auto-apply runs ─────────────────
@@ -1759,4 +1831,3 @@ function renderMarkdownAsHtml(md, filename) {
 }
 
 export default router;
-

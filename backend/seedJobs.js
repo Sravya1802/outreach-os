@@ -199,7 +199,7 @@ export async function seedJobs(userId) {
   const INSERT_SQL = `
     INSERT INTO jobs (name, category, pay, roles, location, url, tag, domain, user_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-    ON CONFLICT (name) DO NOTHING
+    ON CONFLICT (user_id, name) DO NOTHING
   `;
 
   await tx(async (client) => {

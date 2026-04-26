@@ -13,8 +13,8 @@ router.post('/search', async (req, res) => {
 
     // Upsert company into DB
     await run(
-      `INSERT INTO companies (name, source, status, user_id) VALUES ($1, 'manual', 'researching', $2)
-       ON CONFLICT (name, role) DO NOTHING`,
+      `INSERT INTO companies (name, role, source, status, user_id) VALUES ($1, '', 'manual', 'researching', $2)
+       ON CONFLICT (user_id, name, role) DO NOTHING`,
       [companyName, req.user.id]
     );
 

@@ -57,7 +57,7 @@ router.post('/scrape', async (req, res) => {
       (name, category, subcategory, confidence, classified_at, wikipedia_summary,
        roles, location, city, state, country, url, tag, domain, is_hiring, source, user_id)
     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, $16)
-    ON CONFLICT (name) DO NOTHING
+    ON CONFLICT (user_id, name) DO NOTHING
   `;
 
   // Duplicate update: upgrade classification only if existing row is unclassified/low confidence
@@ -843,7 +843,7 @@ router.post('/:id/scrape-roles', async (req, res) => {
         const usRoles = foundRoles.filter(r => isUsLocation(r.location));
         for (const role of usRoles.slice(0, 20)) {
           const r = await client.query(
-            `INSERT INTO roles (company_id, title, location, source, apply_url, posted_at, role_type, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (company_id, title, apply_url) DO NOTHING`,
+            `INSERT INTO roles (company_id, title, location, source, apply_url, posted_at, role_type, user_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (user_id, company_id, title, apply_url) DO NOTHING`,
             [company.id, role.title, role.location || null, role.source, role.apply_url, role.posted_at, role.role_type || roleType, req.user.id]
           );
           if (r.rowCount > 0) added++;
@@ -1110,7 +1110,7 @@ router.get('/:id/find-people-stream', async (req, res) => {
     const insertSql = `
       INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (job_id, name) DO NOTHING
+      ON CONFLICT (user_id, job_id, name) DO NOTHING
     `;
     let added = 0;
     await tx(async (client) => {
@@ -1149,7 +1149,7 @@ router.post('/:id/find-linkedin', async (req, res) => {
     const insertSql = `
       INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (job_id, name) DO NOTHING
+      ON CONFLICT (user_id, job_id, name) DO NOTHING
     `;
 
     let added = 0;
@@ -1336,7 +1336,7 @@ router.post('/:id/find-emails', async (req, res) => {
     const insertSql = `
       INSERT INTO job_contacts (job_id, name, title, linkedin_url, email, source, user_id)
       VALUES ($1, $2, $3, $4, $5, $6, $7)
-      ON CONFLICT (job_id, name) DO NOTHING
+      ON CONFLICT (user_id, job_id, name) DO NOTHING
     `;
 
     let added = 0;
@@ -1523,7 +1523,7 @@ router.post('/:id/scrape-linkedin-company', async (req, res) => {
     const insertSql = `
       INSERT INTO job_contacts (job_id, name, title, linkedin_url, source, user_id)
       VALUES ($1, $2, $3, $4, $5, $6)
-      ON CONFLICT (job_id, name) DO NOTHING
+      ON CONFLICT (user_id, job_id, name) DO NOTHING
     `;
 
     let added = 0;

@@ -125,7 +125,7 @@ router.post('/discover', async (req, res) => {
         const r = await client.query(`
           INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (name, company_name) DO NOTHING
+          ON CONFLICT (user_id, name, company_name) DO NOTHING
         `, [p.name, p.title, p.linkedin_url, p.email || null, p.email_status || 'unknown', companyName, mode, req.user.id]);
         if (r.rowCount > 0) { results.added++; saved++; }
       }
@@ -166,7 +166,7 @@ router.post('/add-company', async (req, res) => {
         const r = await client.query(`
           INSERT INTO prospects (name, title, linkedin_url, email, email_status, company_name, company_type, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (name, company_name) DO NOTHING
+          ON CONFLICT (user_id, name, company_name) DO NOTHING
         `, [p.name, p.title || '', p.linkedin_url || null, p.email || null, p.email_status || 'unknown', companyName, companyType, req.user.id]);
         if (r.rowCount > 0) added++;
       }

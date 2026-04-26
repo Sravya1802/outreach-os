@@ -160,7 +160,7 @@ export async function importStartupSheet(userId, onProgress = null) {
   const INSERT_SQL = `
     INSERT INTO jobs (name, domain, url, category, subcategory, source, is_hiring, user_id)
     VALUES ($1, $2, $3, 'Startups', $4, 'startup_sheet', $5, $6)
-    ON CONFLICT (name) DO NOTHING
+    ON CONFLICT (user_id, name) DO NOTHING
   `;
 
   for (let i = 0; i < companies.length; i += BATCH) {

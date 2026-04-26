@@ -99,7 +99,7 @@ router.post('/import', async (req, res) => {
         const result = await client.query(`
           INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, description, website, team_size, user_id)
           VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9, $10, $11, $12)
-          ON CONFLICT (name) DO NOTHING
+          ON CONFLICT (user_id, name) DO NOTHING
           RETURNING id, name
         `, [
           r.name, r.role, r.location, r.careersUrl, c.slug,
@@ -158,7 +158,7 @@ router.post('/import-all', async (req, res) => {
         const result = await client.query(`
           INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, user_id)
           VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (name) DO NOTHING
+          ON CONFLICT (user_id, name) DO NOTHING
         `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null, req.user.id]);
         if (result.rowCount > 0) imported++; else skipped++;
       }
@@ -191,7 +191,7 @@ router.post('/scrape-waas', async (req, res) => {
         const result = await client.query(`
           INSERT INTO jobs (name, roles, location, source, url, tag, category, subcategory, yc_batch, user_id)
           VALUES ($1, $2, $3, 'yc', $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (name) DO NOTHING
+          ON CONFLICT (user_id, name) DO NOTHING
         `, [r.name, r.role, r.location, r.careersUrl, c.slug, r.category, r.subcategory, c.batch || null, req.user.id]);
         if (result.rowCount > 0) imported++; else skipped++;
       }

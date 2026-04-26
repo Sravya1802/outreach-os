@@ -70,7 +70,7 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
     await run(`
       INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
       VALUES ($1, 'interested', $2, $3, $4, NOW(), $5)
-      ON CONFLICT(company_id) DO UPDATE SET
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
         resume_path = EXCLUDED.resume_path,
         resume_original_name = EXCLUDED.resume_original_name,
         resume_size = EXCLUDED.resume_size,
@@ -102,7 +102,7 @@ router.post('/:id/career-ops/resume/from-library', async (req, res) => {
     await run(`
       INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
       VALUES ($1, 'interested', $2, $3, NULL, NOW(), $4)
-      ON CONFLICT(company_id) DO UPDATE SET
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
         resume_path = EXCLUDED.resume_path,
         resume_original_name = EXCLUDED.resume_original_name,
         resume_size = NULL,
@@ -270,7 +270,7 @@ router.post('/search-by-name', async (req, res) => {
         await run(`
           INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id)
           VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7)
-          ON CONFLICT (name) DO NOTHING
+          ON CONFLICT (user_id, name) DO NOTHING
         `, [name, roleText, location || 'USA', applyUrl, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
 
         // Insert additional roles — but jobs table has UNIQUE(name), so only the first
@@ -278,7 +278,7 @@ router.post('/search-by-name', async (req, res) => {
         // → noop via ON CONFLICT.
         for (const role of roles.slice(1, 5)) {
           try {
-            await run(`INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id) VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7) ON CONFLICT (name) DO NOTHING`,
+            await run(`INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id) VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7) ON CONFLICT (user_id, name) DO NOTHING`,
               [name, role.title, role.location || 'USA', role.apply_url, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
           } catch (_) {}
         }
@@ -366,7 +366,7 @@ router.post('/scrape', async (req, res) => {
         const r = await client.query(`
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (name, role) DO NOTHING
+          ON CONFLICT (user_id, name, role) DO NOTHING
         `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }
@@ -415,7 +415,7 @@ router.post('/scrape/:src', async (req, res) => {
         const r = await client.query(`
           INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          ON CONFLICT (name, role) DO NOTHING
+          ON CONFLICT (user_id, name, role) DO NOTHING
         `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
         if (r.rowCount > 0) inserted++;
       }

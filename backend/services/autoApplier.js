@@ -253,6 +253,13 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
 
   const platform = detectPlatform(row.job_url);
   const profile  = await getProfile(userId);
+  if (!profile.auto_apply_consent) {
+    await setStatus(userId, evalId, STATUS.needs_review, {
+      error: 'Auto Apply requires explicit saved consent in your profile before submitting applications',
+      platform,
+    });
+    return { ok: false, error: 'Auto Apply consent required', needsReview: true };
+  }
 
   // Validate profile + JD compatibility (presence, email/phone format,
   // sponsorship mismatch). Anything failing → needs_review with reason.
