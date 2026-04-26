@@ -8,6 +8,7 @@ const SOURCES = [
   { key:'google_jobs', label:'Google Jobs',     desc:'Aggregated listings from Google search',            color:'#2563eb', bg:'#eff6ff' },
   { key:'github',      label:'GitHub',          desc:'Internship lists from the GitHub community repos',  color:'#16a34a', bg:'#f0fdf4' },
   { key:'yc',          label:'YC Startups',     desc:'All YC companies currently hiring (free API)',      color:'#F26625', bg:'#fff7ed' },
+  { key:'handshake',   label:'Handshake',       desc:'School portal — needs HANDSHAKE_SESSION_COOKIE on the VM', color:'#7c3aed', bg:'#f5f3ff' },
 ]
 
 const CATEGORIES = [
@@ -125,7 +126,7 @@ export default function ScraperPage() {
               return (
                 <div key={src.key} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:'18px 20px', display:'flex', alignItems:'center', gap:16 }}>
                   <div style={{ width:42, height:42, borderRadius:9, background:src.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:800, color:src.color, flexShrink:0 }}>
-                    {src.key === 'linkedin' ? 'in' : src.key === 'wellfound' ? 'WF' : src.key === 'google_jobs' ? 'G' : src.key === 'github' ? 'GH' : 'YC'}
+                    {src.key === 'linkedin' ? 'in' : src.key === 'wellfound' ? 'WF' : src.key === 'google_jobs' ? 'G' : src.key === 'github' ? 'GH' : src.key === 'handshake' ? 'HS' : 'YC'}
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontWeight:700, fontSize:14, color:'#0f172a', marginBottom:2 }}>{src.label}</div>

@@ -436,6 +436,10 @@ export function AutoApplySetup() {
   const [profile, setProfile]     = useState(null)
   const [resumes, setResumes]     = useState([])
   const [resumeDir, setResumeDir] = useState('')
+  const [storageItems, setStorageItems] = useState([])      // per-user storage-backed library
+  const [storageConfigured, setStorageConfigured] = useState(false)
+  const [storageUploading, setStorageUploading] = useState('')
+  const [storageStatus, setStorageStatus] = useState(null)
   const [loading, setLoading]     = useState(true)
   const [saving, setSaving]       = useState(false)
   const [savedMsg, setSavedMsg]   = useState(null)
@@ -451,9 +455,10 @@ export function AutoApplySetup() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [p, lib, q, ns, lr] = await Promise.all([
+      const [p, lib, storage, q, ns, lr] = await Promise.all([
         api.career.profile(),
         api.career.resumesLibrary(),
+        api.career.storageLibrary().catch(() => ({ items: [], configured: false })),
         api.career.autoApplyQueue().catch(() => ({ items: [], counts: {} })),
         api.career.nightlySettings().catch(() => ({ settings: null })),
         api.career.nightlyLastRun().catch(() => ({ lastRun: null })),
@@ -461,12 +466,36 @@ export function AutoApplySetup() {
       setProfile(p || {})
       setResumeDir(lib.resumeDir || '')
       setResumes(lib.resumes || [])
+      setStorageItems(storage.items || [])
+      setStorageConfigured(!!storage.configured)
       setQueue(q || { items: [], counts: {} })
       setNightly(ns?.settings || { enabled:false, roleType:'intern', minScore:85, maxApps:50, useLibraryResume:true })
       setLastRun(lr?.lastRun || null)
     } catch (e) { console.warn('Profile load error:', e) }
     setLoading(false)
   }, [])
+
+  async function uploadToLibrary(archetype, file) {
+    if (!file) return
+    setStorageUploading(archetype); setStorageStatus(null)
+    try {
+      await api.career.uploadLibrary(archetype, file)
+      const refreshed = await api.career.storageLibrary().catch(() => ({ items: [] }))
+      setStorageItems(refreshed.items || [])
+      setStorageStatus({ ok: true, text: `Uploaded ${file.name} to ${archetype}` })
+    } catch (err) {
+      setStorageStatus({ ok: false, text: err.message || 'Upload failed' })
+    } finally { setStorageUploading('') }
+  }
+
+  async function deleteFromLibrary(archetype, filename) {
+    if (!window.confirm(`Delete ${filename} from ${archetype}?`)) return
+    try {
+      await api.career.deleteLibrary(archetype, filename)
+      const refreshed = await api.career.storageLibrary().catch(() => ({ items: [] }))
+      setStorageItems(refreshed.items || [])
+    } catch (err) { alert('Delete failed: ' + err.message) }
+  }
   useEffect(() => { load() }, [load])
 
   async function saveNightly() {
@@ -576,9 +605,61 @@ export function AutoApplySetup() {
         {field('Resume folder (local path)', 'resume_dir', { placeholder:'/Users/you/Documents/Common resumes' })}
       </div>
 
-      {/* Resume library */}
+      {/* Per-user storage-backed resume library — multi-user safe */}
       <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20, marginBottom:16 }}>
-        <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Resume Library <span style={{ fontSize:11, fontWeight:600, color:'#94a3b8', letterSpacing:0 }}>— fallback only</span></h2>
+        <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Resume Library <span style={{ fontSize:11, fontWeight:600, color:'#7c3aed', letterSpacing:0 }}>— per-user (cloud storage)</span></h2>
+        <p style={{ fontSize:12, color:'#64748b', margin:'0 0 12px' }}>
+          Upload one PDF per role archetype. The auto-apply worker picks the closest match for each role.
+          Files are scoped to your account — other users never see them.
+        </p>
+        {!storageConfigured && (
+          <div style={{ padding:'10px 12px', background:'#fef3c7', border:'1px solid #fde68a', borderRadius:8, fontSize:12, color:'#92400e', marginBottom:10 }}>
+            ⚠ Cloud storage not configured on the backend (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY). The legacy folder library below is still active.
+          </div>
+        )}
+        {storageStatus && (
+          <div style={{ padding:'8px 12px', borderRadius:8, fontSize:12, fontWeight:700, marginBottom:10,
+            background: storageStatus.ok ? '#f0fdf4' : '#fef2f2',
+            color: storageStatus.ok ? '#166534' : '#991b1b',
+            border: `1px solid ${storageStatus.ok ? '#bbf7d0' : '#fecaca'}` }}>
+            {storageStatus.ok ? '✓' : '✗'} {storageStatus.text}
+          </div>
+        )}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(200px, 1fr))', gap:10 }}>
+          {['aiml','ds','swe','devops','fullstack','startup','misc'].map(arch => {
+            const files = storageItems.filter(i => i.archetype === arch || i.folder === arch)
+            return (
+              <div key={arch} style={{ padding:'12px 14px', border:'1px solid #e2e8f0', borderRadius:10, background:'#fafbff' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6 }}>
+                  <span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:20, background:'#eef2ff', color:'#4f46e5', textTransform:'uppercase' }}>{arch}</span>
+                  <label style={{ marginLeft:'auto', cursor: storageConfigured ? 'pointer' : 'not-allowed', padding:'4px 10px', fontSize:11, fontWeight:700, background: storageConfigured ? '#eef2ff' : '#f1f5f9', color: storageConfigured ? '#4f46e5' : '#94a3b8', borderRadius:6, opacity: storageUploading === arch ? 0.6 : 1 }}>
+                    {storageUploading === arch ? '⏳' : '+ Upload'}
+                    <input type="file" accept="application/pdf" disabled={!storageConfigured || storageUploading === arch}
+                      onChange={e => uploadToLibrary(arch, e.target.files?.[0])}
+                      style={{ display:'none' }} />
+                  </label>
+                </div>
+                {files.length === 0 ? (
+                  <div style={{ fontSize:11, color:'#94a3b8' }}>No file</div>
+                ) : files.map((f, i) => (
+                  <div key={i} style={{ display:'flex', alignItems:'center', gap:6, marginTop:4 }}>
+                    <span style={{ fontSize:11, color:'#0f172a', fontFamily:'monospace', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1 }}>{f.filename}</span>
+                    <span style={{ fontSize:10, color:'#94a3b8' }}>{Math.max(1, Math.round((f.sizeBytes || 0) / 1024))} KB</span>
+                    <button onClick={() => deleteFromLibrary(f.archetype, f.filename)}
+                      style={{ padding:'2px 7px', fontSize:10, background:'none', border:'1px solid #fecaca', color:'#dc2626', borderRadius:5, cursor:'pointer' }}>
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Resume library — legacy filesystem fallback */}
+      <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20, marginBottom:16 }}>
+        <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Resume Library <span style={{ fontSize:11, fontWeight:600, color:'#94a3b8', letterSpacing:0 }}>— legacy folder fallback</span></h2>
         <p style={{ fontSize:12, color:'#64748b', margin:'0 0 10px' }}>
           Auto-apply uses the <strong style={{ color:'#7c3aed' }}>tailored resume generated by Career Ops</strong> for each role.
           These local PDFs are only used when no tailored resume exists yet.
@@ -1104,6 +1185,14 @@ export default function CareerOps() {
   const [resumeInfo, setResumeInfo] = useState(null)
   const [jobInput, setJobInput]     = useState('')
   const [inputMode, setInputMode]   = useState('url')
+  // Resume picker for the Evaluate tab. Per user ask #2 option A: no
+  // preselection — the user must pick "Use saved" / "Upload" / "Paste"
+  // every time so they confirm which resume each evaluation runs against.
+  const [resumeMode, setResumeMode] = useState(null)        // 'saved' | 'upload' | 'paste' | null
+  const [resumePasted, setResumePasted] = useState('')
+  const [resumeUploadedText, setResumeUploadedText] = useState('')
+  const [resumeUploadedName, setResumeUploadedName] = useState('')
+  const [parsing, setParsing] = useState(false)
   const [evaluating, setEvaluating] = useState(false)
   const [evaluation, setEvaluation] = useState(null)
   const [evalId, setEvalId]         = useState(null)
@@ -1137,18 +1226,47 @@ export default function CareerOps() {
     try { setHistory(await api.career.evaluations()) } finally { setHistLoading(false) }
   }
 
+  // Resolve the resume text for an evaluation based on the picker mode.
+  // Returns null if mode unset/invalid (caller surfaces an error).
+  function pickResumeTextForEval() {
+    if (resumeMode === 'paste') return resumePasted.trim() || null
+    if (resumeMode === 'upload') return resumeUploadedText.trim() || null
+    if (resumeMode === 'saved') return null                  // backend falls back to saved
+    return null                                              // mode unset
+  }
+
   async function handleEvaluate(prefillUrl = null) {
     const input = prefillUrl || jobInput
     if (!input?.trim()) return
     if (prefillUrl) { setTab('evaluate'); setJobInput(prefillUrl); setInputMode('url') }
+    if (!resumeMode) { setEvalError('Pick a resume above (Use saved / Upload / Paste) before evaluating'); return }
+    if (resumeMode === 'paste' && resumePasted.trim().length < 50) { setEvalError('Pasted resume looks too short — paste the full text'); return }
+    if (resumeMode === 'upload' && !resumeUploadedText) { setEvalError('Upload a PDF first'); return }
+    if (resumeMode === 'saved' && !resumeInfo?.hasResume) { setEvalError('No saved resume — pick Upload or Paste, or upload a default in Auto-Apply Setup'); return }
     setEvaluating(true); setEvalError(null); setEvaluation(null); setPdfUrl(null)
-    setApplyMode('manual'); setApplyStatus('not_started') // reset per-eval apply state
+    setApplyMode('manual'); setApplyStatus('not_started')
     try {
       const isUrl = input.trim().startsWith('http')
-      const r = await api.career.evaluate(isUrl ? { jobUrl: input.trim() } : { jobDescription: input.trim() })
+      const baseBody = isUrl ? { jobUrl: input.trim() } : { jobDescription: input.trim() }
+      const overrideText = pickResumeTextForEval()
+      const body = overrideText ? { ...baseBody, resumeText: overrideText } : baseBody
+      const r = await api.career.evaluate(body)
       setEvaluation(r.evaluation); setEvalId(r.evalId)
     } catch (err) { setEvalError(err.message) }
     finally { setEvaluating(false) }
+  }
+
+  async function handleResumeUpload(file) {
+    if (!file) return
+    setParsing(true); setEvalError(null)
+    try {
+      const r = await api.career.parseResume(file)
+      setResumeUploadedText(r.text || '')
+      setResumeUploadedName(r.name || file.name)
+    } catch (err) {
+      setEvalError(err.message || 'Resume parse failed')
+      setResumeUploadedText(''); setResumeUploadedName('')
+    } finally { setParsing(false) }
   }
 
   // Persist apply-mode choice to DB so history/auto-apply worker can honor it.
@@ -1271,6 +1389,64 @@ export default function CareerOps() {
         {/* ── Evaluate tab ── */}
         {tab === 'evaluate' && (
           <div>
+            {/* Resume picker — pick which resume each evaluation runs against.
+                No preselection (per user ask #2 option A) so the user
+                consciously confirms the resume every time. */}
+            <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:16, marginBottom:16 }}>
+              <div style={{ fontSize:12, fontWeight:700, color:'#64748b', textTransform:'uppercase', letterSpacing:'0.06em', marginBottom:8 }}>Resume for this evaluation</div>
+              <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+                {[
+                  { k:'saved',  l: resumeInfo?.hasResume ? `💾 Use saved (${resumeInfo?.name || 'default'})` : '💾 Use saved (none)', disabled: !resumeInfo?.hasResume },
+                  { k:'upload', l:'📎 Upload PDF' },
+                  { k:'paste',  l:'📝 Paste text' },
+                ].map(({ k, l, disabled }) => (
+                  <button key={k} onClick={() => { if (!disabled) { setResumeMode(k); setEvalError(null) } }} disabled={disabled}
+                    style={{ padding:'8px 14px', fontSize:12, fontWeight:700, border:'1px solid', borderRadius:8, cursor: disabled ? 'not-allowed' : 'pointer',
+                      borderColor: resumeMode === k ? '#6366f1' : '#e2e8f0',
+                      background:  resumeMode === k ? '#eef2ff' : (disabled ? '#f8fafc' : '#fff'),
+                      color:       resumeMode === k ? '#4338ca' : (disabled ? '#cbd5e1' : '#475569'),
+                      transition:'all 0.12s' }}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+
+              {resumeMode === 'upload' && (
+                <div style={{ marginTop:12 }}>
+                  <input type="file" accept="application/pdf"
+                    onChange={e => handleResumeUpload(e.target.files?.[0])}
+                    style={{ fontSize:12 }} />
+                  {parsing && <div style={{ marginTop:8, fontSize:12, color:'#6366f1', display:'flex', alignItems:'center', gap:8 }}><Spin size={12} /> Parsing PDF…</div>}
+                  {!parsing && resumeUploadedText && (
+                    <div style={{ marginTop:8, padding:'8px 12px', background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:8, fontSize:12, color:'#15803d', fontWeight:600 }}>
+                      ✓ {resumeUploadedName} parsed ({resumeUploadedText.length.toLocaleString()} chars). This evaluation will use this PDF — your saved default is untouched.
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {resumeMode === 'paste' && (
+                <div style={{ marginTop:12 }}>
+                  <textarea value={resumePasted} onChange={e => setResumePasted(e.target.value)}
+                    placeholder="Paste the full resume text…" rows={8}
+                    style={{ width:'100%', background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, fontSize:12, padding:10, lineHeight:1.55, fontFamily:'monospace', boxSizing:'border-box' }} />
+                  <div style={{ marginTop:6, fontSize:11, color: resumePasted.length < 50 ? '#dc2626' : '#94a3b8', fontWeight:600 }}>
+                    {resumePasted.length.toLocaleString()} chars — minimum 50
+                  </div>
+                </div>
+              )}
+
+              {resumeMode === 'saved' && resumeInfo?.hasResume && (
+                <div style={{ marginTop:10, padding:'8px 12px', background:'#f0fdf4', border:'1px solid #bbf7d0', borderRadius:8, fontSize:12, color:'#15803d', fontWeight:600 }}>
+                  ✓ Using saved default: {resumeInfo.name}
+                </div>
+              )}
+
+              {!resumeMode && (
+                <div style={{ marginTop:10, fontSize:12, color:'#94a3b8' }}>Pick one of the options above to enable Evaluate.</div>
+              )}
+            </div>
+
             {/* Mode toggle */}
             <div style={{ display:'inline-flex', background:'#f1f5f9', borderRadius:9, padding:3, marginBottom:16, gap:3 }}>
               {[['url','🔗 Job URL'],['paste','📝 Paste JD']].map(([k,l]) => (
@@ -1290,8 +1466,8 @@ export default function CareerOps() {
                 <input value={jobInput} onChange={e => setJobInput(e.target.value)} onKeyDown={e => e.key==='Enter' && handleEvaluate()}
                   placeholder="https://jobs.lever.co/company/… or any job posting URL"
                   style={{ flex:1, background:'#fff', borderRadius:10, fontSize:13 }} />
-                <button onClick={() => handleEvaluate()} disabled={evaluating || !resumeInfo?.hasResume}
-                  style={{ padding:'10px 24px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: evaluating ? 'default':'pointer', display:'flex', alignItems:'center', gap:8, whiteSpace:'nowrap', flexShrink:0 }}>
+                <button onClick={() => handleEvaluate()} disabled={evaluating || !resumeMode}
+                  style={{ padding:'10px 24px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: evaluating || !resumeMode ? 'not-allowed':'pointer', opacity: !resumeMode ? 0.55 : 1, display:'flex', alignItems:'center', gap:8, whiteSpace:'nowrap', flexShrink:0 }}>
                   {evaluating ? <><Spin size={14} color="#fff" /> Evaluating…</> : '⚡ Evaluate'}
                 </button>
               </div>
@@ -1301,17 +1477,11 @@ export default function CareerOps() {
                   placeholder="Paste the full job description here…" rows={8}
                   style={{ background:'#fff', borderRadius:10, fontSize:13, lineHeight:1.65 }} />
                 <div style={{ display:'flex', justifyContent:'flex-end', marginTop:10 }}>
-                  <button onClick={() => handleEvaluate()} disabled={evaluating || !resumeInfo?.hasResume}
-                    style={{ padding:'10px 26px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: evaluating ? 'default':'pointer', display:'flex', alignItems:'center', gap:8 }}>
+                  <button onClick={() => handleEvaluate()} disabled={evaluating || !resumeMode}
+                    style={{ padding:'10px 26px', fontSize:13, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:10, cursor: evaluating || !resumeMode ? 'not-allowed':'pointer', opacity: !resumeMode ? 0.55 : 1, display:'flex', alignItems:'center', gap:8 }}>
                     {evaluating ? <><Spin size={14} color="#fff" /> Evaluating…</> : '⚡ Evaluate Job'}
                   </button>
                 </div>
-              </div>
-            )}
-
-            {!resumeInfo?.hasResume && (
-              <div style={{ padding:'10px 16px', background:'#fef3c7', border:'1px solid #fde68a', borderRadius:9, fontSize:12, color:'#d97706', fontWeight:600, marginBottom:16 }}>
-                ⚠ Upload your resume above before evaluating
               </div>
             )}
 

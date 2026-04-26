@@ -210,6 +210,11 @@ export const api = {
     // ── Evaluate / evaluations history ───────────────────────────────────────
     evaluate:         (body) => apiCall('/career/evaluate',       { method: 'POST', body }),
     batchEvaluate:    (urls) => apiCall('/career/batch-evaluate', { method: 'POST', body: { urls } }),
+    parseResume:      async (file) => {
+      const fd = new FormData()
+      fd.append('resume', file)
+      return apiCall('/career/parse-resume', { method: 'POST', body: fd })
+    },
     evaluations:      () => apiCall('/career/evaluations'),
     evaluation:       (id) => apiCall(`/career/evaluations/${id}`),
     deleteEvaluation: (id) => apiCall(`/career/evaluations/${id}`, { method: 'DELETE' }),
@@ -236,6 +241,14 @@ export const api = {
     profile:        () => apiCall('/career/profile'),
     updateProfile:  (profile) => apiCall('/career/profile', { method: 'PUT', body: profile }),
     resumesLibrary: () => apiCall('/career/resumes-library'),
+    storageLibrary: () => apiCall('/career/library'),
+    uploadLibrary:  async (archetype, file) => {
+      const fd = new FormData()
+      fd.append('archetype', archetype)
+      fd.append('resume', file)
+      return apiCall('/career/library/upload', { method: 'POST', body: fd })
+    },
+    deleteLibrary:  (archetype, filename) => apiCall(`/career/library/${encodeURIComponent(archetype)}/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 
     // ── Career-Ops company page ──────────────────────────────────────────────
     getCompany:    (id) => apiCall(`/career/company/${id}`),
