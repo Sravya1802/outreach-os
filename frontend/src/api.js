@@ -250,6 +250,10 @@ export const api = {
     },
     deleteLibrary:  (archetype, filename) => apiCall(`/career/library/${encodeURIComponent(archetype)}/${encodeURIComponent(filename)}`, { method: 'DELETE' }),
 
+    // ── Auto-apply on a company from /discover/companies ─────────────────────
+    autoApplyCompanyQueue:          (companyId, body = {}) => apiCall(`/career/auto-apply-company/${companyId}/queue`,            { method: 'POST', body }),
+    autoApplyCompanyScrapeAndQueue: (companyId, body = {}) => apiCall(`/career/auto-apply-company/${companyId}/scrape-and-queue`, { method: 'POST', body }),
+
     // ── Career-Ops company page ──────────────────────────────────────────────
     getCompany:    (id) => apiCall(`/career/company/${id}`),
     updateCompany: (id, patch) => apiCall(`/career/company/${id}`, { method: 'PUT', body: patch }),

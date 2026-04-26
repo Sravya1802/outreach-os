@@ -519,6 +519,8 @@ function JobScraperTab({ company, onTabSwitch }) {
   const [sortOrder, setSortOrder] = useState('newest')
   const [careersPageUrl, setCareersPageUrl] = useState(null)
   const [scrapingType, setScrapingType] = useState(null) // Track which scrape is running (intern, fulltime, or null)
+  const [autoApplyBusy, setAutoApplyBusy] = useState('')   // '' | 'queue' | 'scrape-and-queue'
+  const [autoApplyMsg, setAutoApplyMsg]   = useState(null) // { ok, text }
 
   useEffect(() => {
     setLoading(true)
@@ -645,6 +647,46 @@ function JobScraperTab({ company, onTabSwitch }) {
             style={{ padding:'11px 16px', background: scrapingType === 'fulltime' ? '#d1fae5' : 'linear-gradient(135deg,#059669,#10b981)', color: scrapingType === 'fulltime' ? '#047857' : '#fff', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor: scrapingType !== null ? 'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8, transition:'all 0.2s' }}>
             {scrapingType === 'fulltime' ? <><Spin color="#047857" size={16} /> Scraping…</> : '💼 Scrape Full-Time/New Grad'}
           </button>
+        </div>
+
+        {/* Auto-Apply panel — option C: both fast-queue and scrape-then-queue */}
+        <div style={{ marginTop:12, padding:14, background:'#fafbff', border:'1px solid #e0e7ff', borderRadius:10 }}>
+          <div style={{ fontSize:12, fontWeight:700, color:'#4f46e5', marginBottom:8 }}>🤖 Auto-Apply this company</div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+            <button disabled={autoApplyBusy !== ''} onClick={async () => {
+                setAutoApplyBusy('queue'); setAutoApplyMsg(null)
+                try {
+                  const r = await api.career.autoApplyCompanyQueue(company.id)
+                  setAutoApplyMsg({ ok: true, text: r.queued > 0
+                    ? `Queued ${r.queued} role(s)${r.skippedAlreadyInFlight ? ` (skipped ${r.skippedAlreadyInFlight} already in queue)` : ''}. Open Career Ops → Auto-Apply Setup → Run Auto-Apply Queue to process.`
+                    : `No scraped roles available. Try "Scrape & Queue" → it will find roles first.` })
+                } catch (err) { setAutoApplyMsg({ ok: false, text: err.message || 'Queue failed' }) }
+                finally { setAutoApplyBusy('') }
+              }}
+              title="Queue all known scraped intern roles for the auto-apply worker"
+              style={{ padding:'10px 14px', background: autoApplyBusy === 'queue' ? '#e0e7ff' : '#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor: autoApplyBusy ? 'default' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+              {autoApplyBusy === 'queue' ? <><Spin color="#4f46e5" size={13} /> Queuing…</> : '⚡ Queue known roles'}
+            </button>
+            <button disabled={autoApplyBusy !== ''} onClick={async () => {
+                setAutoApplyBusy('scrape-and-queue'); setAutoApplyMsg(null)
+                try {
+                  const r = await api.career.autoApplyCompanyScrapeAndQueue(company.id)
+                  setAutoApplyMsg({ ok: true, text: `Scraped + queued ${r.queued || 0} role(s)${r.skippedAlreadyInFlight ? ` (skipped ${r.skippedAlreadyInFlight} already in queue)` : ''} from ${r.totalRoles || 0} found.` })
+                  // refresh roles list
+                  api.jobs.roles(company.id).then(setRoles).catch(() => {})
+                } catch (err) { setAutoApplyMsg({ ok: false, text: err.message || 'Scrape + queue failed' }) }
+                finally { setAutoApplyBusy('') }
+              }}
+              title="Scrape this company's careers page first, then queue everything for auto-apply"
+              style={{ padding:'10px 14px', background: autoApplyBusy === 'scrape-and-queue' ? '#fef3c7' : 'linear-gradient(135deg,#f59e0b,#ef4444)', color: autoApplyBusy === 'scrape-and-queue' ? '#92400e' : '#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor: autoApplyBusy ? 'default' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
+              {autoApplyBusy === 'scrape-and-queue' ? <><Spin color="#92400e" size={13} /> Scraping + queuing…</> : '🔍 Scrape & Queue'}
+            </button>
+          </div>
+          {autoApplyMsg && (
+            <div style={{ marginTop:8, fontSize:11, fontWeight:600, color: autoApplyMsg.ok ? '#15803d' : '#dc2626' }}>
+              {autoApplyMsg.ok ? '✓' : '✗'} {autoApplyMsg.text}
+            </div>
+          )}
         </div>
       </div>
 

@@ -391,6 +391,19 @@ function RegularCategoryView({ categoryName }) {
                       {c.source.split(',')[0]}
                     </span>
                   )}
+                  {/* Auto-Apply quick action — queues known scraped roles for the worker */}
+                  <button onClick={async (e) => {
+                      e.stopPropagation()
+                      try {
+                        const r = await api.career.autoApplyCompanyQueue(c.id)
+                        if (r.queued > 0) alert(`✓ Queued ${r.queued} role(s) for auto-apply${r.skippedAlreadyInFlight ? ` (skipped ${r.skippedAlreadyInFlight} already in queue)` : ''}. Run "Auto-Apply Setup → Run Queue" to process now.`)
+                        else alert(`No scraped roles for ${r.company || c.name}. Open the company page and click Scrape, or use the larger "Scrape & Queue" button there.`)
+                      } catch (err) { alert('Auto-Apply failed: ' + err.message) }
+                    }}
+                    title="Queue all known scraped intern roles for auto-apply"
+                    style={{ padding:'3px 9px', borderRadius:7, border:'1px solid #c7d2fe', background:'#eef2ff', color:'#4f46e5', fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}>
+                    🤖 Apply
+                  </button>
                   {/* Careers page link */}
                   {(c.url || c.domain) && (
                     <a href={c.url || `https://${c.domain}/careers`} target="_blank" rel="noreferrer"
