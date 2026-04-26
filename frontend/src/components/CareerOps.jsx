@@ -120,7 +120,7 @@ function ResumeUpload({ resumeInfo, onUploaded }) {
 }
 
 // ── Evaluation report — renders santifer's A-G schema ────────────────────────
-function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfUrl, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
+function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, onDownloadPdf, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
   const gc = gradeColor(e.grade)
   const gb = gradeBg(e.grade)
 
@@ -193,10 +193,10 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfUrl, ap
               ✓ In auto-apply queue
             </div>
           )}
-          {pdfUrl ? (
-            <a href={pdfUrl} download style={{ padding:'8px 14px', fontSize:11, fontWeight:700, background:'#16a34a', color:'#fff', borderRadius:8, textAlign:'center', textDecoration:'none' }}>
+          {pdfReady ? (
+            <button onClick={onDownloadPdf} style={{ padding:'8px 14px', fontSize:11, fontWeight:700, background:'#16a34a', color:'#fff', border:'none', borderRadius:8, textAlign:'center', cursor:'pointer' }}>
               ⬇ Download Tailored CV
-            </a>
+            </button>
           ) : (
             <button onClick={onGeneratePDF} disabled={pdfLoading}
               style={{ padding:'8px 14px', fontSize:11, fontWeight:700, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
@@ -942,10 +942,14 @@ function EvalCard({ ev, onClick, onDelete, onQueue }) {
         style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background: queued ? '#dcfce7' : '#fef3c7', color: queued ? '#15803d' : '#b45309', border:`1px solid ${queued ? '#86efac' : '#fcd34d'}`, borderRadius:7, cursor: queued || queuing ? 'default' : 'pointer', flexShrink:0, display:'flex', alignItems:'center', gap:4 }}>
         {queuing ? <Spin size={11} /> : queued ? '✓ Queued' : '+ Auto-Apply'}
       </button>
-      <a href={api.career.reportHtmlUrl(ev.id)} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-        style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background:'#eef2ff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, textDecoration:'none', flexShrink:0 }}>
+      <button onClick={async e => {
+          e.stopPropagation()
+          try { await api.career.openReportTab(ev.id) }
+          catch (err) { alert('Could not open report: ' + err.message) }
+        }}
+        style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background:'#eef2ff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer', flexShrink:0 }}>
         HTML ↗
-      </a>
+      </button>
       {ev.pdf_path && <span title="PDF generated" style={{ fontSize:18 }}>📄</span>}
       <button onClick={e => { e.stopPropagation(); onDelete(ev.id) }}
         style={{ padding:'5px 10px', fontSize:11, background:'none', border:'1px solid #fecaca', color:'#dc2626', borderRadius:7, cursor:'pointer', flexShrink:0 }}>
@@ -1238,7 +1242,7 @@ export default function CareerOps() {
   const [history, setHistory]       = useState([])
   const [histLoading, setHistLoading] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
-  const [pdfUrl, setPdfUrl]         = useState(null)
+  const [pdfReady, setPdfReady]     = useState(false)
   const [applyMode, setApplyMode]   = useState('manual') // per-evaluation: 'manual' | 'auto'
   const [applyStatus, setApplyStatus] = useState('not_started')
   const [applying, setApplying]     = useState(false)
@@ -1281,7 +1285,7 @@ export default function CareerOps() {
     if (resumeMode === 'paste' && resumePasted.trim().length < 50) { setEvalError('Pasted resume looks too short — paste the full text'); return }
     if (resumeMode === 'upload' && !resumeUploadedText) { setEvalError('Upload a PDF first'); return }
     if (resumeMode === 'saved' && !resumeInfo?.hasResume) { setEvalError('No saved resume — pick Upload or Paste, or upload a default in Auto-Apply Setup'); return }
-    setEvaluating(true); setEvalError(null); setEvaluation(null); setPdfUrl(null)
+    setEvaluating(true); setEvalError(null); setEvaluation(null); setPdfReady(false)
     setApplyMode('manual'); setApplyStatus('not_started')
     try {
       const isUrl = input.trim().startsWith('http')
@@ -1351,9 +1355,17 @@ export default function CareerOps() {
   async function handleGeneratePDF() {
     if (!evalId) return
     setPdfLoading(true)
-    try { const r = await api.career.tailoredResume(evalId); if (r.ok) setPdfUrl(r.downloadUrl) }
+    try { const r = await api.career.tailoredResume(evalId); if (r.ok) setPdfReady(true) }
     catch (err) { alert('PDF generation failed: ' + err.message) }
     finally { setPdfLoading(false) }
+  }
+
+  async function handleDownloadPdf() {
+    if (!evalId) return
+    const safe = (s) => String(s || '').replace(/[/\\?%*:|"<>]/g, '_').slice(0, 80)
+    const filename = `${safe(evaluation?.companyName) || 'company'}-${safe(evaluation?.jobTitle) || 'role'}.pdf`
+    try { await api.career.downloadEvaluationPdf(evalId, filename) }
+    catch (err) { alert('Download failed: ' + err.message) }
   }
 
   async function handleDeleteEval(id) {
@@ -1364,7 +1376,7 @@ export default function CareerOps() {
   async function loadEvalFromHistory(ev) {
     const r = await api.career.evaluation(ev.id)
     setEvaluation(r.evaluation); setEvalId(r.id)
-    setPdfUrl(r.pdf_path ? api.career.downloadUrl(r.id) : null)
+    setPdfReady(!!r.pdf_path)
     setApplyMode(r.apply_mode || 'manual')
     setApplyStatus(r.apply_status || 'not_started')
     setTab('evaluate')
@@ -1542,7 +1554,8 @@ export default function CareerOps() {
                 evaluation={evaluation}
                 onGeneratePDF={handleGeneratePDF}
                 pdfLoading={pdfLoading}
-                pdfUrl={pdfUrl}
+                pdfReady={pdfReady}
+                onDownloadPdf={handleDownloadPdf}
                 applyMode={applyMode}
                 applyStatus={applyStatus}
                 onApplyModeChange={handleApplyModeChange}
