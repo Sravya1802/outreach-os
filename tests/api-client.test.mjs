@@ -58,10 +58,16 @@ test('raw URL helpers respect the shared API base', () => {
   return api.unified.allContacts(params)
 })
 
-test('career document/report URLs use the shared API base', () => {
-  assert.equal(api.career.downloadUrl(5), '/api/career/download/5')
-  assert.equal(api.career.reportHtmlUrl(5), '/api/career/evaluations/5/report.html')
+test('SSE URL helpers are URL builders; download/report helpers are async actions', () => {
+  // SSE streams keep using ?access_token=<jwt> because EventSource cannot send
+  // headers. With no cached token the helper just returns the bare URL.
   assert.equal(api.career.scoreFitUrl(9), '/api/career/company/9/score-fit')
+
+  // Downloads and report views fetch with Bearer auth and open as blob URLs —
+  // they're action helpers, not URL builders, so the JWT never reaches the URL.
+  assert.equal(typeof api.career.openReportTab, 'function')
+  assert.equal(typeof api.career.downloadEvaluationPdf, 'function')
+  assert.equal(typeof api.career.downloadDocument, 'function')
 })
 
 test('raw API fetch keeps direct calls on the authenticated API helper path', async () => {

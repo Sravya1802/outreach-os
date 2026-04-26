@@ -189,8 +189,12 @@ export default function JobDashboard() {
               <div style={{ fontSize:13, color:'#94a3b8' }}>No evaluations yet.</div>
             ) : (
               recentEvals.slice(0, 8).map((e, i) => (
-                <a key={i} href={api.career.reportHtmlUrl(e.id)} target="_blank" rel="noreferrer"
-                  style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', borderBottom: i < recentEvals.length - 1 ? '1px solid #f1f5f9' : 'none', textDecoration:'none' }}>
+                <button key={i} type="button"
+                  onClick={async () => {
+                    try { await api.career.openReportTab(e.id) }
+                    catch (err) { alert('Could not open report: ' + err.message) }
+                  }}
+                  style={{ display:'flex', alignItems:'center', gap:10, padding:'8px 0', textAlign:'left', background:'none', border:'none', borderRadius:0, borderBottom: i < recentEvals.length - 1 ? '1px solid #f1f5f9' : 'none', cursor:'pointer', width:'100%' }}>
                   <div style={{ width:26, height:26, borderRadius:'50%', border:`2px solid ${GRADE_COLOR[e.grade] || '#94a3b8'}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
                     <span style={{ fontSize:11, fontWeight:900, color: GRADE_COLOR[e.grade] || '#94a3b8' }}>{e.grade || '—'}</span>
                   </div>
@@ -198,7 +202,7 @@ export default function JobDashboard() {
                     <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{e.job_title}</div>
                     <div style={{ fontSize:11, color:'#94a3b8' }}>{e.company_name} · {timeAgo(e.created_at)}</div>
                   </div>
-                </a>
+                </button>
               ))
             )}
           </div>

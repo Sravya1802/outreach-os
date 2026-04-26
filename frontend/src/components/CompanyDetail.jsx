@@ -1305,7 +1305,9 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     try {
       const data = await api.career.tailoredResume(evalId)
       if (data.error) { setPdfError(data.error); return }
-      window.open(api.career.downloadUrl(evalId), '_blank')
+      const safe = (s) => String(s || '').replace(/[/\\?%*:|"<>]/g, '_').slice(0, 80)
+      const filename = `${safe(company?.name) || 'company'}-tailored.pdf`
+      await api.career.downloadEvaluationPdf(evalId, filename)
     } catch (err) {
       setPdfError(err.message)
     }
@@ -1658,10 +1660,13 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
                         {r.score != null && ` · ${Number(r.score).toFixed(1)}/5`}
                       </div>
                     </div>
-                    <a href={api.career.reportHtmlUrl(r.id)} target="_blank" rel="noreferrer"
-                      style={{ padding:'6px 14px', background:'#6366f1', color:'#fff', borderRadius:7, fontSize:11, fontWeight:700, textDecoration:'none', flexShrink:0 }}>
+                    <button onClick={async () => {
+                        try { await api.career.openReportTab(r.id) }
+                        catch (err) { alert('Could not open report: ' + err.message) }
+                      }}
+                      style={{ padding:'6px 14px', background:'#6366f1', color:'#fff', border:'none', borderRadius:7, fontSize:11, fontWeight:700, cursor:'pointer', flexShrink:0 }}>
                       View report →
-                    </a>
+                    </button>
                   </div>
                 ))}
               </div>

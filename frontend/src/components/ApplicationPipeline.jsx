@@ -83,8 +83,9 @@ export default function ApplicationPipeline() {
     } catch (err) { alert('Move failed: ' + err.message) }
   }
 
-  function openReport(id) {
-    window.open(api.career.reportHtmlUrl(id), '_blank', 'noopener,noreferrer')
+  async function openReport(id) {
+    try { await api.career.openReportTab(id) }
+    catch (err) { alert('Could not open report: ' + err.message) }
   }
 
   return (

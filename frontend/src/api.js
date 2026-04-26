@@ -6,10 +6,15 @@
 // owns all data access and business logic. Supabase is only used for auth:
 //   - App.jsx / Login.jsx drive the login flow
 //   - this module reads the current session JWT and attaches it to every
-//     outbound request (Authorization: Bearer <jwt>). For URL-returning
-//     helpers (EventSource, window.open, <a href>) — which can't set headers
-//     — the token is appended via ?access_token=<jwt>. The backend middleware
-//     accepts either source.
+//     outbound request (Authorization: Bearer <jwt>).
+//
+// Downloads / report views fetch the resource with the Bearer header, then
+// open it as a blob: URL — JWTs no longer leak into address bars, browser
+// history, server access logs, or Referer headers.
+//
+// EventSource (SSE) is the one carve-out: it can't send headers, so the SSE
+// helpers append ?access_token=<jwt> via withAuthQuery. The backend middleware
+// accepts either source.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { supabase } from './supabaseClient.js'
@@ -22,9 +27,10 @@ export const apiUrl = (path = '') => `${API}${path.startsWith('/') ? path : `/${
 const isFormData = (body) => typeof FormData !== 'undefined' && body instanceof FormData
 
 // ── Auth token plumbing ─────────────────────────────────────────────────────
-// URL-returning helpers need a sync read of the current JWT (they're called
-// inside JSX: <a href={reportHtmlUrl(id)}>, new EventSource(...), window.open).
-// Keep a cached copy updated by Supabase's auth state.
+// SSE helpers (EventSource-based streams) need a sync read of the current JWT,
+// since EventSource cannot send Authorization headers. Keep a cached copy
+// updated by Supabase's auth state. Non-streaming requests use authHeaders()
+// which always grabs the freshest session token.
 let cachedToken = null
 try {
   supabase.auth.getSession().then(({ data: { session } }) => {
@@ -85,6 +91,39 @@ export async function rawApiFetch(url, options = {}) {
   const auth = await authHeaders()
   const headers = options.headers ? { ...auth, ...options.headers } : auth
   return fetch(apiUrl(url), { ...options, headers })
+}
+
+async function fetchAuthenticatedBlob(path) {
+  const res = await rawApiFetch(path)
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || 'Request failed')
+  }
+  return res.blob()
+}
+
+// Open a backend resource in a new tab using a blob URL — keeps the JWT in
+// the Authorization header rather than leaking it via ?access_token=.
+export async function openAuthenticatedTab(path) {
+  const blob = await fetchAuthenticatedBlob(path)
+  const url = URL.createObjectURL(blob)
+  const w = window.open(url, '_blank', 'noopener,noreferrer')
+  // Revoke later so the new tab has time to load before the URL is freed.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+  return w
+}
+
+// Trigger a file download via blob URL with the suggested filename.
+export async function downloadAuthenticatedFile(path, filename) {
+  const blob = await fetchAuthenticatedBlob(path)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  if (filename) a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 5_000)
 }
 
 const qs = (params) => {
@@ -286,11 +325,13 @@ export const api = {
       return apiCall(`/career/${companyId}/documents`, { method: 'POST', body: fd })
     },
     deleteDocument:   (companyId, docId) => apiCall(`/career/${companyId}/documents/${docId}`, { method: 'DELETE' }),
-    downloadDocument: (companyId, docId) => withAuthQuery(apiUrl(`/career/${companyId}/documents/${docId}/download`)),
+    downloadDocument: (companyId, docId, filename) =>
+      downloadAuthenticatedFile(`/career/${companyId}/documents/${docId}/download`, filename),
 
-    // ── Report / download URLs — backend renders the HTML/PDF directly ───────
-    reportHtmlUrl:  (id) => withAuthQuery(apiUrl(`/career/evaluations/${id}/report.html`)),
-    downloadUrl:    (id) => withAuthQuery(apiUrl(`/career/download/${id}`)),
+    // ── Report / download — fetched with Bearer auth and opened as a blob URL,
+    //    so the JWT never appears in URLs, history, or referrers.
+    openReportTab:        (id) => openAuthenticatedTab(`/career/evaluations/${id}/report.html`),
+    downloadEvaluationPdf: (id, filename) => downloadAuthenticatedFile(`/career/download/${id}`, filename),
     tailoredResume: (id) => apiCall(`/career/tailored-resume/${id}`, { method: 'POST' }),
   },
 
