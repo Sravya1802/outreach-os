@@ -64,13 +64,13 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ### Pending — needs my input or has an unfixed bug
 1. **Outreach CRM "0 contacts"** — code fix is committed (`8a55549`) so `/outreach` now calls the JWT-attaching API wrapper. After Vercel deploy, verify as `lakshmisravyar@gmail.com` that `/outreach` shows 36 contacts (14 with email). If still empty, check Settings page → red Account box and DevTools Network `all-contacts` `Authorization` header.
 2. ~~**Email + DM templates**~~ — implemented in the current uncommitted stabilization pass: `/outreach/templates` is now an editable per-user template UI, backend stores templates in `meta.outreach_templates`, and `generate` routes pass saved templates into the AI prompt as style anchors.
-3. **Role Eligibility / Ranked Roles loading bug** — code fix committed and pushed (`0d0e534`) to prevent blank render when `/career/ranked` returns score values as strings, but user still saw a blank `/apply/ranked` screen. Audit pass mounted the existing root ErrorBoundary so the next browser repro should show an actionable stack trace instead of a blank page. After deploy, verify `/apply/ranked`; if it still fails, capture the rendered ErrorBoundary stack or DevTools Console.
+3. **Role Eligibility / Ranked Roles loading bug** — hardened again in frontend `6f84fda`: `/apply/ranked` now has a visible error/retry state and normalizes non-string `fit_assessment` values before rendering. Vercel route returns HTTP 200. Browser-verify while logged in; if it still fails, capture the rendered error or DevTools Console.
 4. ~~**Sign in / Sign up UI**~~ — implemented in the current uncommitted stabilization pass: Login now has Sign in / Sign up tabs, with magic link kept as a secondary sign-in option.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
-6. **Audit follow-ups** — frontend lint now exits 0 but still prints 4 `exhaustive-deps` warnings; backend now has a package-lock and `npm audit --prefix backend --audit-level=high` passes; no typecheck/e2e scripts; authenticated browser flows remain unverified without a live session token.
+6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Still no typecheck/e2e scripts; authenticated browser flows remain unverified without a live session token.
 
 ### Deferred / acknowledged
-- Apify hit monthly limit → LinkedIn/Wellfound/Google Jobs scrapers blocked until reset. I'll update the Apify API key.
+- Apify actor quota/key can still block LinkedIn/Wellfound/Google Jobs scrapers even when `/api/health` says `has_apify: true`; latest frontend `6f84fda` refreshes `/credits/status?refresh=true` after scrape failures so the sidebar status should turn red/critical quickly. If actors keep returning 0 or quota errors, fix is Apify account/quota/actor choice, not only app code.
 - ~~"Apify status card should turn red when limit hit"~~ — fixed in frontend `346c0b2` and backend `f929862`; VM deployed and public health check passed on 2026-04-25.
 - ~~"Top Companies filter on Companies page is broken"~~ — fixed in frontend `463f756` + backend `86eaeed` (server-side sort + source/status filters); VM deployed through `d0016ee`.
 - ~~"Companies page shows 0/loading first then populates"~~ — fixed in `7f42c6d`; tightened in `4584276`; final UX fix in `0b59c6d` uses per-user sessionStorage cache + parent stats snapshot so the page paints last known counts immediately and refreshes silently.
@@ -81,7 +81,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ### Architectural follow-ups (no urgency)
 - Migration 005 to drop `user_id DEFAULT` after fixing 5 TODO(auth) markers in cron/startup paths (server.js daily refresh, jobs.js runReclassifyUnclassified, autoApplier comment).
 - "System user" concept for background paths that genuinely have no request context.
-- Schema follow-up: migration 003 added `user_id`, but several legacy UNIQUE constraints remain global, especially `jobs.name UNIQUE` plus `ON CONFLICT (name)` insert paths. This can silently block a clean second user from importing/scraping the same company. Needs a planned migration to replace global uniqueness with per-user uniqueness where intended.
+- ~~Schema follow-up: replace global UNIQUE constraints with per-user uniqueness~~ — fixed in backend `5cce7a7`; migrations `005_per_user_uniqueness.sql` + `006_auto_apply_safety_profile.sql` applied on Supabase through the VM on 2026-04-26.
 
 ## How I work
 
@@ -95,10 +95,10 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 ## What's likely next
 
 If the session resumes my work as of this snapshot:
-1. **Browser-verify** Companies no longer flashes `0`/loading on revisit, Job Scraper per-source buttons return real found/already-in-DB counts, Outreach CRM fix, Auto Apply tab order, Completed tab, and `/apply/ranked` after Vercel finishes deploying `main`.
-2. **Receive** email + DM templates → wire into `backend/services/ai.js` prompt + populate `/outreach/templates` UI with editable template store (per-user, in `meta` table).
-3. **Receive** Role Eligibility DevTools error → fix.
-4. **Quick wins left:** Login tabs, Supabase magic-link rate-limit config, and any browser-verified regressions.
+1. **Browser-verify** after hard refresh: `/apply/ranked`, `/apply/auto-apply` Setup/Queue/Completed/History, `/discover/scraper`, `/discover/companies`, `/outreach`, and mobile sidebar layout.
+2. **Auto Apply setup action:** open Career Ops / Auto-Apply Setup, review the expanded profile fields, explicitly check Auto Apply consent, save, then preview/queue. Backend now refuses queue/run without consent.
+3. **Apify reality check:** retry scrapers and watch sidebar API Status. If Apify turns red or sources still return quota/no-data results, check Apify console actor limits and upgrade/swap actors.
+4. **Quick wins left:** Supabase magic-link rate-limit config, no typecheck/e2e scripts, and any browser-verified regressions.
 
 Confirm you can read `~/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/MEMORY.md` and the auto-loaded memory files, then ask me which item I want to start with.
 
@@ -122,6 +122,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-26 — Production hardening fixes deployed
+- **What:** Shipped the final audit fix pass: per-user DB uniqueness migrations, expanded Auto Apply profile + explicit consent gate, safer Auto Apply preview/queue filters, Ranked Roles visible error state, scraper failure/status refresh, mobile/tablet layout safeguards, and lint cleanup.
+- **Files:** [frontend/src/App.jsx:1](frontend/src/App.jsx#L1), [frontend/src/api.js:1](frontend/src/api.js#L1), [frontend/src/components/AutoApplyPage.jsx:1](frontend/src/components/AutoApplyPage.jsx#L1), [frontend/src/components/CareerOps.jsx:1](frontend/src/components/CareerOps.jsx#L1), [frontend/src/components/CareerOpsPage.jsx:1](frontend/src/components/CareerOpsPage.jsx#L1), [frontend/src/components/ScraperPage.jsx:1](frontend/src/components/ScraperPage.jsx#L1), [frontend/src/index.css:1](frontend/src/index.css#L1), [../outreach-local/backend/routes/careerOps.js:1](../outreach-local/backend/routes/careerOps.js#L1), [../outreach-local/backend/services/autoApplier.js:1](../outreach-local/backend/services/autoApplier.js#L1), [../outreach-local/supabase/migrations/005_per_user_uniqueness.sql:1](../outreach-local/supabase/migrations/005_per_user_uniqueness.sql#L1), [../outreach-local/supabase/migrations/006_auto_apply_safety_profile.sql:1](../outreach-local/supabase/migrations/006_auto_apply_safety_profile.sql#L1)
+- **Status:** committed/pushed and deployed. Frontend `main`: `6f84fda`; backend `phase-4-pg`: `5cce7a7`. Vercel routes `/apply/auto-apply` and `/apply/ranked` return HTTP 200 with the new deployment. VM fast-forwarded to `5cce7a7`, PM2 is online, public backend health is OK, and Supabase migrations 005/006 were applied. Checks passed: frontend tests 7/7, backend tests 12/12, frontend lint clean, frontend build passes with only the existing large-bundle warning, frontend/backend audits clean, backend JS syntax sweep passes.
+- **Follow-up:** User should hard-refresh, save Auto Apply consent/preferences before queueing, and browser-verify `/apply/ranked`, `/apply/auto-apply`, `/discover/scraper`, `/discover/companies`, `/outreach`, and mobile layout while logged in. Apify actors may still fail if account quota/actor limits are exhausted; the app now surfaces that faster, but quota itself is external.
 
 ### 2026-04-26 — Auto-apply from Companies + Portal Scanner US-only + Resume Library cleanup
 - **What:**
