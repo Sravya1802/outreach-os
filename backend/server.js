@@ -17,7 +17,7 @@ import contactsRouter   from './routes/contacts.js';
 import emailsRouter     from './routes/emails.js';
 import generateRouter   from './routes/generate.js';
 import prospectsRouter  from './routes/prospects.js';
-import db from './db.js';
+import db, { one, all, run, pingDb } from './db.js';
 import jobsRouter from './routes/jobs.js';
 import { runReclassifyUnclassified } from './routes/jobs.js';
 import internRolesRouter from './routes/internRoles.js';
@@ -27,16 +27,54 @@ import importSheetRouter from './routes/importSheet.js';
 import careerOpsRouter   from './routes/careerOps.js';
 import automationsRouter  from './routes/automations.js';
 import ycRouter           from './routes/yc.js';
+import { requireAuth }    from './middleware/requireAuth.js';
 import { scrapeAllSources } from './services/scraper.js';
 import { importStartupSheet } from './services/startupSheet.js';
 import { checkAllCredits }   from './services/creditChecker.js';
 
 const app = express();
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://127.0.0.1:5173'] }));
-app.use(express.json());
+// ── CORS — allow local dev + configured production frontend origin(s) ──────
+// Single origin: set FRONTEND_ORIGIN=https://outreach-jt.vercel.app
+// Multiple origins (e.g. preview URLs): set CORS_ORIGINS="https://a.vercel.app,https://b.vercel.app"
+const DEFAULT_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const envOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+const CORS_ORIGINS = [...new Set([
+  ...DEFAULT_ORIGINS,
+  ...envOrigins,
+  ...(FRONTEND_ORIGIN ? [FRONTEND_ORIGIN] : []),
+])];
+app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
+app.use(express.json({ limit: '10mb' }));
 
 app.use('/api', rateLimit({ windowMs: 60_000, max: 200, standardHeaders: true, legacyHeaders: false }));
+
+// ── Public endpoints ─────────────────────────────────────────────────────────
+// /api/health is intentionally unauthenticated — monitoring, pm2 keep-alive,
+// and nginx health checks all hit it. Declared before requireAuth.
+app.get('/api/health', (req, res) => {
+  res.json({
+    status:       'ok',
+    ai_provider:  process.env.AI_PROVIDER || 'gemini',
+    has_gemini:   !!process.env.GEMINI_API_KEY   && process.env.GEMINI_API_KEY   !== 'your_gemini_key_here',
+    has_openai:   !!process.env.OPENAI_API_KEY,
+    has_apify:    !!process.env.APIFY_API_TOKEN  && process.env.APIFY_API_TOKEN  !== 'your_apify_token_here',
+    has_apollo:   !!process.env.APOLLO_API_KEY   && process.env.APOLLO_API_KEY   !== 'your_apollo_key_here',
+    has_serper:   !!process.env.SERPER_API_KEY,
+    has_hunter:   !!process.env.HUNTER_API_KEY,
+    has_prospeo:  !!process.env.PROSPEO_API_KEY,
+    has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
+    auth_mode:    process.env.AUTH_MODE || 'log-only',
+  });
+});
+
+// ── Auth middleware for everything else under /api ──────────────────────────
+// Controlled by AUTH_MODE env var. See backend/middleware/requireAuth.js.
+app.use('/api', requireAuth);
 
 app.use('/api/companies',  companiesRouter);
 app.use('/api/contacts',   contactsRouter);
@@ -69,7 +107,7 @@ app.post('/api/jobs/refresh-all', async (req, res) => {
 
   try {
     emit('progress', { message: 'Starting full refresh...' });
-    await runDailyRefresh(msg => emit('progress', { message: msg }));
+    await runDailyRefresh(req.user.id, msg => emit('progress', { message: msg }));
     emit('complete', { message: 'Refresh complete!' });
     if (!closed) res.end();
   } catch (err) {
@@ -79,9 +117,12 @@ app.post('/api/jobs/refresh-all', async (req, res) => {
 });
 
 // ── Last refresh time endpoint ────────────────────────────────────────────────
-app.get('/api/jobs/last-refresh', (req, res) => {
+app.get('/api/jobs/last-refresh', async (req, res) => {
   try {
-    const row = db.prepare("SELECT value FROM meta WHERE key = 'lastRefresh'").get();
+    const row = await one(
+      "SELECT value FROM meta WHERE key = 'lastRefresh' AND user_id = $1",
+      [req.user.id]
+    );
     res.json({ lastRefresh: row?.value || null });
   } catch (err) {
     res.json({ lastRefresh: null });
@@ -89,98 +130,172 @@ app.get('/api/jobs/last-refresh', (req, res) => {
 });
 
 // ── Stats endpoint ────────────────────────────────────────────────────────────
-app.get('/api/stats', (req, res) => {
+app.get('/api/stats', async (req, res) => {
   try {
-    const totalCompanies    = db.prepare("SELECT COUNT(*) as n FROM jobs").get().n;
-    const totalContacts     = db.prepare("SELECT COUNT(*) as n FROM job_contacts WHERE email IS NOT NULL AND email != ''").get().n;
-    const totalLinkedInContacts = db.prepare("SELECT COUNT(*) as n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != ''").get().n;
-    const totalSent         = db.prepare("SELECT COUNT(*) as n FROM outreach WHERE status = 'sent'").get().n;
-    const totalReplied      = db.prepare("SELECT COUNT(*) as n FROM outreach WHERE status = 'replied'").get().n;
-    const activeSources     = db.prepare("SELECT COUNT(DISTINCT source) as n FROM jobs WHERE source IS NOT NULL AND source != ''").get().n;
-    const ycImported        = db.prepare("SELECT COUNT(*) as n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != ''").get().n;
-    let totalApplications   = 0;
-    try { totalApplications = db.prepare("SELECT COUNT(*) as n FROM company_applications WHERE status != 'interested'").get().n; } catch (_) {}
+    const [
+      c1, c2, c3, c4, c5, c6, c7, c8,
+    ] = await Promise.all([
+      one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'sent' AND user_id = $1", [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'replied' AND user_id = $1", [req.user.id]),
+      one(`
+        SELECT COUNT(DISTINCT trim(src))::int AS n
+        FROM jobs
+        CROSS JOIN LATERAL unnest(string_to_array(source, ',')) AS s(src)
+        WHERE source IS NOT NULL AND source != '' AND trim(s.src) != '' AND user_id = $1
+      `, [req.user.id]),
+      one("SELECT COUNT(*)::int AS n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != '' AND user_id = $1", [req.user.id]),
+    ]);
+    let totalApplications = 0;
+    try {
+      const r = await one(
+        "SELECT COUNT(*)::int AS n FROM company_applications WHERE status != 'interested' AND user_id = $1",
+        [req.user.id]
+      );
+      totalApplications = r?.n || 0;
+    } catch (_) {}
+    const totalSent = c5?.n || 0;
+    const totalReplied = c6?.n || 0;
+
+    // Last scrape summary — written by /jobs/scrape; rendered on Dashboard
+    let lastScrape = null;
+    try {
+      const row = await one(
+        "SELECT value FROM meta WHERE user_id = $1 AND key = 'last_scrape_summary'",
+        [req.user.id]
+      );
+      if (row?.value) lastScrape = JSON.parse(row.value);
+    } catch (_) {}
+
     res.json({
-      totalCompanies,
-      totalContacts,
-      totalLinkedInContacts,
+      totalCompanies: c1?.n || 0,
+      totalContacts: c2?.n || 0,
+      contactsWithEmail: c3?.n || 0,
+      totalLinkedInContacts: c4?.n || 0,
       totalSent,
       responseRate: totalSent > 0 ? Math.round((totalReplied / totalSent) * 100) : 0,
-      activeSources,
-      ycImported,
+      activeSources: c7?.n || 0,
+      ycImported: c8?.n || 0,
       totalApplications,
+      lastScrape,
     });
   } catch (err) {
-    res.json({ totalCompanies: 0, totalContacts: 0, totalSent: 0, responseRate: 0, activeSources: 0 });
+    console.error('[stats]', err);
+    res.json({ totalCompanies: 0, totalContacts: 0, contactsWithEmail: 0, totalLinkedInContacts: 0, totalSent: 0, responseRate: 0, activeSources: 0 });
   }
 });
 
 // ── Job Dashboard aggregate metrics ───────────────────────────────────────────
-app.get('/api/dashboard/job-metrics', (req, res) => {
+app.get('/api/dashboard/job-metrics', async (req, res) => {
   try {
-    const totalCompanies      = db.prepare("SELECT COUNT(*) AS n FROM jobs").get().n;
-    const totalEvaluations    = db.prepare("SELECT COUNT(*) AS n FROM evaluations").get().n;
-    const totalContacts       = db.prepare("SELECT COUNT(*) AS n FROM job_contacts").get().n;
-    const contactsWithEmail   = db.prepare("SELECT COUNT(*) AS n FROM job_contacts WHERE email IS NOT NULL AND email != ''").get().n;
-    const contactsWithLinkedIn= db.prepare("SELECT COUNT(*) AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != ''").get().n;
-    const outreachGenerated   = db.prepare("SELECT COUNT(*) AS n FROM job_contacts WHERE generated_subject IS NOT NULL OR generated_dm IS NOT NULL").get().n;
-    const outreachSent        = db.prepare("SELECT COUNT(*) AS n FROM job_contacts WHERE status IN ('sent','dm_sent','email_sent')").get().n;
-    const outreachReplied     = db.prepare("SELECT COUNT(*) AS n FROM job_contacts WHERE status = 'replied'").get().n;
+    const uid = req.user.id;
+    // Previously 18 separate COUNT queries scanning the same tables over and
+    // over (~N × index-scan per page load). Collapsed to 3 aggregate queries
+    // using FILTER clauses — one per tracked table.
+    const [jcAgg, evalAgg, jobsAgg, gradeDistRows, topOutreachCompanies, recentEvals, recentApplied] = await Promise.all([
+      // job_contacts: 6 counters rolled into one scan.
+      one(`SELECT
+             COUNT(*)::int                                                           AS total,
+             COUNT(*) FILTER (WHERE email IS NOT NULL AND email != '')::int           AS with_email,
+             COUNT(*) FILTER (WHERE linkedin_url IS NOT NULL AND linkedin_url != '')::int AS with_linkedin,
+             COUNT(*) FILTER (WHERE generated_subject IS NOT NULL OR generated_dm IS NOT NULL)::int AS outreach_generated,
+             COUNT(*) FILTER (WHERE status IN ('sent','dm_sent','email_sent'))::int  AS outreach_sent,
+             COUNT(*) FILTER (WHERE status = 'replied')::int                          AS outreach_replied
+           FROM job_contacts WHERE user_id = $1`, [uid]),
+      // evaluations: 10 counters rolled into one scan.
+      one(`SELECT
+             COUNT(*)::int                                                                                    AS total,
+             COUNT(*) FILTER (WHERE apply_status IS NULL OR apply_status = 'not_started')::int                AS funnel_evaluated,
+             COUNT(*) FILTER (WHERE apply_status IN ('opened','queued','submitted'))::int                     AS funnel_applied,
+             COUNT(*) FILTER (WHERE apply_status = 'submitted')::int                                          AS funnel_submitted,
+             COUNT(*) FILTER (WHERE apply_status = 'responded')::int                                          AS funnel_responded,
+             COUNT(*) FILTER (WHERE apply_status = 'interview')::int                                          AS funnel_interview,
+             COUNT(*) FILTER (WHERE apply_status = 'offer')::int                                              AS funnel_offer,
+             COUNT(*) FILTER (WHERE apply_status = 'rejected')::int                                           AS funnel_rejected,
+             COUNT(*) FILTER (WHERE apply_mode = 'manual' AND apply_status IS NOT NULL AND apply_status != 'not_started')::int AS mode_manual,
+             COUNT(*) FILTER (WHERE apply_mode = 'auto'   AND apply_status IS NOT NULL AND apply_status != 'not_started')::int AS mode_auto
+           FROM evaluations WHERE user_id = $1`, [uid]),
+      // jobs: just total companies (1 counter, kept separate since jobs table
+      // is by far the largest and we don't want to pollute its scan with
+      // unrelated filters).
+      one("SELECT COUNT(*)::int AS total FROM jobs WHERE user_id = $1", [uid]),
+      all("SELECT grade, COUNT(*)::int AS n FROM evaluations WHERE grade IS NOT NULL AND user_id = $1 GROUP BY grade", [uid]),
+      all(`
+        SELECT j.name, j.category,
+               COUNT(jc.id)::int AS contact_count,
+               SUM(CASE WHEN jc.email IS NOT NULL AND jc.email != '' THEN 1 ELSE 0 END)::int AS email_count,
+               SUM(CASE WHEN jc.status IN ('sent','dm_sent','email_sent') THEN 1 ELSE 0 END)::int AS sent_count,
+               SUM(CASE WHEN jc.status = 'replied' THEN 1 ELSE 0 END)::int AS replied_count
+        FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id AND jc.user_id = $1
+        WHERE j.user_id = $1
+        GROUP BY j.id, j.name, j.category
+        HAVING COUNT(jc.id) > 0
+        ORDER BY contact_count DESC LIMIT 10
+      `, [uid]),
+      all(`
+        SELECT 'evaluation' AS kind, id, company_name, job_title, grade, created_at
+        FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10
+      `, [uid]),
+      all(`
+        SELECT 'applied' AS kind, id, company_name, job_title, apply_status, applied_at
+        FROM evaluations WHERE applied_at IS NOT NULL AND user_id = $1 ORDER BY applied_at DESC LIMIT 10
+      `, [uid]),
+    ]);
 
-    // Apply funnel breakdown from evaluations.apply_status
+    // Unpack into the same shape downstream code expects.
+    const totalCompaniesR      = { n: jobsAgg?.total      || 0 };
+    const totalEvaluationsR    = { n: evalAgg?.total      || 0 };
+    const totalContactsR       = { n: jcAgg?.total        || 0 };
+    const contactsWithEmailR   = { n: jcAgg?.with_email   || 0 };
+    const contactsWithLinkedInR= { n: jcAgg?.with_linkedin || 0 };
+    const outreachGeneratedR   = { n: jcAgg?.outreach_generated || 0 };
+    const outreachSentR        = { n: jcAgg?.outreach_sent || 0 };
+    const outreachRepliedR     = { n: jcAgg?.outreach_replied || 0 };
+    const funnelEvaluatedR     = { n: evalAgg?.funnel_evaluated || 0 };
+    const funnelAppliedR       = { n: evalAgg?.funnel_applied   || 0 };
+    const funnelSubmittedR     = { n: evalAgg?.funnel_submitted || 0 };
+    const funnelRespondedR     = { n: evalAgg?.funnel_responded || 0 };
+    const funnelInterviewR     = { n: evalAgg?.funnel_interview || 0 };
+    const funnelOfferR         = { n: evalAgg?.funnel_offer     || 0 };
+    const funnelRejectedR      = { n: evalAgg?.funnel_rejected  || 0 };
+    const modeManualR          = { n: evalAgg?.mode_manual      || 0 };
+    const modeAutoR            = { n: evalAgg?.mode_auto        || 0 };
+
     const appFunnel = {
-      evaluated:  db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status IS NULL OR apply_status = 'not_started'").get().n,
-      applied:    db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status IN ('opened','queued','submitted')").get().n,
-      submitted:  db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status = 'submitted'").get().n,
-      responded:  db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status = 'responded'").get().n,
-      interview:  db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status = 'interview'").get().n,
-      offer:      db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status = 'offer'").get().n,
-      rejected:   db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_status = 'rejected'").get().n,
+      evaluated: funnelEvaluatedR?.n || 0,
+      applied:   funnelAppliedR?.n || 0,
+      submitted: funnelSubmittedR?.n || 0,
+      responded: funnelRespondedR?.n || 0,
+      interview: funnelInterviewR?.n || 0,
+      offer:     funnelOfferR?.n || 0,
+      rejected:  funnelRejectedR?.n || 0,
     };
-
-    // Apply mode breakdown
     const applyModes = {
-      manual: db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_mode = 'manual' AND apply_status NOT IN ('not_started') AND apply_status IS NOT NULL").get().n,
-      auto:   db.prepare("SELECT COUNT(*) AS n FROM evaluations WHERE apply_mode = 'auto'   AND apply_status NOT IN ('not_started') AND apply_status IS NOT NULL").get().n,
+      manual: modeManualR?.n || 0,
+      auto:   modeAutoR?.n || 0,
     };
+    const gradeDist = (gradeDistRows || []).reduce(
+      (acc, r) => { acc[r.grade] = r.n; return acc; },
+      { A: 0, B: 0, C: 0, D: 0, F: 0 }
+    );
 
-    // Grade distribution across all evaluations
-    const gradeDist = db.prepare("SELECT grade, COUNT(*) AS n FROM evaluations WHERE grade IS NOT NULL GROUP BY grade").all()
-      .reduce((acc, r) => { acc[r.grade] = r.n; return acc; }, { A:0, B:0, C:0, D:0, F:0 });
-
-    // Top 10 companies by outreach volume (with emails OR dms) — helps identify where effort went
-    const topOutreachCompanies = db.prepare(`
-      SELECT j.name, j.category,
-             COUNT(jc.id) AS contact_count,
-             SUM(CASE WHEN jc.email IS NOT NULL AND jc.email != '' THEN 1 ELSE 0 END) AS email_count,
-             SUM(CASE WHEN jc.status IN ('sent','dm_sent','email_sent') THEN 1 ELSE 0 END) AS sent_count,
-             SUM(CASE WHEN jc.status = 'replied' THEN 1 ELSE 0 END) AS replied_count
-      FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id
-      GROUP BY j.id HAVING contact_count > 0
-      ORDER BY contact_count DESC LIMIT 10
-    `).all();
-
-    // Recent timeline — last 10 actions across evaluations + contacts
-    const recentEvals = db.prepare(`
-      SELECT 'evaluation' AS kind, id, company_name, job_title, grade, created_at
-      FROM evaluations ORDER BY created_at DESC LIMIT 10
-    `).all();
-    const recentApplied = db.prepare(`
-      SELECT 'applied' AS kind, id, company_name, job_title, apply_status, applied_at
-      FROM evaluations WHERE applied_at IS NOT NULL ORDER BY applied_at DESC LIMIT 10
-    `).all();
-
+    const outreachSent = outreachSentR?.n || 0;
+    const outreachReplied = outreachRepliedR?.n || 0;
+    const totalEvaluations = totalEvaluationsR?.n || 0;
     const responseRate = outreachSent > 0 ? Math.round((outreachReplied / outreachSent) * 100) : 0;
     const applyRate    = totalEvaluations > 0 ? Math.round((appFunnel.applied / totalEvaluations) * 100) : 0;
 
     res.json({
       summary: {
-        totalCompanies,
+        totalCompanies: totalCompaniesR?.n || 0,
         totalEvaluations,
-        totalContacts,
-        contactsWithEmail,
-        contactsWithLinkedIn,
-        outreachGenerated,
+        totalContacts: totalContactsR?.n || 0,
+        contactsWithEmail: contactsWithEmailR?.n || 0,
+        contactsWithLinkedIn: contactsWithLinkedInR?.n || 0,
+        outreachGenerated: outreachGeneratedR?.n || 0,
         outreachSent,
         outreachReplied,
         responseRate,
@@ -200,24 +315,16 @@ app.get('/api/dashboard/job-metrics', (req, res) => {
 });
 
 // ── Activity feed endpoint ────────────────────────────────────────────────────
-app.get('/api/activity', (req, res) => {
+app.get('/api/activity', async (req, res) => {
   try {
-    const rows = db.prepare('SELECT * FROM activity_log ORDER BY created_at DESC LIMIT 10').all();
+    const rows = await all(
+      'SELECT * FROM activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
+      [req.user.id]
+    );
     res.json({ activity: rows });
   } catch (err) {
     res.json({ activity: [] });
   }
-});
-
-app.get('/api/health', (req, res) => {
-  res.json({
-    status:       'ok',
-    ai_provider:  process.env.AI_PROVIDER || 'gemini',
-    has_apify:    !!process.env.APIFY_API_TOKEN  && process.env.APIFY_API_TOKEN  !== 'your_apify_token_here',
-    has_apollo:   !!process.env.APOLLO_API_KEY   && process.env.APOLLO_API_KEY   !== 'your_apollo_key_here',
-    has_gemini:   !!process.env.GEMINI_API_KEY   && process.env.GEMINI_API_KEY   !== 'your_gemini_key_here',
-    has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
-  });
 });
 
 app.use((err, req, res, next) => {
@@ -226,7 +333,9 @@ app.use((err, req, res, next) => {
 });
 
 // ── Daily refresh logic ───────────────────────────────────────────────────────
-async function runDailyRefresh(onProgress = null) {
+// userId scopes the per-user state reads/writes (subcategory list, meta upsert,
+// startup-sheet import). Cron passes null for now — see TODO below.
+async function runDailyRefresh(userId, onProgress = null) {
   function log(msg) {
     console.log('[DailyRefresh]', msg);
     if (onProgress) onProgress(msg);
@@ -236,14 +345,27 @@ async function runDailyRefresh(onProgress = null) {
 
   // 1. Re-scrape previously-scraped subcategories
   try {
-    const subs = db.prepare(`
-      SELECT DISTINCT category, subcategory, COUNT(*) as count
-      FROM jobs
-      WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL
-      GROUP BY category, subcategory
-      HAVING count > 2
-      LIMIT 20
-    `).all();
+    // TODO(auth): source of userId — cron has none; when userId is null we
+    // fall back to a union across all users' jobs so the scraper still picks
+    // up representative subcategories. Once a multi-tenant scheduler exists
+    // this should iterate per user instead.
+    const subs = userId
+      ? await all(`
+          SELECT category, subcategory, COUNT(*)::int AS count
+          FROM jobs
+          WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL AND user_id = $1
+          GROUP BY category, subcategory
+          HAVING COUNT(*) > 2
+          LIMIT 20
+        `, [userId])
+      : await all(`
+          SELECT category, subcategory, COUNT(*)::int AS count
+          FROM jobs
+          WHERE source NOT IN ('startup_sheet') AND subcategory IS NOT NULL
+          GROUP BY category, subcategory
+          HAVING COUNT(*) > 2
+          LIMIT 20
+        `);
 
     log(`Refreshing ${subs.length} subcategories...`);
     for (const sub of subs) {
@@ -260,21 +382,29 @@ async function runDailyRefresh(onProgress = null) {
   }
 
   // 2. Re-import startup sheet
-  if (process.env.STARTUP_SHEET_URL) {
+  if (process.env.STARTUP_SHEET_URL && userId) {
     try {
       log('Refreshing startup sheet...');
-      await importStartupSheet(msg => log(msg));
+      await importStartupSheet(userId, msg => log(msg));
     } catch (err) {
       log('Startup sheet refresh failed: ' + err.message);
     }
+  } else if (process.env.STARTUP_SHEET_URL) {
+    // TODO(auth): source of userId — cron-triggered refresh skips the startup
+    // sheet import until we have a way to attribute new rows to a user.
+    log('Skipping startup sheet refresh: no userId in cron context');
   }
 
-  // 3. Reclassify unclassified companies
-  try {
-    log('Reclassifying unclassified companies...');
-    await runReclassifyUnclassified();
-  } catch (err) {
-    log('Reclassify failed: ' + err.message);
+  // 3. Reclassify unclassified companies (per-user only)
+  if (userId) {
+    try {
+      log('Reclassifying unclassified companies...');
+      await runReclassifyUnclassified(userId);
+    } catch (err) {
+      log('Reclassify failed: ' + err.message);
+    }
+  } else {
+    log('Skipping reclassify: no userId in cron context');
   }
 
   // 4. Refresh credit status cache
@@ -285,52 +415,90 @@ async function runDailyRefresh(onProgress = null) {
     log('Credit check failed: ' + err.message);
   }
 
-  // 5. Record last refresh time
-  db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('lastRefresh', ?)").run(new Date().toISOString());
+  // 5. Record last refresh time (upsert) — user-scoped meta key
+  if (userId) {
+    await run(
+      "INSERT INTO meta (key, value, user_id) VALUES ('lastRefresh', $1, $2) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value",
+      [new Date().toISOString(), userId],
+    );
+  }
   log('Daily refresh complete — ' + new Date().toISOString());
 }
 
 // ── Cron: run every day at 6 AM UTC ──────────────────────────────────────────
+// TODO(auth): source of userId — the cron has no request context. For now we
+// call runDailyRefresh(null) which skips per-user writes; a multi-tenant
+// scheduler should iterate over active users and invoke this once per user.
 cron.schedule('0 6 * * *', () => {
-  runDailyRefresh().catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
+  runDailyRefresh(null).catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
+});
+
+// ── Cron: nightly auto-apply pipeline at 07:00 UTC (≈2am Central) ────────────
+// Runs scan → evaluate → fit-filter (score ≥ minScore) → queue → submit for
+// every user who has nightly_pipeline_settings.enabled=true. Honors per-user
+// settings: roleType, minScore, maxApps, useLibraryResume. The pipeline body
+// lives in routes/careerOps.js but the cron context has no req object, so we
+// call the underlying services directly via runNightlyPipelineForUser
+// (imported at top of file). Skipped silently if user has no resume or no
+// settings row at all.
+import { runNightlyPipelineForUser } from './services/nightlyPipeline.js';
+cron.schedule('0 7 * * *', async () => {
+  try {
+    const users = await all(
+      `SELECT user_id, value FROM meta WHERE key = 'nightly_pipeline_settings'`
+    );
+    for (const u of users) {
+      try {
+        const cfg = u.value ? JSON.parse(u.value) : {};
+        if (!cfg.enabled) continue;
+        console.log(`[nightly-cron] starting pipeline for user ${u.user_id}`);
+        const summary = await runNightlyPipelineForUser(u.user_id, cfg);
+        console.log(`[nightly-cron] user ${u.user_id} — applied=${summary.applied} fits=${summary.fits} needsReview=${summary.needsReview}`);
+      } catch (e) { console.error(`[nightly-cron] user ${u.user_id} failed:`, e.message); }
+    }
+  } catch (err) { console.error('[nightly-cron] dispatcher failed:', err.message); }
 });
 
 // ── DB wipe on start (one-shot, auto-disables itself) ────────────────────────
-if (process.env.WIPE_DB_ON_START === 'true') {
+// NOTE: wipe is a dev-only bootstrap; it intentionally clears all rows across
+// all users and is gated by WIPE_DB_ON_START=true.
+async function maybeWipeDb() {
+  if (process.env.WIPE_DB_ON_START !== 'true') return;
   try {
-    db.exec(`
-      DELETE FROM job_contacts;
-      DELETE FROM jobs;
-      DELETE FROM prospects;
-      DELETE FROM contacts;
-      DELETE FROM outreach;
-      DELETE FROM companies;
-      DELETE FROM meta;
-    `);
+    await run('DELETE FROM job_contacts');
+    await run('DELETE FROM jobs');
+    await run('DELETE FROM prospects');
+    await run('DELETE FROM contacts');
+    await run('DELETE FROM outreach');
+    await run('DELETE FROM companies');
+    await run('DELETE FROM meta');
     console.log('[WIPE_DB] All tables wiped.');
     // Flip the flag to false so it never runs again on next restart
     const envPath = path.join(__dirname, '..', '.env');
-    import('fs').then(({ default: fs }) => {
-      const content = fs.readFileSync(envPath, 'utf8');
-      fs.writeFileSync(envPath, content.replace(/^WIPE_DB_ON_START=true/m, 'WIPE_DB_ON_START=false'));
-      console.log('[WIPE_DB] Flag auto-disabled in .env');
-    });
+    const fs = await import('fs');
+    const content = fs.default.readFileSync(envPath, 'utf8');
+    fs.default.writeFileSync(envPath, content.replace(/^WIPE_DB_ON_START=true/m, 'WIPE_DB_ON_START=false'));
+    console.log('[WIPE_DB] Flag auto-disabled in .env');
   } catch (err) {
     console.error('[WIPE_DB] Failed:', err.message);
   }
 }
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Backend on port ${PORT}`);
-  // Auto-reclassify unclassified companies in the background on startup
-  if (process.env.WIPE_DB_ON_START !== 'true') {
-    try {
-      const { n } = db.prepare("SELECT COUNT(*) as n FROM jobs WHERE category = 'Unclassified' OR category IS NULL OR confidence < 0.40").get();
-      if (n > 0) {
-        console.log(`[startup] ${n} unclassified/low-confidence companies — starting background reclassification...`);
-        runReclassifyUnclassified().catch(err => console.error('[startup reclassify]', err.message));
-      }
-    } catch (err) { console.error('[startup check]', err.message); }
-  }
+
+async function startup() {
+  await pingDb();
+  await maybeWipeDb();
+
+  app.listen(PORT, () => {
+    console.log(`Backend on port ${PORT}`);
+    // Per-user reclassification now runs on demand via /api/jobs/reclassify-unclassified
+    // and as part of the daily refresh job (when a userId is supplied). The previous
+    // global startup pass mutated all users' jobs, so it has been removed.
+  });
+}
+
+startup().catch(err => {
+  console.error('[startup] FATAL:', err);
+  process.exit(1);
 });

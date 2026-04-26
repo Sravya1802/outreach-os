@@ -3,7 +3,7 @@
  * Requires the sheet to be shared as "Anyone with the link can view".
  */
 
-import db from '../db.js';
+import db, { run } from '../db.js';
 
 const ATS_SLUG_MAP = {}; // cache: companySlug -> { ats, token }
 
@@ -111,7 +111,8 @@ async function fetchCSRoles(ats, token) {
   return [];
 }
 
-export async function importStartupSheet(onProgress = null) {
+export async function importStartupSheet(userId, onProgress = null) {
+  if (!userId) throw new Error('importStartupSheet requires userId (caller must pass req.user.id)');
   const sheetUrl = process.env.STARTUP_SHEET_URL;
   if (!sheetUrl) throw new Error('STARTUP_SHEET_URL not set in .env');
 
@@ -156,10 +157,11 @@ export async function importStartupSheet(onProgress = null) {
   const BATCH = 10;
   let withRoles = 0, noRoles = 0, errors = 0;
 
-  const insertStmt = db.prepare(`
-    INSERT OR IGNORE INTO jobs (name, domain, url, category, subcategory, source, is_hiring)
-    VALUES (?, ?, ?, 'Startups', ?, 'startup_sheet', ?)
-  `);
+  const INSERT_SQL = `
+    INSERT INTO jobs (name, domain, url, category, subcategory, source, is_hiring, user_id)
+    VALUES ($1, $2, $3, 'Startups', $4, 'startup_sheet', $5, $6)
+    ON CONFLICT (user_id, name) DO NOTHING
+  `;
 
   for (let i = 0; i < companies.length; i += BATCH) {
     const batch = companies.slice(i, i + BATCH);
@@ -180,7 +182,7 @@ export async function importStartupSheet(onProgress = null) {
         const careersUrl = csRoles[0]?.url || company.careersUrl || '';
         const subcategory = company.category || 'Series A';
 
-        insertStmt.run(company.name, company.domain, careersUrl, subcategory, isHiring);
+        await run(INSERT_SQL, [company.name, company.domain, careersUrl, subcategory, isHiring, userId]);
 
         if (isHiring) withRoles++;
         else noRoles++;

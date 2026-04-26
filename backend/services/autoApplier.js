@@ -14,13 +14,18 @@
  * Supported platforms today: greenhouse, lever, ashby (the 3 ATS that expose
  * structured, predictable forms). Workday/LinkedIn/custom are marked as
  * 'platform_unsupported' so the user can apply manually.
+ *
+ * TODO(auth): caller passes userId — every exported function takes userId as
+ * the first argument. `runQueueOnce` receives userId in its options bag and
+ * threads it to processOneEvaluation.
  */
 
 import path from 'path';
 import fs from 'fs';
-import db from '../db.js';
+import db, { one, all, run } from '../db.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
 import { tailorResume, generateResumePDF } from './resumeGenerator.js';
+import { validateProfileForApply } from './applyValidation.js';
 
 // Status values we write back to evaluations.apply_status during processing.
 const STATUS = {
@@ -31,24 +36,34 @@ const STATUS = {
   login:         'login_needed',
   unsupported:   'platform_unsupported',
   failed:        'submit_failed',
+  needs_review:  'needs_review',
 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function getProfile() {
-  return db.prepare('SELECT * FROM user_profile WHERE id = 1').get() || {};
+async function getProfile(userId) {
+  return (await one(
+    'SELECT * FROM user_profile WHERE user_id = $1',
+    [userId]
+  )) || {};
 }
 
-function setStatus(evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
-  const parts = ['apply_status = ?'];
-  const args  = [status];
-  if (error !== null)   { parts.push('apply_error = ?');        args.push(error ? String(error).slice(0, 500) : null); }
-  if (platform)         { parts.push('apply_platform = ?');     args.push(platform); }
-  if (resumeUsed)       { parts.push('apply_resume_used = ?');  args.push(resumeUsed); }
-  if (status === STATUS.submitted) { parts.push("applied_at = datetime('now')"); }
+async function setStatus(userId, evalId, status, { error = null, platform, resumeUsed, incrementAttempts = false } = {}) {
+  const parts = [];
+  const args  = [];
+  let idx = 1;
+  parts.push(`apply_status = $${idx++}`);             args.push(status);
+  if (error !== null)   { parts.push(`apply_error = $${idx++}`);        args.push(error ? String(error).slice(0, 500) : null); }
+  if (platform)         { parts.push(`apply_platform = $${idx++}`);     args.push(platform); }
+  if (resumeUsed)       { parts.push(`apply_resume_used = $${idx++}`);  args.push(resumeUsed); }
+  if (status === STATUS.submitted) { parts.push('applied_at = NOW()'); }
   if (incrementAttempts) { parts.push('apply_attempts = COALESCE(apply_attempts, 0) + 1'); }
   args.push(evalId);
-  db.prepare(`UPDATE evaluations SET ${parts.join(', ')} WHERE id = ?`).run(...args);
+  args.push(userId);
+  await run(
+    `UPDATE evaluations SET ${parts.join(', ')} WHERE id = $${idx} AND user_id = $${idx + 1}`,
+    args
+  );
 }
 
 // Safe wrapper around page.fill — ignores missing selectors, treats failures as skipped.
@@ -98,6 +113,70 @@ async function looksLikeLogin(page) {
   } catch (_) { return false; }
 }
 
+// ── Detect required form fields that were NOT auto-filled ────────────────────
+// Per user ask #5 extra: many Greenhouse/Lever/Ashby forms add custom required
+// questions ("Why this company?", "How did you hear about us?", demographic
+// questions, work auth dropdowns). Auto-fill only handles the common fields.
+// Submitting with these empty either errors out or quietly drops the
+// application. Scan the form, find required-but-empty fields, flag for review
+// with sample labels so the user can complete them manually.
+async function detectUnfilledRequired(page) {
+  try {
+    return await page.evaluate(() => {
+      const labelFor = (el) => {
+        // Try aria-label, then <label for="id">, then nearest preceding label/legend.
+        const aria = el.getAttribute('aria-label');
+        if (aria && aria.trim()) return aria.trim().slice(0, 120);
+        if (el.id) {
+          const lbl = document.querySelector(`label[for="${el.id}"]`);
+          if (lbl && lbl.textContent.trim()) return lbl.textContent.trim().slice(0, 120);
+        }
+        const wrap = el.closest('label, .field, .application-question, [role="group"], fieldset');
+        if (wrap) {
+          const txt = (wrap.querySelector('legend, label, .question, .label')?.textContent || wrap.textContent || '').trim();
+          if (txt) return txt.slice(0, 120);
+        }
+        return el.name || el.id || '(unknown field)';
+      };
+      const out = [];
+      // text/textarea/select required and empty
+      const required = document.querySelectorAll('input[required]:not([type=hidden]):not([type=file]):not([type=submit]):not([type=button]), textarea[required], select[required]');
+      for (const el of required) {
+        const val = (el.value || '').trim();
+        if (!val) {
+          out.push({ kind: el.tagName.toLowerCase(), label: labelFor(el), name: el.name || el.id || '' });
+          if (out.length >= 8) break;
+        }
+      }
+      // Required radio groups with nothing checked
+      const seenRadioGroups = new Set();
+      const radios = document.querySelectorAll('input[type=radio][required], fieldset[required] input[type=radio]');
+      for (const r of radios) {
+        if (!r.name || seenRadioGroups.has(r.name)) continue;
+        seenRadioGroups.add(r.name);
+        const anyChecked = document.querySelector(`input[type=radio][name="${CSS.escape(r.name)}"]:checked`);
+        if (!anyChecked) {
+          out.push({ kind: 'radio-group', label: labelFor(r), name: r.name });
+          if (out.length >= 8) break;
+        }
+      }
+      // Required checkbox groups (at least one)
+      const seenCheckboxGroups = new Set();
+      const checkboxes = document.querySelectorAll('input[type=checkbox][required], fieldset[required] input[type=checkbox]');
+      for (const c of checkboxes) {
+        if (!c.name || seenCheckboxGroups.has(c.name)) continue;
+        seenCheckboxGroups.add(c.name);
+        const anyChecked = document.querySelector(`input[type=checkbox][name="${CSS.escape(c.name)}"]:checked`);
+        if (!anyChecked) {
+          out.push({ kind: 'checkbox-group', label: labelFor(c), name: c.name });
+          if (out.length >= 8) break;
+        }
+      }
+      return out;
+    });
+  } catch (_) { return []; }
+}
+
 // ── Platform: Greenhouse ──────────────────────────────────────────────────────
 // Greenhouse ATS forms are the cleanest: standard field names (first_name,
 // last_name, email, phone) and a resume file input.
@@ -117,15 +196,7 @@ async function fillGreenhouse(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"][id*="resume"], input[type="file"][name*="resume"], input[type="file"]', resumePath);
   }
-
-  // Work authorization questions (common in Greenhouse custom fields) — best-effort.
-  // Questions typically appear as <select> or radio groups. We skip answers we can't
-  // confidently fill (the user can finish them manually if the form rejects).
-
-  // Submit
   await page.waitForTimeout(800);
-  const submitted = await tryClick(page, 'button[type="submit"], input[type="submit"], button:has-text("Submit Application")');
-  return submitted;
 }
 
 // ── Platform: Lever ──────────────────────────────────────────────────────────
@@ -141,9 +212,7 @@ async function fillLever(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"][name*="resume"], input[type="file"]', resumePath);
   }
-
   await page.waitForTimeout(800);
-  return await tryClick(page, 'button[type="submit"], .template-btn-submit, button:has-text("Submit application")');
 }
 
 // ── Platform: Ashby ──────────────────────────────────────────────────────────
@@ -157,48 +226,86 @@ async function fillAshby(page, profile, resumePath) {
   if (resumePath) {
     await setFileInput(page, 'input[type="file"]', resumePath);
   }
-
   await page.waitForTimeout(800);
-  return await tryClick(page, 'button[type="submit"], button:has-text("Submit Application"), button:has-text("Submit")');
 }
+
+// Per-platform submit selectors. Kept separate from the fillers so the main
+// flow can scan for unfilled required fields between fill and submit.
+const SUBMIT_SELECTORS = {
+  greenhouse: 'button[type="submit"], input[type="submit"], button:has-text("Submit Application")',
+  lever:      'button[type="submit"], .template-btn-submit, button:has-text("Submit application")',
+  ashby:      'button[type="submit"], button:has-text("Submit Application"), button:has-text("Submit")',
+};
 
 // ── Main: apply to a single evaluation ───────────────────────────────────────
 
-export async function processOneEvaluation(evalId, { headless = true, dryRun = false } = {}) {
-  const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(evalId);
+export async function processOneEvaluation(userId, evalId, { headless = true, dryRun = false, useLibraryResume = false } = {}) {
+  if (!userId) return { ok: false, error: 'Missing userId — auto-apply requires an authenticated caller' };
+  const row = await one(
+    'SELECT * FROM evaluations WHERE id = $1 AND user_id = $2',
+    [evalId, userId]
+  );
   if (!row) return { ok: false, error: 'Evaluation not found' };
   if (!row.job_url) {
-    setStatus(evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.failed, { error: 'No job URL', incrementAttempts: true });
     return { ok: false, error: 'No job URL to apply to' };
   }
 
   const platform = detectPlatform(row.job_url);
-  const profile  = getProfile();
-
-  // Validate profile completeness before attempting auto-apply
-  if (!profile.first_name || !profile.last_name || !profile.email || !profile.phone) {
-    setStatus(evalId, STATUS.failed, { error: 'Profile incomplete — fill in first name, last name, email, and phone before auto-apply', platform, incrementAttempts: true });
-    return { ok: false, error: 'Profile incomplete' };
+  const profile  = await getProfile(userId);
+  if (!profile.auto_apply_consent) {
+    await setStatus(userId, evalId, STATUS.needs_review, {
+      error: 'Auto Apply requires explicit saved consent in your profile before submitting applications',
+      platform,
+    });
+    return { ok: false, error: 'Auto Apply consent required', needsReview: true };
   }
 
-  // Resume selection — prefer the tailored PDF generated by Career Ops.
-  // Only fall back to the common-resumes folder when no tailored PDF exists
-  // or the file on disk has gone missing.
+  // Validate profile + JD compatibility (presence, email/phone format,
+  // sponsorship mismatch). Anything failing → needs_review with reason.
+  const profileCheck = validateProfileForApply(profile, row.job_description || '');
+  if (!profileCheck.ok) {
+    await setStatus(userId, evalId, STATUS.needs_review, { error: profileCheck.reason, platform });
+    return { ok: false, error: profileCheck.reason, needsReview: true };
+  }
+
+  // Resume selection.
+  // - useLibraryResume=true (nightly mode): skip tailored generation entirely,
+  //   pick the closest archetype match from the user's resume library. Faster
+  //   and avoids hitting the AI/PDF pipeline for every queued role.
+  // - useLibraryResume=false (default): prefer tailored PDF; generate one if
+  //   the evaluation has a JD; fall back to library only as last resort.
   let resume = null;
 
-  if (row.pdf_path && fs.existsSync(row.pdf_path)) {
+  if (useLibraryResume) {
+    const resumes = scanResumes(profile.resume_dir);
+    resume = pickResumeForRole(resumes, {
+      jobTitle:       row.job_title,
+      jobDescription: row.job_description || '',
+      archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
+    });
+    if (resume) console.log(`[autoApply] nightly mode — library resume "${resume.filename}" for eval ${evalId}`);
+  } else if (row.pdf_path && fs.existsSync(row.pdf_path)) {
     resume = { filename: path.basename(row.pdf_path), absPath: row.pdf_path, source: 'tailored' };
     console.log(`[autoApply] using tailored resume for eval ${evalId}: ${resume.filename}`);
   } else if (row.job_description) {
     // No tailored PDF yet — generate one on the fly so auto-apply always submits
     // a role-personalized CV instead of a generic one.
     try {
-      const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+      const resumeRow = await one(
+        "SELECT value FROM meta WHERE key = 'user_resume_text' AND user_id = $1",
+        [userId]
+      );
+      const resumeText = resumeRow?.value;
       if (resumeText) {
         console.log(`[autoApply] generating tailored resume for eval ${evalId}…`);
         const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
-        const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
-        db.prepare('UPDATE evaluations SET pdf_path = ? WHERE id = ?').run(pdfPath, evalId);
+        const candidateName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim() || 'Candidate';
+        const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, candidateName);
+        await run(
+          'UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3',
+          [pdfPath, evalId, userId]
+        );
         resume = { filename: path.basename(pdfPath), absPath: pdfPath, source: 'tailored-justnow' };
       }
     } catch (err) {
@@ -217,17 +324,17 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
   }
 
   if (!resume) {
-    setStatus(evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
     return { ok: false, error: 'No resume found' };
   }
 
   const supported = ['greenhouse', 'lever', 'ashby'];
   if (!supported.includes(platform)) {
-    setStatus(evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
+    await setStatus(userId, evalId, STATUS.unsupported, { error: `Platform "${platform}" not yet supported for auto-apply — please apply manually`, platform, incrementAttempts: true });
     return { ok: false, platform, error: 'Platform not supported' };
   }
 
-  setStatus(evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
+  await setStatus(userId, evalId, STATUS.in_progress, { platform, resumeUsed: resume.filename, incrementAttempts: true });
 
   // Lazy import so Playwright isn't loaded for non-auto-apply requests
   const { chromium } = await import('playwright');
@@ -246,24 +353,40 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     await page.waitForTimeout(1500);
 
     if (await hasCaptcha(page)) {
-      setStatus(evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
+      await setStatus(userId, evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Captcha present' };
     }
     if (await looksLikeLogin(page)) {
-      setStatus(evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
+      await setStatus(userId, evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
       return { ok: false, platform, error: 'Login required' };
     }
 
     if (dryRun) {
-      setStatus(evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
+      await setStatus(userId, evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
       return { ok: true, platform, dryRun: true };
     }
 
-    let submitted = false;
-    if (platform === 'greenhouse') submitted = await fillGreenhouse(page, profile, resume.absPath);
-    else if (platform === 'lever') submitted = await fillLever(page, profile, resume.absPath);
-    else if (platform === 'ashby') submitted = await fillAshby(page, profile, resume.absPath);
+    // Fill (no submit yet).
+    if (platform === 'greenhouse') await fillGreenhouse(page, profile, resume.absPath);
+    else if (platform === 'lever') await fillLever(page, profile, resume.absPath);
+    else if (platform === 'ashby') await fillAshby(page, profile, resume.absPath);
 
+    // Pre-submit scan: do not click Submit if there are required questions we
+    // didn't fill. Many apply forms add custom required fields ("Why this
+    // company?", "How did you hear about us?", visa/demographic questions);
+    // submitting blank either errors out or quietly drops the application.
+    // Flag for user review with the field labels we found.
+    const unfilled = await detectUnfilledRequired(page);
+    if (unfilled.length > 0) {
+      const labels = unfilled.map(f => f.label).filter(Boolean).slice(0, 5).join(' | ');
+      const reason = `Form has ${unfilled.length} additional required field${unfilled.length === 1 ? '' : 's'} we didn't auto-fill (${labels}). Open the URL and complete it manually, then mark as applied.`;
+      console.log(`[autoApply] eval ${evalId}: ${unfilled.length} unfilled required → needs_review`);
+      await setStatus(userId, evalId, STATUS.needs_review, { error: reason, platform, resumeUsed: resume.filename });
+      return { ok: false, platform, error: reason, needsReview: true };
+    }
+
+    // All required filled — click submit.
+    const submitted = await tryClick(page, SUBMIT_SELECTORS[platform]);
     await page.waitForTimeout(2500);
 
     // Heuristic confirmation — the page either navigates to a thank-you URL
@@ -279,14 +402,14 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
     );
 
     if (looksSubmitted) {
-      setStatus(evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
+      await setStatus(userId, evalId, STATUS.submitted, { platform, resumeUsed: resume.filename });
       return { ok: true, platform, resume: resume.filename };
     }
     // Not obviously confirmed — mark as in_progress with note, so user can verify.
-    setStatus(evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
+    await setStatus(userId, evalId, STATUS.in_progress, { error: 'Submitted button clicked but confirmation unclear — verify manually', platform });
     return { ok: false, platform, error: 'Submission unconfirmed' };
   } catch (err) {
-    setStatus(evalId, STATUS.failed, { error: err.message, platform });
+    await setStatus(userId, evalId, STATUS.failed, { error: err.message, platform });
     return { ok: false, platform, error: err.message };
   } finally {
     if (browser) { try { await browser.close(); } catch (_) {} }
@@ -296,21 +419,30 @@ export async function processOneEvaluation(evalId, { headless = true, dryRun = f
 /**
  * Pull all queued evaluations and process them sequentially.
  * Returns a summary { processed, submitted, failed, skipped }.
+ *
+ * `userId` is required — caller (routes/careerOps.js) passes req.user.id via
+ * the options bag.
  */
-export async function runQueueOnce({ headless = true, dryRun = false, limit = 10 } = {}) {
-  const rows = db.prepare(`
+// Backward-compat: positional userId OR object form `{ userId }`. Both supported.
+export async function runQueueOnce(userIdOrOpts, opts) {
+  const o = typeof userIdOrOpts === 'object' ? userIdOrOpts : { userId: userIdOrOpts, ...(opts || {}) };
+  const { headless = true, dryRun = false, limit = 10, userId, useLibraryResume = false } = o;
+  if (!userId) throw new Error('runQueueOnce requires userId');
+  const rows = await all(`
     SELECT id FROM evaluations
     WHERE apply_mode = 'auto'
       AND apply_status = 'queued'
+      AND user_id = $1
     ORDER BY created_at ASC
-    LIMIT ?
-  `).all(limit);
+    LIMIT $2
+  `, [userId, limit]);
 
-  const summary = { processed: 0, submitted: 0, failed: 0, skipped: 0, results: [] };
+  const summary = { processed: 0, submitted: 0, failed: 0, skipped: 0, needsReview: 0, results: [] };
   for (const { id } of rows) {
-    const r = await processOneEvaluation(id, { headless, dryRun });
+    const r = await processOneEvaluation(userId, id, { headless, dryRun, useLibraryResume });
     summary.processed++;
     if (r.ok) summary.submitted++;
+    else if (r.needsReview) summary.needsReview++;
     else if (r.error === 'Captcha present' || r.error === 'Login required' || r.error === 'Platform not supported') summary.skipped++;
     else summary.failed++;
     summary.results.push({ evalId: id, ...r });

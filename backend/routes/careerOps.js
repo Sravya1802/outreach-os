@@ -8,12 +8,16 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import db from '../db.js';
+import { one, all, run, tx } from '../db.js';
 import { evaluateJob, fetchJobFromUrl } from '../services/jobEvaluator.js';
 import { tailorResume, generateResumePDF } from '../services/resumeGenerator.js';
-import { saveEvaluationReport, syncTracker, getTrackerRows } from '../services/reportManager.js';
+import { saveEvaluationReport, syncTracker } from '../services/reportManager.js';
 import { scanResumes, pickResumeForRole, detectPlatform } from '../services/resumeRegistry.js';
 import { processOneEvaluation, runQueueOnce } from '../services/autoApplier.js';
+import { runNightlyPipelineForUser } from '../services/nightlyPipeline.js';
+import {
+  uploadLibraryArchetype, listLibrary, removeLibraryFile, isStorageConfigured,
+} from '../services/resumeStorage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESUME_DIR = path.join(__dirname, '..', 'data', 'resume');
@@ -47,11 +51,11 @@ const upload = multer({
 });
 
 // ── GET /api/career/resume — get current resume info ─────────────────────────
-router.get('/resume', (req, res) => {
+router.get('/resume', async (req, res) => {
   try {
-    const text = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
-    const name = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_name'").get()?.value;
-    const date = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_date'").get()?.value;
+    const text = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
+    const name = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value;
+    const date = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_date']))?.value;
     res.json({ hasResume: !!text, name, date, textPreview: text?.slice(0, 300) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -76,10 +80,10 @@ router.post('/resume', upload.single('resume'), async (req, res) => {
     fs.unlinkSync(req.file.path); // remove temp
 
     // Store in DB meta table
-    const upsert = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-    upsert.run('user_resume_text', text);
-    upsert.run('user_resume_name', req.file.originalname);
-    upsert.run('user_resume_date', new Date().toISOString());
+    const upsertSql = "INSERT INTO meta (user_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
+    await run(upsertSql, [req.user.id, 'user_resume_text', text]);
+    await run(upsertSql, [req.user.id, 'user_resume_name', req.file.originalname]);
+    await run(upsertSql, [req.user.id, 'user_resume_date', new Date().toISOString()]);
 
     console.log(`[careerOps] Resume uploaded: ${req.file.originalname}, ${text.length} chars`);
     res.json({ ok: true, name: req.file.originalname, chars: text.length, preview: text.slice(0, 300) });
@@ -89,17 +93,42 @@ router.post('/resume', upload.single('resume'), async (req, res) => {
   }
 });
 
+// ── POST /api/career/parse-resume — parse a PDF without saving anything ─────
+// Used by the Evaluate tab when the user picks "Upload PDF" so they can
+// evaluate against an ad-hoc resume without overwriting their saved default.
+router.post('/parse-resume', upload.single('resume'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const text = await extractPdfText(req.file.path);
+    fs.unlinkSync(req.file.path);
+    if (!text || text.length < 50) {
+      return res.status(400).json({ error: 'Could not extract text from PDF. Make sure it is not a scanned image.' });
+    }
+    res.json({ ok: true, name: req.file.originalname, chars: text.length, text });
+  } catch (err) {
+    console.error('[careerOps] parse-resume error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/career/evaluate — evaluate a job ───────────────────────────────
 router.post('/evaluate', async (req, res) => {
   try {
-    const { jobUrl, jobDescription: rawDescription } = req.body;
+    const { jobUrl, jobDescription: rawDescription, resumeText: bodyResumeText } = req.body;
     if (!jobUrl && !rawDescription) {
       return res.status(400).json({ error: 'Provide either a job URL or job description' });
     }
 
-    // Get resume
-    const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
-    if (!resumeText) return res.status(400).json({ error: 'No resume uploaded. Please upload your resume first.' });
+    // Resume: prefer ad-hoc text from the request body (Evaluate tab's Upload
+    // / Paste pills) over the saved default. Falls back to the saved default
+    // for any caller that hasn't been updated yet.
+    let resumeText = (typeof bodyResumeText === 'string' && bodyResumeText.trim().length >= 50)
+      ? bodyResumeText.trim()
+      : null;
+    if (!resumeText) {
+      resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
+    }
+    if (!resumeText) return res.status(400).json({ error: 'No resume provided. Upload, paste, or save a default resume first.' });
 
     // If URL given, fetch job content
     let jobDescription = rawDescription || '';
@@ -116,12 +145,13 @@ router.post('/evaluate', async (req, res) => {
     const evaluation = await evaluateJob({ jobDescription, resumeText, jobUrl: sourceUrl });
 
     // Save to DB
-    const insertEval = db.prepare(`
+    const result = await run(`
       INSERT INTO evaluations
-        (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 'career_ops')
-    `);
-    const result = insertEval.run(
+        (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'career_ops')
+      RETURNING id
+    `, [
+      req.user.id,
       sourceUrl || null,
       evaluation.jobTitle || 'Unknown Role',
       evaluation.companyName || 'Unknown Company',
@@ -129,9 +159,9 @@ router.post('/evaluate', async (req, res) => {
       evaluation.grade,
       evaluation.overallScore,
       JSON.stringify(evaluation),
-    );
+    ]);
 
-    const evalId = result.lastInsertRowid;
+    const evalId = result.insertId;
 
     // Save markdown report
     try {
@@ -140,7 +170,7 @@ router.post('/evaluate', async (req, res) => {
         evaluation.companyName,
         evaluation.jobTitle
       );
-      db.prepare("UPDATE evaluations SET report_path = ? WHERE id = ?").run(mdPath, evalId);
+      await run("UPDATE evaluations SET report_path = $1 WHERE id = $2 AND user_id = $3", [mdPath, evalId, req.user.id]);
     } catch (err) {
       console.error('[careerOps] report save failed:', err.message);
     }
@@ -153,12 +183,13 @@ router.post('/evaluate', async (req, res) => {
 });
 
 // ── GET /api/career/evaluations — list all evaluations ───────────────────────
-router.get('/evaluations', (req, res) => {
+router.get('/evaluations', async (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at
-      FROM evaluations ORDER BY created_at DESC LIMIT 50
-    `).all();
+    const rows = await all(`
+      SELECT id, job_title, company_name, grade, score, source, report_path, pdf_path, created_at,
+             apply_mode, apply_status
+      FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50
+    `, [req.user.id]);
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -166,9 +197,9 @@ router.get('/evaluations', (req, res) => {
 });
 
 // ── GET /api/career/evaluations/:id — get single evaluation ──────────────────
-router.get('/evaluations/:id', (req, res) => {
+router.get('/evaluations/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Not found' });
     res.json({ ...row, evaluation: row.report_json ? JSON.parse(row.report_json) : null });
   } catch (err) {
@@ -178,35 +209,230 @@ router.get('/evaluations/:id', (req, res) => {
 
 // ── User profile (singleton — drives auto-apply form filling) ────────────────
 
-router.get('/profile', (req, res) => {
+router.get('/profile', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM user_profile WHERE id = 1').get() || {};
+    const row = (await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id])) || {};
     res.json(row);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/profile', (req, res) => {
+// Demographic fields are only persisted when the user has set demographic_consent=1.
+// Withdrawing consent (setting it back to 0) also clears any previously-stored values.
+const DEMOGRAPHIC_FIELDS = ['gender', 'race', 'veteran_status', 'disability_status'];
+
+function isTruthyConsent(v) {
+  return v === 1 || v === '1' || v === true || v === 'true';
+}
+
+router.put('/profile', async (req, res) => {
   try {
-    const ALLOWED = ['first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url','location','work_authorization','needs_sponsorship','gender','race','veteran_status','disability_status','resume_dir'];
-    const data = req.body || {};
-    const sets = [], args = [];
-    for (const k of ALLOWED) {
-      if (Object.prototype.hasOwnProperty.call(data, k)) { sets.push(`${k} = ?`); args.push(data[k]); }
+    const ALLOWED = [
+      'first_name','last_name','email','phone','linkedin_url','github_url','portfolio_url',
+      'location','address','city','state_province','country','postal_code','preferred_locations',
+      'work_authorization','needs_sponsorship','work_location_preference','willing_to_relocate',
+      'target_job_type','education_school','education_degree','education_major','graduation_date',
+      'gpa','certifications','current_company','current_title','years_experience','skills','projects',
+      'gender','race','veteran_status','disability_status','demographic_consent','auto_apply_consent',
+      'resume_dir',
+    ];
+    const data = { ...(req.body || {}) };
+
+    // ── Demographic consent gate ────────────────────────────────────────────
+    // 1. If the request writes any demographic field, consent must already be
+    //    granted (existing row) OR be granted in this same request.
+    // 2. If the request *withdraws* consent (consent → 0), force-null all
+    //    demographic fields so withdrawal is a real erasure.
+    const writesDemographics = DEMOGRAPHIC_FIELDS.some(k => Object.prototype.hasOwnProperty.call(data, k));
+    const consentInPatch     = Object.prototype.hasOwnProperty.call(data, 'demographic_consent');
+    const consentNowTrue     = consentInPatch && isTruthyConsent(data.demographic_consent);
+    const consentBeingWithdrawn = consentInPatch && !isTruthyConsent(data.demographic_consent);
+
+    if (writesDemographics && !consentNowTrue) {
+      const existing = await one('SELECT demographic_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
+      if (!isTruthyConsent(existing?.demographic_consent)) {
+        return res.status(403).json({
+          error: 'Demographic fields require demographic_consent=1. Set consent in the same request or first.',
+        });
+      }
     }
-    if (!sets.length) return res.status(400).json({ error: 'No fields to update' });
-    sets.push("updated_at = datetime('now')");
-    db.prepare(`UPDATE user_profile SET ${sets.join(', ')} WHERE id = 1`).run(...args);
-    res.json(db.prepare('SELECT * FROM user_profile WHERE id = 1').get());
+
+    if (consentBeingWithdrawn) {
+      // Force every demographic field to NULL on consent withdrawal, regardless
+      // of what the client sent.
+      for (const k of DEMOGRAPHIC_FIELDS) data[k] = null;
+    }
+
+    const cols = [], placeholders = [], updates = [], args = [];
+    let i = 1;
+    // user_id is always first param for both INSERT + UPDATE WHERE
+    args.push(req.user.id);
+    const userIdPos = i++;
+    for (const k of ALLOWED) {
+      if (Object.prototype.hasOwnProperty.call(data, k)) {
+        cols.push(k);
+        placeholders.push(`$${i}`);
+        updates.push(`${k} = $${i}`);
+        args.push(data[k]);
+        i++;
+      }
+    }
+    if (!cols.length) return res.status(400).json({ error: 'No fields to update' });
+    // Upsert on user_id (one row per user). user_id stays out of the SET clause.
+    // The unique index on user_profile.user_id is partial (`WHERE user_id IS
+    // NOT NULL`, from migration 003), so the ON CONFLICT clause must repeat
+    // the predicate for Postgres to recognize it as the conflict target.
+    // See issue #14.
+    const sql = `
+      INSERT INTO user_profile (user_id, ${cols.join(', ')}, updated_at)
+      VALUES ($${userIdPos}, ${placeholders.join(', ')}, NOW())
+      ON CONFLICT (user_id) WHERE user_id IS NOT NULL
+      DO UPDATE SET ${updates.join(', ')}, updated_at = NOW()
+    `;
+    await run(sql, args);
+    res.json(await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id]));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── Resume registry — list available resumes in the configured folder ────────
-router.get('/resumes-library', (req, res) => {
+// Legacy filesystem-based read; Phase 2 of the storage migration will switch
+// scanResumes() to read from Supabase Storage.
+router.get('/resumes-library', async (req, res) => {
   try {
-    const profile = db.prepare('SELECT resume_dir FROM user_profile WHERE id = 1').get();
+    const profile = await one('SELECT resume_dir FROM user_profile WHERE user_id = $1', [req.user.id]);
     const resumes = scanResumes(profile?.resume_dir);
     res.json({ resumeDir: profile?.resume_dir, resumes });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── Per-user resume library backed by Supabase Storage ──────────────────────
+// Per user ask #7 option B. Each user uploads their own archetype PDFs into
+// resume-library/<user_id>/<archetype>/<filename>.pdf. Auth still gates the
+// API (the backend uses the service-role key under the hood) and the user_id
+// in the path is always req.user.id — never spoofable.
+router.get('/library', async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.json({ items: [], configured: false });
+    const items = await listLibrary(req.user.id);
+    res.json({ items, configured: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/library/upload', upload.single('resume'), async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.status(500).json({ error: 'Storage not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing on backend)' });
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const archetype = String(req.body?.archetype || 'misc');
+    const filename  = req.file.originalname || `resume-${Date.now()}.pdf`;
+    const buf = await fs.promises.readFile(req.file.path);
+    await fs.promises.unlink(req.file.path).catch(() => {});
+    const out = await uploadLibraryArchetype(req.user.id, archetype, filename, buf);
+    res.json({ ok: true, ...out, sizeBytes: buf.length });
+  } catch (err) {
+    console.error('[careerOps] library upload error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/library/:archetype/:filename', async (req, res) => {
+  try {
+    if (!isStorageConfigured()) return res.status(500).json({ error: 'Storage not configured' });
+    await removeLibraryFile(req.user.id, req.params.archetype, req.params.filename);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Queue all known intern roles for a company ──────────────────────────────
+// Per user ask: auto-apply should work on companies from /discover/companies,
+// not only on Career Ops evaluations. For each role we know about for this
+// company, create an evaluation row and mark it apply_mode='auto' / queued.
+// Skips URLs that already have a queued/in-progress/submitted evaluation.
+async function queueCompanyRoles(userId, companyId, { roleType = 'intern' } = {}) {
+  const company = await one('SELECT id, name FROM jobs WHERE id = $1 AND user_id = $2', [companyId, userId]);
+  if (!company) return { error: 'Company not found' };
+  const roles = await all(
+    `SELECT id, title, apply_url FROM roles
+     WHERE company_id = $1 AND user_id = $2 AND role_type = $3 AND apply_url IS NOT NULL AND apply_url <> ''
+     ORDER BY created_at DESC`,
+    [companyId, userId, roleType]
+  );
+  let queued = 0, skipped = 0;
+  for (const role of roles) {
+    const existing = await one(
+      `SELECT id, apply_status FROM evaluations WHERE user_id = $1 AND job_url = $2 LIMIT 1`,
+      [userId, role.apply_url]
+    );
+    if (existing) {
+      if (['queued', 'in_progress', 'submitted', 'needs_review'].includes(existing.apply_status || '')) {
+        skipped++;
+        continue;
+      }
+      // existing but in failed/not_started — re-queue it
+      await run(
+        `UPDATE evaluations SET apply_mode = 'auto', apply_status = 'queued', apply_error = NULL
+         WHERE id = $1 AND user_id = $2`,
+        [existing.id, userId]
+      );
+      queued++;
+      continue;
+    }
+    await run(
+      `INSERT INTO evaluations
+        (user_id, job_url, job_title, company_name, source, apply_mode, apply_status)
+       VALUES ($1, $2, $3, $4, 'company_quick_apply', 'auto', 'queued')`,
+      [userId, role.apply_url, role.title, company.name]
+    );
+    queued++;
+  }
+  return { company: company.name, totalRoles: roles.length, queued, skippedAlreadyInFlight: skipped };
+}
+
+router.post('/auto-apply-company/:companyId/queue', async (req, res) => {
+  try {
+    const result = await queueCompanyRoles(req.user.id, req.params.companyId, { roleType: req.body?.roleType || 'intern' });
+    if (result.error) return res.status(404).json(result);
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[auto-apply-company/queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scrape the company's careers page first (reuses /api/jobs/:id/scrape-roles
+// logic via internal call), then queue everything that came back.
+router.post('/auto-apply-company/:companyId/scrape-and-queue', async (req, res) => {
+  try {
+    const company = await one('SELECT id, name FROM jobs WHERE id = $1 AND user_id = $2', [req.params.companyId, req.user.id]);
+    if (!company) return res.status(404).json({ error: 'Company not found' });
+    // Forward to the existing scrape-roles route handler — it knows about
+    // Apple direct, YC WaaS, Greenhouse/Lever/Ashby, etc. We construct a
+    // local sub-request rather than duplicating the logic.
+    const proto = req.headers['x-forwarded-proto'] || 'http';
+    const host  = req.headers['x-forwarded-host'] || req.get('host');
+    const scrapeUrl = `${proto}://${host}/api/jobs/${company.id}/scrape-roles`;
+    const scrapeRes = await fetch(scrapeUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        // forward auth: pass the same JWT the caller used
+        Authorization: req.headers.authorization || '',
+      },
+      body: JSON.stringify({ roleType: req.body?.roleType || 'intern' }),
+    });
+    if (!scrapeRes.ok) {
+      const errText = await scrapeRes.text().catch(() => '');
+      return res.status(502).json({ error: `Scrape failed (${scrapeRes.status}): ${errText.slice(0, 200)}` });
+    }
+    // Now queue whatever's there
+    const queued = await queueCompanyRoles(req.user.id, company.id, { roleType: req.body?.roleType || 'intern' });
+    res.json({ ok: true, scraped: true, ...queued });
+  } catch (err) {
+    console.error('[auto-apply-company/scrape-and-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Auto-apply queue — trigger a worker run ──────────────────────────────────
@@ -216,7 +442,11 @@ router.get('/resumes-library', (req, res) => {
 router.post('/auto-apply/run', async (req, res) => {
   try {
     const { dryRun = false, headless = true, limit = 10 } = req.body || {};
-    const summary = await runQueueOnce({ dryRun, headless, limit });
+    const profile = await one('SELECT auto_apply_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
+    if (!profile?.auto_apply_consent) {
+      return res.status(400).json({ error: 'Auto Apply requires explicit consent in the profile before the worker can run.' });
+    }
+    const summary = await runQueueOnce({ dryRun, headless, limit, userId: req.user.id });
     res.json(summary);
   } catch (err) {
     console.error('[auto-apply/run]', err);
@@ -224,23 +454,150 @@ router.post('/auto-apply/run', async (req, res) => {
   }
 });
 
+// ── Bulk queue: preview how many evaluations match a threshold ──────────────
+// Used by the slider in the Auto-Apply Setup UI to show a live count as the
+// user drags. Does NOT mutate anything.
+//
+// Query params:
+//   minGrade = 'A' | 'B' | 'C' | 'D' | 'F'   — inclusive lower bound
+//   minScore = 0..100                        — inclusive lower bound
+// Either or both may be specified. Rows already queued/applied are excluded.
+router.get('/bulk-queue/preview', async (req, res) => {
+  try {
+    const profile = await getAutoApplyProfile(req.user.id);
+    const { minGrade, minScore, jobType, location, country, workLocation, supportedOnly } = req.query;
+    const { sql, params, consentRequired } = buildBulkQueueFilter({
+      minGrade, minScore, userId: req.user.id, profile,
+      jobType, location, country, workLocation, supportedOnly,
+    });
+    const rows = await all(
+      `SELECT id, job_title, company_name, grade, score, job_url FROM evaluations WHERE ${sql} ORDER BY score DESC NULLS LAST LIMIT 500`,
+      params
+    );
+    res.json({ count: rows.length, rows, consentRequired });
+  } catch (err) {
+    console.error('[bulk-queue/preview]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Bulk queue: flip matching evaluations to apply_mode='auto' + status='queued' ──
+// Same filter as /preview. Returns { queued: N } = number of rows actually updated.
+router.post('/bulk-queue', async (req, res) => {
+  try {
+    const profile = await getAutoApplyProfile(req.user.id);
+    if (!profile?.auto_apply_consent) {
+      return res.status(400).json({ error: 'Auto Apply requires explicit consent in the profile before roles can be bulk queued.' });
+    }
+    const { minGrade, minScore, jobType, location, country, workLocation, supportedOnly } = req.body || {};
+    const { sql, params } = buildBulkQueueFilter({
+      minGrade, minScore, userId: req.user.id, profile,
+      jobType, location, country, workLocation, supportedOnly,
+    });
+    const r = await run(
+      `UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE ${sql}`,
+      params
+    );
+    res.json({ queued: r.rowCount });
+  } catch (err) {
+    console.error('[bulk-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Build the shared WHERE fragment for bulk-queue preview + apply.
+// Excludes rows that are already queued or past "not_started" (don't clobber
+// in-flight applications). Scoped to the caller's user_id.
+async function getAutoApplyProfile(userId) {
+  return (await one('SELECT * FROM user_profile WHERE user_id = $1', [userId])) || {};
+}
+
+function buildBulkQueueFilter({ minGrade, minScore, userId, profile = {}, jobType, location, country, workLocation, supportedOnly }) {
+  const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F'];
+  const params = [];
+  let i = 1;
+  // user_id scope comes first — ahead of the grade/score clauses.
+  const parts = [`user_id = $${i++}`];
+  params.push(userId);
+  parts.push("(apply_status IS NULL OR apply_status = 'not_started')");
+
+  if (minGrade && GRADE_ORDER.includes(String(minGrade).toUpperCase())) {
+    const allowed = GRADE_ORDER.slice(0, GRADE_ORDER.indexOf(String(minGrade).toUpperCase()) + 1);
+    parts.push(`grade = ANY($${i++})`);
+    params.push(allowed);
+  }
+  if (minScore !== undefined && minScore !== null && minScore !== '') {
+    const n = Number(minScore);
+    if (!Number.isNaN(n)) {
+      parts.push(`score >= $${i++}`);
+      params.push(n);
+    }
+  }
+
+  const normalizedJobType = String(jobType || profile.target_job_type || '').toLowerCase();
+  const jobTypeNeedles = {
+    intern: ['intern', 'internship', 'co-op', 'coop'],
+    new_grad: ['new grad', 'new graduate', 'entry level', 'early career', 'university grad'],
+    full_time: ['full time', 'full-time', 'software engineer', 'engineer'],
+  }[normalizedJobType] || [];
+  if (jobTypeNeedles.length > 0) {
+    parts.push(`(${jobTypeNeedles.map(() => `COALESCE(job_title,'') || ' ' || COALESCE(job_description,'') ILIKE $${i++}`).join(' OR ')})`);
+    params.push(...jobTypeNeedles.map(s => `%${s}%`));
+  }
+
+  const targetLocation = String(location || profile.preferred_locations || profile.location || '').trim();
+  if (targetLocation) {
+    const firstLocation = targetLocation.split(/[,;\n]/).map(s => s.trim()).find(Boolean);
+    if (firstLocation) {
+      parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(company_name,'') ILIKE $${i++})`);
+      params.push(`%${firstLocation}%`, `%${firstLocation}%`);
+    }
+  }
+
+  const targetCountry = String(country || profile.country || '').trim();
+  if (targetCountry && !/^any$/i.test(targetCountry)) {
+    const countryNeedle = /^us|usa|united states$/i.test(targetCountry) ? 'United States' : targetCountry;
+    parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(job_description,'') = '')`);
+    params.push(`%${countryNeedle}%`);
+  }
+
+  const remotePref = String(workLocation || profile.work_location_preference || 'any').toLowerCase();
+  if (remotePref && remotePref !== 'any') {
+    parts.push(`COALESCE(job_description,'') ILIKE $${i++}`);
+    params.push(`%${remotePref === 'onsite' ? 'on-site' : remotePref}%`);
+  }
+
+  if (profile.needs_sponsorship) {
+    parts.push(`COALESCE(job_description,'') !~* $${i++}`);
+    params.push('no (visa|sponsorship)|cannot sponsor|will not sponsor|unable to sponsor|us citizens? only|us citizenship required|must be (a )?us citizen|do(es)? not (offer|provide)( visa)? sponsorship');
+  }
+
+  const onlySupported = supportedOnly === undefined || supportedOnly === null || supportedOnly === '' || String(supportedOnly) === 'true';
+  if (onlySupported) {
+    parts.push(`job_url ~* $${i++}`);
+    params.push('greenhouse|lever|ashby');
+  }
+
+  return { sql: parts.join(' AND '), params, consentRequired: !profile.auto_apply_consent };
+}
+
 // ── Preview which resume a URL will use when auto-apply runs ─────────────────
 // Looks up an existing evaluation by job_url (if any) and reports whether a
 // tailored PDF already exists. Used by the Job Automation tab to show the user
 // which resume will fire for each role before they hit Apply.
-router.post('/auto-apply/resume-preview', (req, res) => {
+router.post('/auto-apply/resume-preview', async (req, res) => {
   try {
     const { jobUrls = [] } = req.body || {};
     if (!Array.isArray(jobUrls) || jobUrls.length === 0) return res.json({ previews: {} });
     const previews = {};
     for (const url of jobUrls) {
-      const ev = db.prepare(`
+      const ev = await one(`
         SELECT id, pdf_path, job_description, report_json
         FROM evaluations
-        WHERE job_url = ?
+        WHERE job_url = $1 AND user_id = $2
         ORDER BY id DESC
         LIMIT 1
-      `).get(url);
+      `, [url, req.user.id]);
       if (!ev) {
         previews[url] = { source: 'fallback', label: 'Will use common-folder resume (no evaluation yet)' };
         continue;
@@ -280,20 +637,21 @@ router.post('/auto-apply-direct', async (req, res) => {
     if (!companyName || !jobTitle) return res.status(400).json({ error: 'companyName and jobTitle are required' });
 
     // Deduplicate: if we've already seen this URL, reuse the existing evaluation
-    let row = db.prepare('SELECT * FROM evaluations WHERE job_url = ? ORDER BY id DESC LIMIT 1').get(jobUrl);
+    let row = await one('SELECT * FROM evaluations WHERE job_url = $1 AND user_id = $2 ORDER BY id DESC LIMIT 1', [jobUrl, req.user.id]);
     if (!row) {
-      const r = db.prepare(`
-        INSERT INTO evaluations (job_url, job_title, company_name, apply_mode, apply_status, source)
-        VALUES (?, ?, ?, 'auto', 'queued', 'auto_apply_direct')
-      `).run(jobUrl, jobTitle, companyName);
-      row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(r.lastInsertRowid);
+      const r = await run(`
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, apply_mode, apply_status, source)
+        VALUES ($1, $2, $3, $4, 'auto', 'queued', 'auto_apply_direct')
+        RETURNING id
+      `, [req.user.id, jobUrl, jobTitle, companyName]);
+      row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [r.insertId, req.user.id]);
     } else {
       // Re-queue for another attempt
-      db.prepare("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = ?").run(row.id);
+      await run("UPDATE evaluations SET apply_mode='auto', apply_status='queued' WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
     }
 
-    const result = await processOneEvaluation(row.id, { dryRun, headless });
-    const updated = db.prepare('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = ?').get(row.id);
+    const result = await processOneEvaluation(req.user.id, row.id, { dryRun, headless });
+    const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1 AND user_id = $2', [row.id, req.user.id]);
     res.json({ ok: !!result.ok, evalId: row.id, ...updated, ...result });
   } catch (err) {
     console.error('[auto-apply-direct]', err);
@@ -306,7 +664,7 @@ router.post('/auto-apply-direct', async (req, res) => {
 router.post('/auto-apply/:id', async (req, res) => {
   try {
     const { dryRun = false, headless = true } = req.body || {};
-    const r = await processOneEvaluation(Number(req.params.id), { dryRun, headless });
+    const r = await processOneEvaluation(req.user.id, Number(req.params.id), { dryRun, headless });
     res.json(r);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -315,14 +673,15 @@ router.post('/auto-apply/:id', async (req, res) => {
 
 // ── GET /api/career/pipeline — job-search Kanban data ────────────────────────
 // Groups evaluations by apply_status into the columns the frontend renders.
-router.get('/pipeline', (req, res) => {
+router.get('/pipeline', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT id, job_title, company_name, job_url, grade, score,
              apply_mode, apply_status, applied_at, created_at
       FROM evaluations
-      ORDER BY datetime(COALESCE(applied_at, created_at)) DESC
-    `).all();
+      WHERE user_id = $1
+      ORDER BY COALESCE(applied_at, created_at::text) DESC
+    `, [req.user.id]);
 
     const columns = {
       evaluated:  { label: 'Evaluated',     hint: 'Scored but not yet applied',            items: [] },
@@ -361,14 +720,14 @@ router.get('/pipeline', (req, res) => {
 });
 
 // ── PATCH /api/career/evaluations/:id/apply-status — move card in Kanban ─────
-router.patch('/evaluations/:id/apply-status', (req, res) => {
+router.patch('/evaluations/:id/apply-status', async (req, res) => {
   try {
     const VALID = ['not_started', 'opened', 'queued', 'submitted', 'responded', 'interview', 'offer', 'rejected'];
     const { status } = req.body || {};
     if (!VALID.includes(status)) return res.status(400).json({ error: `status must be one of ${VALID.join(', ')}` });
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare('UPDATE evaluations SET apply_status = ? WHERE id = ?').run(status, req.params.id);
+    await run('UPDATE evaluations SET apply_status = $1 WHERE id = $2 AND user_id = $3', [status, req.params.id, req.user.id]);
     res.json({ ok: true, status });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -376,15 +735,15 @@ router.patch('/evaluations/:id/apply-status', (req, res) => {
 });
 
 // ── PATCH /api/career/evaluations/:id/apply-mode — toggle manual | auto ──────
-router.patch('/evaluations/:id/apply-mode', (req, res) => {
+router.patch('/evaluations/:id/apply-mode', async (req, res) => {
   try {
     const { mode } = req.body || {};
     if (!['manual', 'auto'].includes(mode)) {
       return res.status(400).json({ error: 'mode must be "manual" or "auto"' });
     }
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare('UPDATE evaluations SET apply_mode = ? WHERE id = ?').run(mode, req.params.id);
+    await run('UPDATE evaluations SET apply_mode = $1 WHERE id = $2 AND user_id = $3', [mode, req.params.id, req.user.id]);
     res.json({ ok: true, applyMode: mode });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -397,7 +756,7 @@ router.patch('/evaluations/:id/apply-mode', (req, res) => {
 // auto mode:   enqueues a Playwright worker (stub for now — real submit lands in #9).
 router.post('/evaluations/:id/apply', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
     if (!row.job_url) return res.status(400).json({ error: 'This evaluation has no job URL to apply to' });
 
@@ -406,16 +765,16 @@ router.post('/evaluations/:id/apply', async (req, res) => {
     if (mode === 'manual') {
       // Nothing to do server-side — frontend opens URL. Just mark as "opened" so
       // the user can later confirm submission via updateStatus.
-      db.prepare("UPDATE evaluations SET apply_status = 'opened', applied_at = datetime('now') WHERE id = ?").run(row.id);
+      await run("UPDATE evaluations SET apply_status = 'opened', applied_at = NOW() WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
       return res.json({ ok: true, mode, url: row.job_url, status: 'opened' });
     }
 
     // auto mode — mark queued, then run the Playwright worker synchronously for
     // immediate feedback. Long-running so we return once the worker finishes.
-    db.prepare("UPDATE evaluations SET apply_status = 'queued' WHERE id = ?").run(row.id);
+    await run("UPDATE evaluations SET apply_status = 'queued' WHERE id = $1 AND user_id = $2", [row.id, req.user.id]);
     try {
-      const result = await processOneEvaluation(row.id, { headless: true });
-      const updated = db.prepare('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = ?').get(row.id);
+      const result = await processOneEvaluation(req.user.id, row.id, { headless: true });
+      const updated = await one('SELECT apply_status, apply_error, apply_platform, apply_resume_used FROM evaluations WHERE id = $1 AND user_id = $2', [row.id, req.user.id]);
       return res.json({
         ok: !!result.ok,
         mode,
@@ -435,11 +794,11 @@ router.post('/evaluations/:id/apply', async (req, res) => {
 });
 
 // ── POST /api/career/evaluations/:id/mark-applied — user confirms manual submit ─
-router.post('/evaluations/:id/mark-applied', (req, res) => {
+router.post('/evaluations/:id/mark-applied', async (req, res) => {
   try {
-    const row = db.prepare('SELECT id FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT id FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
-    db.prepare("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, datetime('now')) WHERE id = ?").run(req.params.id);
+    await run("UPDATE evaluations SET apply_status = 'submitted', applied_at = COALESCE(applied_at, NOW()::text) WHERE id = $1 AND user_id = $2", [req.params.id, req.user.id]);
     res.json({ ok: true, status: 'submitted' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -447,9 +806,9 @@ router.post('/evaluations/:id/mark-applied', (req, res) => {
 });
 
 // ── DELETE /api/career/evaluations/:id ───────────────────────────────────────
-router.delete('/evaluations/:id', (req, res) => {
+router.delete('/evaluations/:id', async (req, res) => {
   try {
-    db.prepare('DELETE FROM evaluations WHERE id = ?').run(req.params.id);
+    await run('DELETE FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -459,36 +818,41 @@ router.delete('/evaluations/:id', (req, res) => {
 // ── POST /api/career/tailored-resume/:id — generate tailored resume PDF ──────
 router.post('/tailored-resume/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).json({ error: 'Evaluation not found' });
 
-    const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+    const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) return res.status(400).json({ error: 'No resume found' });
 
-    const candidateName = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_name'").get()?.value?.replace('.pdf','') || 'Candidate';
+    // Pull candidate name from user_profile (preferred). Fallback to the
+    // resume filename minus .pdf, then to a generic 'Candidate'. Hardcoded
+    // 'Sravya Rachakonda' here was a multi-user bug — every tailored PDF
+    // came out branded with the founder's name regardless of which user
+    // generated it.
+    const profile = await one('SELECT first_name, last_name FROM user_profile WHERE user_id = $1', [req.user.id]);
+    const fallbackFromFilename = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_name']))?.value?.replace(/\.pdf$/i, '');
+    const candidateName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim()
+      || fallbackFromFilename
+      || 'Candidate';
 
-    console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title}`);
+    console.log(`[careerOps] Generating tailored resume for ${row.company_name} - ${row.job_title} (candidate: ${candidateName})`);
 
-    // AI tailor
     const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
+    const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, candidateName);
 
-    // Generate PDF
-    const { pdfPath, relativePath } = await generateResumePDF(tailored, row.company_name, row.job_title, 'Sravya Rachakonda');
-
-    // Update DB
-    db.prepare('UPDATE evaluations SET pdf_path = ? WHERE id = ?').run(pdfPath, row.id);
+    await run('UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3', [pdfPath, row.id, req.user.id]);
 
     res.json({ ok: true, pdfPath: relativePath, downloadUrl: `/api/career/download/${row.id}` });
   } catch (err) {
-    console.error('[careerOps] tailored-resume error:', err.message);
-    res.status(500).json({ error: err.message });
+    console.error('[careerOps] tailored-resume error:', err && err.stack || err.message);
+    res.status(500).json({ error: err.message || 'Tailor failed' });
   }
 });
 
 // ── GET /api/career/download/:id — download PDF ──────────────────────────────
-router.get('/download/:id', (req, res) => {
+router.get('/download/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT pdf_path, job_title, company_name FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row || !row.pdf_path) return res.status(404).json({ error: 'PDF not found. Generate it first.' });
     if (!fs.existsSync(row.pdf_path)) return res.status(404).json({ error: 'PDF file missing from disk.' });
 
@@ -518,7 +882,45 @@ const SCAN_ASHBY = [
 ];
 
 const CS_TITLE_RE = /intern|engineer|developer|researcher|scientist|data|ml|software|swe/i;
+const INTERN_RE   = /\b(intern|internship|trainee|co-?op|working student|summer analyst)\b/i;
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+// Filter by role-type. 'intern' keeps only intern/co-op/trainee titles,
+// 'fulltime' keeps only non-intern engineering titles, 'all' keeps both.
+function matchesRoleType(title, roleType) {
+  if (!title) return false;
+  if (roleType === 'intern')   return INTERN_RE.test(title);
+  if (roleType === 'fulltime') return CS_TITLE_RE.test(title) && !INTERN_RE.test(title);
+  return CS_TITLE_RE.test(title); // 'all' / undefined → keep any CS-ish title
+}
+
+// US-only filter for the Portal Scanner. Mirrors services/scraper.js#isUSLocation
+// but lives here because routes/careerOps.js is its own scrape path. Drops
+// items whose location explicitly names a non-US country/city. "Remote" /
+// empty / unknown stay (assume US since SCAN_* lists are US-targeted ATS).
+const NON_US_TOKENS_PORTAL = /\b(canada|toronto|vancouver|montreal|ottawa|calgary|waterloo|mississauga|edmonton|quebec|brampton|surrey|ontario|alberta|british columbia|united kingdom|england|britain|\buk\b|london|manchester|edinburgh|glasgow|cambridge|oxford|dublin|ireland|france|paris|germany|berlin|munich|hamburg|netherlands|amsterdam|rotterdam|belgium|brussels|spain|madrid|barcelona|portugal|lisbon|italy|rome|milan|switzerland|zurich|geneva|sweden|stockholm|denmark|copenhagen|norway|oslo|finland|helsinki|israel|tel aviv|india|bangalore|bengaluru|mumbai|delhi|noida|gurgaon|gurugram|hyderabad|chennai|pune|china|beijing|shanghai|shenzhen|hong kong|taiwan|taipei|japan|tokyo|osaka|south korea|seoul|singapore|malaysia|indonesia|thailand|bangkok|vietnam|philippines|manila|australia|sydney|melbourne|brisbane|perth|new zealand|auckland|brazil|são paulo|rio de janeiro|argentina|buenos aires|mexico city|south africa|johannesburg|cape town|nigeria|lagos|kenya|nairobi|egypt|cairo|uae|dubai|saudi arabia|riyadh)\b/i;
+function isUSLocationPortal(loc) {
+  if (!loc) return true;
+  const s = String(loc).toLowerCase().trim();
+  if (!s) return true;
+  if (/^(remote|anywhere|us remote|usa|united states|us only|remote, usa|remote - us|remote \(us\))$/.test(s)) return true;
+  return !NON_US_TOKENS_PORTAL.test(s);
+}
+
+// Best location string for a Greenhouse job — prefers job.offices[].location
+// over the freeform job.location.name, which often holds multi-city strings.
+function greenhouseUsLocation(job) {
+  // If any office is non-US → return that string so the filter drops it.
+  // If any office is US → return that.
+  const offices = Array.isArray(job.offices) ? job.offices : [];
+  if (offices.length > 0) {
+    const us = offices.find(o => isUSLocationPortal(o?.location || o?.name || ''));
+    if (us) return us.location || us.name || job.location?.name || 'USA';
+    // No US office — return the first non-US so isUSLocationPortal drops it.
+    return offices[0]?.location || offices[0]?.name || job.location?.name || '';
+  }
+  return job.location?.name || '';
+}
 
 function isRecent(timestamp) {
   if (!timestamp) return true; // no timestamp — include anyway
@@ -528,7 +930,7 @@ function isRecent(timestamp) {
   return !isNaN(posted) && (Date.now() - posted.getTime()) <= SEVEN_DAYS_MS;
 }
 
-async function scanGreenhouse() {
+export async function scanGreenhouse(roleType = 'intern') {
   const jobs = [];
   for (const token of SCAN_GREENHOUSE) {
     try {
@@ -539,13 +941,15 @@ async function scanGreenhouse() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (data.jobs || [])) {
-        if (!CS_TITLE_RE.test(job.title)) continue;
+        if (!matchesRoleType(job.title, roleType)) continue;
         const ts = job.updated_at || job.created_at;
         if (!isRecent(ts)) continue;
+        const location = greenhouseUsLocation(job);
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.title,
           company:  token,
-          location: job.location?.name || '',
+          location,
           postedAt: ts || null,
           applyUrl: job.absolute_url || `https://boards.greenhouse.io/${token}`,
           source:   'greenhouse',
@@ -556,7 +960,7 @@ async function scanGreenhouse() {
   return jobs;
 }
 
-async function scanLever() {
+export async function scanLever(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_LEVER) {
     try {
@@ -567,13 +971,15 @@ async function scanLever() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (Array.isArray(data) ? data : [])) {
-        if (!CS_TITLE_RE.test(job.text || '')) continue;
+        if (!matchesRoleType(job.text || '', roleType)) continue;
         const ts = job.createdAt; // epoch ms
         if (!isRecent(ts)) continue;
+        const location = job.categories?.location || job.country || '';
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.text,
           company:  company,
-          location: job.categories?.location || job.country || '',
+          location,
           postedAt: ts ? new Date(ts).toISOString() : null,
           applyUrl: job.hostedUrl || `https://jobs.lever.co/${company}`,
           source:   'lever',
@@ -584,7 +990,7 @@ async function scanLever() {
   return jobs;
 }
 
-async function scanAshby() {
+export async function scanAshby(roleType = 'intern') {
   const jobs = [];
   for (const company of SCAN_ASHBY) {
     try {
@@ -600,13 +1006,15 @@ async function scanAshby() {
       if (!res.ok) continue;
       const data = await res.json();
       for (const job of (data.jobs || data.jobPostings || [])) {
-        if (!CS_TITLE_RE.test(job.title || '')) continue;
+        if (!matchesRoleType(job.title || '', roleType)) continue;
         const ts = job.publishedAt || job.createdAt || job.updatedAt;
         if (!isRecent(ts)) continue;
+        const location = job.location || job.locationName || '';
+        if (!isUSLocationPortal(location)) continue;
         jobs.push({
           title:    job.title,
           company:  company,
-          location: job.location || job.locationName || '',
+          location,
           postedAt: ts || null,
           applyUrl: job.jobUrl || job.applyUrl || `https://jobs.ashbyhq.com/${company}`,
           source:   'ashby',
@@ -619,12 +1027,14 @@ async function scanAshby() {
 
 router.post('/scan-portals', async (req, res) => {
   try {
-    console.log('[careerOps] Starting portal scan across Greenhouse / Lever / Ashby…');
+    // roleType = 'intern' (default) | 'fulltime' | 'all'
+    const roleType = ['intern', 'fulltime', 'all'].includes(req.body?.roleType) ? req.body.roleType : 'intern';
+    console.log(`[careerOps] Starting portal scan across Greenhouse / Lever / Ashby — roleType=${roleType}`);
 
     const [ghResult, lvResult, ashResult] = await Promise.allSettled([
-      scanGreenhouse(),
-      scanLever(),
-      scanAshby(),
+      scanGreenhouse(roleType),
+      scanLever(roleType),
+      scanAshby(roleType),
     ]);
 
     const ghJobs  = ghResult.status  === 'fulfilled' ? ghResult.value  : [];
@@ -650,6 +1060,113 @@ router.post('/scan-portals', async (req, res) => {
   }
 });
 
+// ── GET /api/career/auto-apply-queue — visible queue + needs-review ──────────
+// Returns evaluations the auto-apply worker is interested in: queued for the
+// next run, recently submitted, currently running, and any flagged
+// needs_review (worker couldn't fill required form fields). Includes
+// source so the user can see whether each item came from Portal Scanner,
+// the Job Scraper, the nightly pipeline, or a manual evaluation.
+router.get('/auto-apply-queue', async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT id, job_url, job_title, company_name, grade, score,
+             apply_mode, apply_status, applied_at, source, apply_platform,
+             apply_error, apply_resume_used, created_at, pdf_path
+      FROM evaluations
+      WHERE user_id = $1
+        AND (apply_status IN ('queued','needs_review','platform_unsupported','failed','submitted')
+             AND apply_mode = 'auto')
+      ORDER BY
+        CASE apply_status
+          WHEN 'needs_review' THEN 1
+          WHEN 'queued'       THEN 2
+          WHEN 'failed'       THEN 3
+          WHEN 'submitted'    THEN 4
+          ELSE 5
+        END,
+        created_at DESC
+      LIMIT 200
+    `, [req.user.id]);
+    const counts = {
+      queued:        rows.filter(r => r.apply_status === 'queued').length,
+      needs_review:  rows.filter(r => r.apply_status === 'needs_review').length,
+      submitted:     rows.filter(r => r.apply_status === 'submitted').length,
+      failed:        rows.filter(r => r.apply_status === 'failed').length,
+      unsupported:   rows.filter(r => r.apply_status === 'platform_unsupported').length,
+    };
+    res.json({ items: rows, counts });
+  } catch (err) {
+    console.error('[auto-apply-queue]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET / PUT /api/career/nightly-settings — pipeline configuration ──────────
+// Stored in meta as JSON under key 'nightly_pipeline_settings'. Defaults
+// chosen for safety: enabled=false (user must opt in), score=85, max=50,
+// roleType='intern'. The cron skips the run when enabled=false.
+const NIGHTLY_DEFAULTS = {
+  enabled:  false,
+  roleType: 'intern',
+  minScore: 85,
+  maxApps:  50,
+  useLibraryResume: true,
+};
+router.get('/nightly-settings', async (req, res) => {
+  try {
+    const row = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_settings'", [req.user.id]);
+    const cur = row?.value ? JSON.parse(row.value) : {};
+    res.json({ settings: { ...NIGHTLY_DEFAULTS, ...cur } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+router.put('/nightly-settings', async (req, res) => {
+  try {
+    const incoming = req.body || {};
+    const merged = {
+      enabled:  !!incoming.enabled,
+      roleType: ['intern','fulltime','all'].includes(incoming.roleType) ? incoming.roleType : NIGHTLY_DEFAULTS.roleType,
+      minScore: Math.max(0, Math.min(100, Number(incoming.minScore) || NIGHTLY_DEFAULTS.minScore)),
+      maxApps:  Math.max(1, Math.min(200, Number(incoming.maxApps) || NIGHTLY_DEFAULTS.maxApps)),
+      useLibraryResume: incoming.useLibraryResume !== false,
+    };
+    await run(
+      `INSERT INTO meta (user_id, key, value)
+       VALUES ($1, 'nightly_pipeline_settings', $2)
+       ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value`,
+      [req.user.id, JSON.stringify(merged)]
+    );
+    res.json({ settings: merged });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── POST /api/career/nightly-pipeline — manual trigger of the full chain ─────
+// Scans Greenhouse + Lever + Ashby with the configured roleType, evaluates
+// every URL not already in the user's evaluations table, filters by
+// minScore, queues those, and runs the auto-apply worker against up to
+// maxApps queued items. Each evaluation is tagged source='nightly_pipeline'
+// so the queue UI can show provenance. Body is in services/nightlyPipeline.js
+// so the cron (no req context) can call the same code.
+router.post('/nightly-pipeline', async (req, res) => {
+  try {
+    const settingsRow = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_settings'", [req.user.id]);
+    const cfg = { ...NIGHTLY_DEFAULTS, ...(settingsRow?.value ? JSON.parse(settingsRow.value) : {}), ...(req.body || {}) };
+    const summary = await runNightlyPipelineForUser(req.user.id, cfg);
+    if (summary.error) return res.status(400).json({ error: summary.error });
+    res.json(summary);
+  } catch (err) {
+    console.error('[nightly-pipeline route]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/career/nightly-pipeline/last-run — surface last run summary ─────
+router.get('/nightly-pipeline/last-run', async (req, res) => {
+  try {
+    const row = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'nightly_pipeline_last_run'", [req.user.id]);
+    res.json({ lastRun: row?.value ? JSON.parse(row.value) : null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── POST /api/career/batch-evaluate — evaluate multiple URLs in parallel ──────
 router.post('/batch-evaluate', async (req, res) => {
   const { urls } = req.body;
@@ -657,7 +1174,7 @@ router.post('/batch-evaluate', async (req, res) => {
     return res.status(400).json({ error: 'Provide an array of URLs' });
   }
 
-  const resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+  const resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
   if (!resumeText) return res.status(400).json({ error: 'No resume uploaded' });
 
   const batch = urls.slice(0, 10); // max 10
@@ -672,12 +1189,13 @@ router.post('/batch-evaluate', async (req, res) => {
       const evaluation = await evaluateJob({ jobDescription: fetched.text, resumeText, jobUrl: url });
 
       // Save to DB
-      const r = db.prepare(`
-        INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'career_ops_batch')
-      `).run(url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation));
+      const r = await run(`
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'career_ops_batch')
+        RETURNING id
+      `, [req.user.id, url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation)]);
 
-      return { url, evalId: r.lastInsertRowid, evaluation, status: 'done' };
+      return { url, evalId: r.insertId, evaluation, status: 'done' };
     }));
 
     for (let j = 0; j < settled.length; j++) {
@@ -718,12 +1236,12 @@ const docUpload = multer({
 });
 
 // ── GET /api/career/stats — career ops summary ─────────────────────────────────
-router.get('/stats', (req, res) => {
+router.get('/stats', async (req, res) => {
   try {
-    const total    = db.prepare("SELECT COUNT(*) as n FROM company_applications").get().n;
-    const avgRow   = db.prepare("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL").get();
-    const topRow   = db.prepare("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id WHERE ca.fit_score IS NOT NULL ORDER BY ca.fit_score DESC LIMIT 1").get();
-    const applyCount = db.prepare("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2").get().n;
+    const total    = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE user_id = $1", [req.user.id])).n);
+    const avgRow   = await one("SELECT AVG(fit_score) as avg FROM company_applications WHERE fit_score IS NOT NULL AND user_id = $1", [req.user.id]);
+    const topRow   = await one("SELECT ca.*, j.name as company_name FROM company_applications ca JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1 WHERE ca.fit_score IS NOT NULL AND ca.user_id = $1 ORDER BY ca.fit_score DESC LIMIT 1", [req.user.id]);
+    const applyCount = Number((await one("SELECT COUNT(*) as n FROM company_applications WHERE fit_score >= 4.2 AND user_id = $1", [req.user.id])).n);
     res.json({ total, avgScore: avgRow?.avg ? Number(avgRow.avg).toFixed(1) : null, topPick: topRow, applyCount });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -731,14 +1249,15 @@ router.get('/stats', (req, res) => {
 });
 
 // ── GET /api/career/ranked — all applications ranked by fit_score ───────────────
-router.get('/ranked', (req, res) => {
+router.get('/ranked', async (req, res) => {
   try {
-    const rows = db.prepare(`
+    const rows = await all(`
       SELECT ca.*, j.name as company_name, j.category, j.location, j.website
       FROM company_applications ca
-      JOIN jobs j ON j.id = ca.company_id
+      JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1
+      WHERE ca.user_id = $1
       ORDER BY ca.fit_score DESC NULLS LAST, ca.updated_at DESC
-    `).all();
+    `, [req.user.id]);
     res.json({ applications: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -746,9 +1265,9 @@ router.get('/ranked', (req, res) => {
 });
 
 // ── GET /api/career/:companyId/documents — list documents ─────────────────────
-router.get('/:companyId/documents', (req, res) => {
+router.get('/:companyId/documents', async (req, res) => {
   try {
-    const rows = db.prepare("SELECT * FROM documents WHERE company_id = ? ORDER BY created_at DESC").all(req.params.companyId);
+    const rows = await all("SELECT * FROM documents WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC", [req.params.companyId, req.user.id]);
     res.json({ documents: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -756,14 +1275,15 @@ router.get('/:companyId/documents', (req, res) => {
 });
 
 // ── POST /api/career/:companyId/documents — upload document ────────────────────
-router.post('/:companyId/documents', docUpload.single('file'), (req, res) => {
+router.post('/:companyId/documents', docUpload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const result = db.prepare(`
-      INSERT INTO documents (company_id, filename, original_name, mime_type, size)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size);
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ?").get(result.lastInsertRowid);
+    const result = await run(`
+      INSERT INTO documents (user_id, company_id, filename, original_name, mime_type, size)
+      VALUES ($1, $2, $3, $4, $5, $6)
+      RETURNING id
+    `, [req.user.id, req.params.companyId, req.file.filename, req.file.originalname, req.file.mimetype, req.file.size]);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND user_id = $2", [result.insertId, req.user.id]);
     res.json({ document: doc });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -771,13 +1291,13 @@ router.post('/:companyId/documents', docUpload.single('file'), (req, res) => {
 });
 
 // ── DELETE /api/career/:companyId/documents/:docId ────────────────────────────
-router.delete('/:companyId/documents/:docId', (req, res) => {
+router.delete('/:companyId/documents/:docId', async (req, res) => {
   try {
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ? AND company_id = ?").get(req.params.docId, req.params.companyId);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2 AND user_id = $3", [req.params.docId, req.params.companyId, req.user.id]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     try { fs.unlinkSync(filePath); } catch (_) {}
-    db.prepare("DELETE FROM documents WHERE id = ?").run(req.params.docId);
+    await run("DELETE FROM documents WHERE id = $1 AND user_id = $2", [req.params.docId, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -785,9 +1305,9 @@ router.delete('/:companyId/documents/:docId', (req, res) => {
 });
 
 // ── GET /api/career/:companyId/documents/:docId/download ──────────────────────
-router.get('/:companyId/documents/:docId/download', (req, res) => {
+router.get('/:companyId/documents/:docId/download', async (req, res) => {
   try {
-    const doc = db.prepare("SELECT * FROM documents WHERE id = ? AND company_id = ?").get(req.params.docId, req.params.companyId);
+    const doc = await one("SELECT * FROM documents WHERE id = $1 AND company_id = $2 AND user_id = $3", [req.params.docId, req.params.companyId, req.user.id]);
     if (!doc) return res.status(404).json({ error: 'Document not found' });
     const filePath = path.join(DOC_BASE, String(req.params.companyId), doc.filename);
     res.setHeader('Content-Disposition', `inline; filename="${doc.original_name}"`);
@@ -799,9 +1319,9 @@ router.get('/:companyId/documents/:docId/download', (req, res) => {
 });
 
 // ── GET /api/career/company/:id — get application tracking for a company ───────
-router.get('/company/:id', (req, res) => {
+router.get('/company/:id', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json(row || {
       company_id: req.params.id,
       status: 'interested',
@@ -822,7 +1342,7 @@ router.get('/company/:id', (req, res) => {
 });
 
 // ── PUT /api/career/company/:id — upsert application tracking ─────────────────
-router.put('/company/:id', (req, res) => {
+router.put('/company/:id', async (req, res) => {
   try {
     const {
       status, applied_date, follow_up_date, notes, fit_score, salary,
@@ -830,33 +1350,34 @@ router.put('/company/:id', (req, res) => {
       resume_path, resume_original_name, resume_size,
       job_title, job_url, job_source,
     } = req.body;
-    db.prepare(`
+    await run(`
       INSERT INTO company_applications (
-        company_id, status, applied_date, follow_up_date, notes, fit_score,
+        user_id, company_id, status, applied_date, follow_up_date, notes, fit_score,
         salary, location_type, start_date, end_date, fit_assessment,
         resume_path, resume_original_name, resume_size,
         job_title, job_url, job_source, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(company_id) DO UPDATE SET
-        status = excluded.status,
-        applied_date = excluded.applied_date,
-        follow_up_date = excluded.follow_up_date,
-        notes = excluded.notes,
-        fit_score = excluded.fit_score,
-        salary = excluded.salary,
-        location_type = excluded.location_type,
-        start_date = excluded.start_date,
-        end_date = excluded.end_date,
-        fit_assessment = excluded.fit_assessment,
-        resume_path = COALESCE(excluded.resume_path, company_applications.resume_path),
-        resume_original_name = COALESCE(excluded.resume_original_name, company_applications.resume_original_name),
-        resume_size = COALESCE(excluded.resume_size, company_applications.resume_size),
-        job_title = COALESCE(excluded.job_title, company_applications.job_title),
-        job_url = COALESCE(excluded.job_url, company_applications.job_url),
-        job_source = COALESCE(excluded.job_source, company_applications.job_source),
-        updated_at = datetime('now')
-    `).run(
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
+        status = EXCLUDED.status,
+        applied_date = EXCLUDED.applied_date,
+        follow_up_date = EXCLUDED.follow_up_date,
+        notes = EXCLUDED.notes,
+        fit_score = EXCLUDED.fit_score,
+        salary = EXCLUDED.salary,
+        location_type = EXCLUDED.location_type,
+        start_date = EXCLUDED.start_date,
+        end_date = EXCLUDED.end_date,
+        fit_assessment = EXCLUDED.fit_assessment,
+        resume_path = COALESCE(EXCLUDED.resume_path, company_applications.resume_path),
+        resume_original_name = COALESCE(EXCLUDED.resume_original_name, company_applications.resume_original_name),
+        resume_size = COALESCE(EXCLUDED.resume_size, company_applications.resume_size),
+        job_title = COALESCE(EXCLUDED.job_title, company_applications.job_title),
+        job_url = COALESCE(EXCLUDED.job_url, company_applications.job_url),
+        job_source = COALESCE(EXCLUDED.job_source, company_applications.job_source),
+        updated_at = NOW()
+    `, [
+      req.user.id,
       req.params.id,
       status || 'interested',
       applied_date || null,
@@ -873,9 +1394,9 @@ router.put('/company/:id', (req, res) => {
       resume_size != null ? Number(resume_size) : null,
       job_title || null,
       job_url || null,
-      job_source || null
-    );
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+      job_source || null,
+    ]);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json(row);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -890,24 +1411,24 @@ router.post('/company/:id/score-fit', async (req, res) => {
   }, 90000);
 
   try {
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
-    const company = db.prepare('SELECT * FROM jobs WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    const company = await one('SELECT * FROM jobs WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!company) { clearTimeout(timeout); return res.status(404).json({ error: 'Company not found' }); }
     if (!row?.job_title) {
       clearTimeout(timeout); return res.status(400).json({ error: 'No tracked role found. Track a role from Job Scraper first.' });
     }
 
-    let resumeText = db.prepare("SELECT value FROM meta WHERE key = 'user_resume_text'").get()?.value;
+    let resumeText = (await one("SELECT value FROM meta WHERE key = $2 AND user_id = $1", [req.user.id, 'user_resume_text']))?.value;
     if (!resumeText) {
       // Check if resume file exists on disk and parse it on-the-fly
       if (row?.resume_path) {
         try {
           const text = await extractPdfText(row.resume_path);
           if (text && text.length > 50) {
-            const upsert = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-            upsert.run('user_resume_text', text);
-            upsert.run('user_resume_name', row.resume_original_name || 'resume.pdf');
-            upsert.run('user_resume_date', new Date().toISOString());
+            const upsertSql = "INSERT INTO meta (user_id, key, value) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
+            await run(upsertSql, [req.user.id, 'user_resume_text', text]);
+            await run(upsertSql, [req.user.id, 'user_resume_name', row.resume_original_name || 'resume.pdf']);
+            await run(upsertSql, [req.user.id, 'user_resume_date', new Date().toISOString()]);
             resumeText = text;
             console.log(`[score-fit] Parsed resume on-the-fly: ${text.length} chars`);
           } else {
@@ -952,25 +1473,27 @@ router.post('/company/:id/score-fit', async (req, res) => {
     const evaluation = await evaluateJob({ jobDescription, resumeText, jobUrl: row.job_url || null });
     const fitScore = Math.max(1, Math.min(5, Number((evaluation.overallScore / 20).toFixed(1))));
 
-    db.prepare("UPDATE company_applications SET fit_score = ?, fit_assessment = ?, updated_at = datetime('now') WHERE company_id = ?")
-      .run(fitScore, JSON.stringify(evaluation), req.params.id);
+    await run("UPDATE company_applications SET fit_score = $1, fit_assessment = $2, updated_at = NOW() WHERE company_id = $3 AND user_id = $4",
+      [fitScore, JSON.stringify(evaluation), req.params.id, req.user.id]);
 
     // Save to evaluations table so PDF generation can reference it
     let evalId = null;
     try {
-      const r = db.prepare(`
-        INSERT INTO evaluations (job_url, job_title, company_name, job_description, grade, score, report_json, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'score_fit')
-      `).run(
+      const r = await run(`
+        INSERT INTO evaluations (user_id, job_url, job_title, company_name, job_description, grade, score, report_json, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'score_fit')
+        RETURNING id
+      `, [
+        req.user.id,
         row.job_url || null,
         row.job_title,
         company.name,
         jobDescription.slice(0, 5000),
         evaluation.grade,
         evaluation.overallScore,
-        JSON.stringify(evaluation)
-      );
-      evalId = r.lastInsertRowid;
+        JSON.stringify(evaluation),
+      ]);
+      evalId = r.insertId;
     } catch (eErr) {
       console.error('[careerOps] evaluations insert failed:', eErr.message);
     }
@@ -990,7 +1513,7 @@ router.post('/company/:id/score-fit', async (req, res) => {
       console.error('[careerOps] report/tracker save failed:', rErr.message);
     }
 
-    const updated = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const updated = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     clearTimeout(timeout);
     if (!res.headersSent) res.json({ fit_score: updated.fit_score, evaluation, reportFile, evalId });
   } catch (err) {
@@ -1000,32 +1523,57 @@ router.post('/company/:id/score-fit', async (req, res) => {
   }
 });
 
-// ── GET /api/career/tracker — applications.md as JSON rows ────────────────────
-router.get('/tracker', (req, res) => {
+// ── GET /api/career/tracker — per-user evaluations as JSON rows ──────────────
+// Reads from the per-user `evaluations` table. Previously this read a global
+// applications.md file on disk, which leaked across users.
+router.get('/tracker', async (req, res) => {
   try {
-    syncTracker(); // drain any pending TSV first
-    const rows = getTrackerRows();
+    const evals = await all(`
+      SELECT id, company_name, job_title, score, grade, apply_status,
+             report_path, pdf_path, created_at
+      FROM evaluations
+      WHERE user_id = $1
+      ORDER BY created_at ASC
+    `, [req.user.id]);
+
+    const rows = evals.map((e, i) => {
+      const date = e.created_at ? new Date(e.created_at).toISOString().slice(0, 10) : '';
+      const score = e.score != null ? Number(e.score).toFixed(1) : '';
+      const status = e.apply_status || 'not_started';
+      const pdf = e.pdf_path ? path.basename(e.pdf_path) : '';
+      const report = e.report_path ? path.basename(e.report_path) : '';
+      return {
+        num: String(i + 1),
+        date,
+        company: e.company_name || '',
+        role: e.job_title || '',
+        score,
+        status,
+        pdf,
+        report,
+      };
+    });
+
     res.json({ rows, total: rows.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── GET /api/career/tracker/raw — raw applications.md text ───────────────────
+// ── GET /api/career/tracker/raw — DEPRECATED ─────────────────────────────────
+// Previously served a global applications.md file. Removed to prevent cross-user
+// data leaks. Use GET /api/career/tracker for the per-user JSON feed.
 router.get('/tracker/raw', (req, res) => {
-  const p = path.join(__dirname, '..', 'data', 'applications.md');
-  if (!fs.existsSync(p)) return res.send('No evaluations yet.');
-  res.setHeader('Content-Type', 'text/plain');
-  res.send(fs.readFileSync(p, 'utf8'));
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/tracker (per-user JSON).' });
 });
 
 // ── GET /api/career/evaluations/:id/report.html — standalone styled HTML ─────
 // Renders the full A-G evaluation as a self-contained HTML page (no JS, all
 // styles inline) — suitable for saving, printing, or emailing. Replaces the
 // raw .md report the user was seeing before.
-router.get('/evaluations/:id/report.html', (req, res) => {
+router.get('/evaluations/:id/report.html', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM evaluations WHERE id = ?').get(req.params.id);
+    const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).send('<h1>Report not found</h1>');
     const e = row.report_json ? JSON.parse(row.report_json) : null;
     if (!e) return res.status(404).send('<h1>No evaluation data for this report</h1>');
@@ -1220,58 +1768,17 @@ function renderEvaluationHtml(e, row) {
 </html>`;
 }
 
-// ── GET /api/career/reports — list saved reports ─────────────────────────────
-// Prefer the styled .html version per report; fall back to .md when HTML hasn't
-// been generated yet (e.g. reports saved before HTML generation was added).
+// ── GET /api/career/reports — DEPRECATED ─────────────────────────────────────
+// Previously listed every file in backend/data/reports/, which is shared across
+// users. Removed to prevent cross-user leakage. Use
+// /api/career/evaluations/:id/report.html for per-user, ownership-checked HTML
+// renders of saved evaluations.
 router.get('/reports', (req, res) => {
-  const dir = path.join(__dirname, '..', 'data', 'reports');
-  try {
-    const all = fs.readdirSync(dir);
-    const htmlNames = new Set(all.filter(f => f.endsWith('.html')).map(f => f.slice(0, -5)));
-    const mdStems   = all.filter(f => f.endsWith('.md')).map(f => f.slice(0, -3));
-    // Canonical list: one entry per stem, preferring the HTML variant.
-    const stems = Array.from(new Set([...htmlNames, ...mdStems])).sort().reverse();
-    const files = stems.map(stem => {
-      const isHtml = htmlNames.has(stem);
-      const filename = stem + (isHtml ? '.html' : '.md');
-      return {
-        filename,
-        format: isHtml ? 'html' : 'md',
-        url: `/api/career/reports/${filename}`,
-      };
-    });
-    res.json({ reports: files });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/evaluations/:id/report.html.' });
 });
 
-// ── GET /api/career/reports/:filename — serve a saved report ──────────────────
-// - *.html → text/html (browser renders it as a page)
-// - *.md   → text/html too (render markdown as a basic HTML page so users no
-//            longer see raw markdown in the browser)
 router.get('/reports/:filename', (req, res) => {
-  const safe = path.basename(req.params.filename);
-  const dir  = path.join(__dirname, '..', 'data', 'reports');
-  const p    = path.join(dir, safe);
-  if (!fs.existsSync(p)) return res.status(404).send('<h1>Report not found</h1>');
-
-  if (safe.endsWith('.html')) {
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(fs.readFileSync(p, 'utf8'));
-  }
-
-  if (safe.endsWith('.md')) {
-    // Auto-upgrade: if a sibling .html already exists, redirect to it.
-    const htmlSibling = path.join(dir, safe.replace(/\.md$/, '.html'));
-    if (fs.existsSync(htmlSibling)) return res.redirect(`/api/career/reports/${safe.replace(/\.md$/, '.html')}`);
-    // Otherwise render the markdown as a simple styled HTML page on the fly.
-    const md = fs.readFileSync(p, 'utf8');
-    res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    return res.send(renderMarkdownAsHtml(md, safe));
-  }
-
-  res.status(400).send('<h1>Unsupported report format</h1>');
+  res.status(410).json({ error: 'Endpoint removed. Use /api/career/evaluations/:id/report.html.' });
 });
 
 // Tiny, dependency-free markdown → HTML renderer. Covers the subset used in
@@ -1347,4 +1854,3 @@ function renderMarkdownAsHtml(md, filename) {
 }
 
 export default router;
-

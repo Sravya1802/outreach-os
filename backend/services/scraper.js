@@ -1,4 +1,5 @@
 import { ApifyClient } from 'apify-client';
+import { noteApifyError } from './apify.js';
 
 // Lazy accessor — dotenv must load before first call
 function getApifyToken() { return process.env.APIFY_API_TOKEN || ''; }
@@ -46,6 +47,24 @@ const ASHBY_COMPANIES = [
 
 const CS_DEPTS  = /engineering|software|data|machine.?learning|\bml\b|infrastructure|platform|backend|frontend|systems|sre|devops|security|ai\b|research|analytics|cloud/i;
 const INTERN_RE = /\bintern(?:s|ship|ships)?\b/i;
+
+// ─── USA-only location filter ─────────────────────────────────────────────────
+// Drop results from non-US countries. Actors regularly leak Toronto/Bangalore/
+// London/Dublin/etc even when the input asks for "United States". Strategy:
+//   1. Anything explicitly non-US (country name or non-US country code) → drop
+//   2. Anything explicitly US (state name, US city, "Remote US", "USA") → keep
+//   3. Empty / "Remote" / unknown → keep (assume US since query was US-targeted)
+const NON_US_TOKENS = /\b(canada|toronto|vancouver|montreal|ottawa|calgary|waterloo|mississauga|edmonton|quebec|brampton|surrey|halifax|saskatoon|winnipeg|burnaby|markham|richmond hill|brampton|guelph|kitchener|ontario|alberta|british columbia|manitoba|saskatchewan|nova scotia|new brunswick|newfoundland|prince edward island|yukon|northwest territories|nunavut|\bon, ca\b|\bbc, ca\b|\bab, ca\b|\bqc, ca\b|united kingdom|england|britain|\buk\b|london|manchester|birmingham|liverpool|edinburgh|glasgow|bristol|leeds|cambridge|oxford|sheffield|cardiff|belfast|dublin|cork|galway|limerick|ireland|france|paris|lyon|marseille|toulouse|nice|nantes|strasbourg|montpellier|bordeaux|germany|berlin|munich|hamburg|frankfurt|cologne|stuttgart|düsseldorf|leipzig|netherlands|amsterdam|rotterdam|the hague|utrecht|eindhoven|belgium|brussels|antwerp|ghent|spain|madrid|barcelona|valencia|seville|bilbao|portugal|lisbon|porto|italy|rome|milan|naples|turin|florence|bologna|venice|switzerland|zurich|geneva|basel|bern|austria|vienna|salzburg|sweden|stockholm|gothenburg|malmö|denmark|copenhagen|aarhus|norway|oslo|bergen|trondheim|finland|helsinki|tampere|poland|warsaw|kraków|wrocław|gdańsk|czechia|prague|brno|hungary|budapest|romania|bucharest|cluj|iași|greece|athens|thessaloniki|bulgaria|sofia|turkey|istanbul|ankara|izmir|israel|tel aviv|jerusalem|haifa|herzliya|india|bangalore|bengaluru|mumbai|delhi|noida|gurgaon|gurugram|hyderabad|chennai|pune|kolkata|ahmedabad|jaipur|lucknow|kanpur|nagpur|indore|coimbatore|kochi|thiruvananthapuram|chandigarh|china|beijing|shanghai|shenzhen|guangzhou|chengdu|hangzhou|wuhan|nanjing|tianjin|hong kong|taiwan|taipei|kaohsiung|japan|tokyo|osaka|kyoto|yokohama|nagoya|sapporo|fukuoka|south korea|seoul|busan|incheon|singapore|malaysia|kuala lumpur|penang|johor bahru|indonesia|jakarta|surabaya|bandung|thailand|bangkok|chiang mai|vietnam|ho chi minh|hanoi|philippines|manila|cebu|davao|australia|sydney|melbourne|brisbane|perth|adelaide|canberra|hobart|new zealand|auckland|wellington|christchurch|dunedin|brazil|são paulo|rio de janeiro|brasília|salvador|fortaleza|belo horizonte|curitiba|porto alegre|argentina|buenos aires|córdoba|rosario|chile|santiago|valparaíso|colombia|bogotá|medellín|cali|peru|lima|mexico|mexico city|guadalajara|monterrey|puebla|tijuana|south africa|johannesburg|cape town|durban|pretoria|nigeria|lagos|abuja|kenya|nairobi|egypt|cairo|alexandria|uae|dubai|abu dhabi|saudi arabia|riyadh|jeddah|qatar|doha|kuwait|kuwait city|bahrain|manama|jordan|amman|lebanon|beirut|pakistan|karachi|lahore|islamabad|bangladesh|dhaka|sri lanka|colombo|nepal|kathmandu)\b/i;
+function isUSLocation(loc) {
+  if (!loc) return true;
+  const s = String(loc).toLowerCase().trim();
+  if (!s) return true;
+  // Common "remote" variants → assume US since query was US-targeted
+  if (/^(remote|anywhere|us remote|usa|united states|us only|remote, usa|remote - us|remote \(us\))$/.test(s)) return true;
+  // Explicit non-US match
+  if (NON_US_TOKENS.test(s)) return false;
+  return true;
+}
 
 // ─── Search terms per subcategory ─────────────────────────────────────────────
 
@@ -111,10 +130,14 @@ const SEARCH_TERMS_MAP = {
 };
 
 export function getSearchTerms(category = '', subcategory = '') {
+  // Search terms are intentionally role-agnostic by default so LinkedIn/Wellfound
+  // pick up product, design, data, marketing, finance interns — not just SWE.
+  // SEARCH_TERMS_MAP entries are role-specific by category (Quant Funds want
+  // quantitative roles, etc.) and should still take precedence when set.
   if (SEARCH_TERMS_MAP[subcategory]) return SEARCH_TERMS_MAP[subcategory];
-  if (subcategory) return [`${subcategory} software engineer intern 2026`, `${subcategory} intern`];
-  if (category)    return [`${category.split(/[&/]/)[0].trim()} software engineer intern 2026`];
-  return ['software engineer intern 2026'];
+  if (subcategory) return [`${subcategory} intern 2026`, `${subcategory} internship`, `${subcategory} new grad 2026`];
+  if (category)    return [`${category.split(/[&/]/)[0].trim()} intern 2026`, `${category.split(/[&/]/)[0].trim()} new grad 2026`];
+  return ['intern 2026', 'internship 2026', 'new grad 2026'];
 }
 
 // ─── Location parser ──────────────────────────────────────────────────────────
@@ -248,8 +271,14 @@ async function runApifyActor(actorId, input, storeSearchTerm, waitSecs = 90) {
     if (isUnavailable && storeSearchTerm) {
       console.warn(`[apify] ${actorId} unavailable — searching store for: "${storeSearchTerm}"`);
       const alt = await findActorInStore(storeSearchTerm);
-      if (alt && alt !== actorId) return await tryRun(alt);
+      if (alt && alt !== actorId) {
+        try { return await tryRun(alt); }
+        catch (altErr) { noteApifyError(alt, altErr); throw altErr; }
+      }
     }
+    // Defense in depth: any actor failure in this central runner records to
+    // the burn sentinel if it's quota-shaped, even when callers forget.
+    noteApifyError(actorId, err);
     throw err;
   }
 }
@@ -274,11 +303,13 @@ async function scrapeGreenhouse() {
         if (!INTERN_RE.test(job.title || '')) continue;
         const depts = (job.departments || []).map(d => d.name || '').join(' ');
         if (!CS_DEPTS.test(depts) && !CS_DEPTS.test(job.title || '')) continue;
+        const loc = job.location?.name || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           companyName,
           jobTitle:       job.title || '',
           jobDescription: (job.content || '').replace(/<[^>]+>/g, '').slice(0, 500),
-          location:       job.location?.name || 'USA',
+          location:       loc,
           careersUrl:     job.absolute_url || '',
           source:         'greenhouse',
         }));
@@ -306,11 +337,13 @@ async function scrapeLever() {
         if (!INTERN_RE.test(job.text || '')) continue;
         const team = job.categories?.team || '';
         if (!CS_DEPTS.test(team) && !CS_DEPTS.test(job.text || '')) continue;
+        const loc = job.categories?.location || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           job.company || (company.charAt(0).toUpperCase() + company.slice(1)),
           jobTitle:       job.text || '',
           jobDescription: (job.descriptionPlain || job.description || '').slice(0, 500),
-          location:       job.categories?.location || 'USA',
+          location:       loc,
           careersUrl:     job.hostedUrl || '',
           source:         'lever',
         }));
@@ -340,11 +373,13 @@ async function scrapeAshby() {
       for (const job of jobList) {
         if (!INTERN_RE.test(job.title || '')) continue;
         if (!CS_DEPTS.test(job.department || '') && !CS_DEPTS.test(job.title || '')) continue;
+        const loc = job.locationName || job.location || 'USA';
+        if (!isUSLocation(loc)) continue;
         results.push(norm({
           name:           companyName,
           jobTitle:       job.title || '',
           jobDescription: (job.descriptionHtml || job.descriptionSocial || '').replace(/<[^>]+>/g, '').slice(0, 500),
-          location:       job.locationName || job.location || 'USA',
+          location:       loc,
           careersUrl:     job.jobPostingUrl || job.applyUrl || '',
           source:         'ashby',
         }));
@@ -468,13 +503,17 @@ async function scrapeInternList() {
 
 async function scrapeLinkedInJobs(searchTerms = []) {
   console.log('[linkedin] started');
-  const query = searchTerms[0] || 'Software Engineer Intern 2026';
+  const query = searchTerms[0] || 'Intern 2026';
 
-  // Try multiple actor IDs and input schemas in order
+  // Apify made breaking changes:
+  //  - bebity/linkedin-jobs-scraper went paid-only (free trial expired)
+  //  - curious_coder changed input schema to require `urls`, not keyword
+  // valig still works on FREE plans with the keyword schema. Keep
+  // curious_coder as a fallback with the new `urls` schema. Drop bebity.
+  const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(query)}&location=United%20States`;
   const attempts = [
-    { id: 'curious_coder/linkedin-jobs-scraper',  input: { keyword: query, location: 'United States', rows: 50 } },
-    { id: 'curious_coder/linkedin-jobs-scraper',  input: { searchTerms: [query], location: 'United States', count: 50 } },
-    { id: 'bebity/linkedin-jobs-scraper',          input: { keyword: query, location: 'United States', maxItems: 50 } },
+    { id: 'valig/linkedin-jobs-scraper',          input: { keyword: query, location: 'United States', limit: 100 } },
+    { id: 'curious_coder/linkedin-jobs-scraper',  input: { urls: [searchUrl], maxJobs: 100 } },
   ];
 
   for (const { id, input } of attempts) {
@@ -492,21 +531,54 @@ async function scrapeLinkedInJobs(searchTerms = []) {
           careersUrl:     i.jobUrl || i.url || '',
           source:         'linkedin',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
+      if (results.length === 0) {
+        // Actor ignored the intern keyword and returned unrelated roles — try
+        // the next actor (which uses LinkedIn's own search URL and honors
+        // keywords) instead of returning [] and skipping the Greenhouse fallback.
+        const sample = (items[0]?.jobTitle || items[0]?.title || '').slice(0, 80);
+        console.warn(`[linkedin] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[linkedin] returned ${results.length} results (${id})`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[linkedin] attempt "${id}" failed: ${err.message}`);
     }
   }
 
-  console.error('[linkedin] all attempts failed');
-  return [];
+  console.error('[linkedin] all attempts failed — falling back to direct Greenhouse scan');
+  const fallback = [];
+  await Promise.allSettled(GREENHOUSE_TOKENS.map(async (slug) => {
+    try {
+      const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${slug}/jobs?content=false`, {
+        signal: AbortSignal.timeout(6000),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      for (const job of (data.jobs || [])) {
+        const title = job.title || '';
+        if (!INTERN_RE.test(title) || !CS_DEPTS.test(title)) continue;
+        fallback.push(norm({
+          name:       slug.charAt(0).toUpperCase() + slug.slice(1),
+          jobTitle:   title,
+          location:   job.location?.name || 'USA',
+          careersUrl: job.absolute_url || `https://boards.greenhouse.io/${slug}`,
+          source:     'linkedin',
+        }));
+      }
+    } catch (_) {}
+  }));
+
+  console.log(`[linkedin] Greenhouse fallback returned ${fallback.length} results`);
+  return fallback;
 }
 
 async function scrapeWellfound(searchTerms = []) {
   console.log('[wellfound] started');
-  const query = searchTerms[0] || 'software engineer intern';
+  const query = searchTerms[0] || 'intern 2026';
 
   const attempts = [
     { id: 'misceres/wellfound-scraper',            input: { role: query, type: 'internship' } },
@@ -528,10 +600,12 @@ async function scrapeWellfound(searchTerms = []) {
           careersUrl:     i.url || i.applyUrl || '',
           source:         'wellfound',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       console.log(`[wellfound] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[wellfound] attempt "${id}" failed: ${err.message}`);
     }
   }
@@ -542,7 +616,7 @@ async function scrapeWellfound(searchTerms = []) {
 
 async function scrapeIndeed(searchTerms = []) {
   console.log('[indeed] started');
-  const position = searchTerms[0] || 'Software Engineer Intern';
+  const position = searchTerms[0] || 'Intern 2026';
 
   const attempts = [
     { id: 'apify/indeed-scraper',            input: { country: 'US', position, maxItems: 100 } },
@@ -566,10 +640,17 @@ async function scrapeIndeed(searchTerms = []) {
           careersUrl:     i.url || i.externalApplyLink || '',
           source:         'indeed',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
+      if (results.length === 0) {
+        const sample = (items[0]?.positionName || items[0]?.title || '').slice(0, 80);
+        console.warn(`[indeed] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[indeed] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[indeed] attempt "${id}" failed: ${err.message}`);
     }
   }
@@ -580,7 +661,7 @@ async function scrapeIndeed(searchTerms = []) {
 
 async function scrapeDice(searchTerms = []) {
   console.log('[dice] started');
-  const query = searchTerms[0] || 'Software Engineer Intern';
+  const query = searchTerms[0] || 'Intern 2026';
 
   // Try Dice's internal API first (no auth required)
   try {
@@ -606,7 +687,8 @@ async function scrapeDice(searchTerms = []) {
           careersUrl: i.jobDetailUrl ? `https://www.dice.com/job-detail/${i.jobDetailUrl}` : i.applyUrl || '',
           source:     'dice',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[dice] returned ${results.length} results (direct API)`);
         return results;
@@ -634,7 +716,8 @@ async function scrapeDice(searchTerms = []) {
         careersUrl: i.url || '',
         source:     'dice',
       }))
-      .filter(r => r.name.length > 1);
+      .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
     console.log(`[dice] returned ${results.length} results (Apify)`);
     return results;
   } catch (err) {
@@ -645,7 +728,7 @@ async function scrapeDice(searchTerms = []) {
 
 async function scrapeGoogleJobs(searchTerms = []) {
   console.log('[google_jobs] started');
-  const query = searchTerms[0] || 'Software Engineer Internship 2026 United States';
+  const query = searchTerms[0] || 'Internship 2026 United States';
 
   const attempts = [
     { id: 'bebity/google-jobs-scraper', input: { queries: [query], countryCode: 'us', languageCode: 'en', maxPagesPerQuery: 3 } },
@@ -668,16 +751,109 @@ async function scrapeGoogleJobs(searchTerms = []) {
           careersUrl:     i.url || i.applyLink || '',
           source:         'google_jobs',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
+      if (results.length === 0) {
+        const sample = (items[0]?.title || items[0]?.jobTitle || '').slice(0, 80);
+        console.warn(`[google_jobs] ${id}: ${items.length} items returned but 0 matched intern filter (sample: "${sample}") — trying next actor`);
+        continue;
+      }
       console.log(`[google_jobs] returned ${results.length} results`);
       return results;
     } catch (err) {
+      noteApifyError(id, err);
       console.warn(`[google_jobs] attempt "${id}" failed: ${err.message}`);
     }
   }
 
   console.error('[google_jobs] all attempts failed');
   return [];
+}
+
+// ─── Handshake (school portal — requires session cookie) ────────────────────
+// Handshake is school-locked. Per user ask #6 option A: the user pastes their
+// session cookie into the VM .env as HANDSHAKE_SESSION_COOKIE (the value of
+// the `_session_id` cookie from app.joinhandshake.com). Optionally
+// HANDSHAKE_BASE_URL can override the default to point at a school-specific
+// subdomain (e.g. https://uic.joinhandshake.com).
+//
+// Cookies expire — when this returns 0 the user re-pastes a fresh cookie.
+async function scrapeHandshake(searchTerms = []) {
+  console.log('[handshake] started');
+  const cookie = process.env.HANDSHAKE_SESSION_COOKIE;
+  if (!cookie) {
+    console.warn('[handshake] HANDSHAKE_SESSION_COOKIE not set — skipping');
+    return [];
+  }
+  const baseUrl = process.env.HANDSHAKE_BASE_URL || 'https://app.joinhandshake.com';
+  const query = (searchTerms[0] || 'intern 2026').toLowerCase();
+  const isIntern = /intern/.test(query);
+  const params = new URLSearchParams({ keyword: query, 'locations[]': 'United States' });
+  if (isIntern) params.append('employmentTypeIds[]', 'intern');
+  const searchUrl = `${baseUrl}/job-search?${params.toString()}`;
+
+  let browser;
+  try {
+    const { chromium } = await import('playwright');
+    browser = await chromium.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const context = await browser.newContext();
+    // Set the session cookie on the Handshake domain.
+    const url = new URL(baseUrl);
+    await context.addCookies([
+      { name: '_session_id', value: cookie, domain: url.hostname, path: '/', httpOnly: true, secure: true, sameSite: 'Lax' },
+    ]);
+    const page = await context.newPage();
+    await page.goto(searchUrl, { waitUntil: 'load', timeout: 25000 });
+    // Detect login redirect (cookie expired) — Handshake bounces to /login or /students/sign_in
+    if (/\/(login|sign_in)/i.test(page.url())) {
+      console.warn('[handshake] cookie appears expired (redirected to login) — paste a fresh HANDSHAKE_SESSION_COOKIE');
+      return [];
+    }
+    // Wait for job cards. Handshake's markup changes; we use a few selector candidates.
+    await page.waitForSelector('a[href*="/jobs/"], [data-test*="job-card"], [data-hook*="job"]', { timeout: 12000 }).catch(() => {});
+    const items = await page.evaluate(() => {
+      const out = [];
+      const cards = document.querySelectorAll('a[href*="/jobs/"], [data-test*="job-card"], [data-hook*="job"]');
+      const seen = new Set();
+      for (const card of cards) {
+        const href = card.getAttribute('href') || card.querySelector('a[href*="/jobs/"]')?.getAttribute('href') || '';
+        if (!/\/jobs\//.test(href)) continue;
+        const url = href.startsWith('http') ? href : `https://app.joinhandshake.com${href}`;
+        if (seen.has(url)) continue;
+        seen.add(url);
+        const text = (card.innerText || card.textContent || '').trim();
+        const lines = text.split('\n').map(s => s.trim()).filter(Boolean);
+        // First line = title, second line = company, third line = location (best-effort)
+        out.push({
+          url,
+          title:    lines[0] || '',
+          company:  lines[1] || '',
+          location: lines[2] || 'USA',
+        });
+        if (out.length >= 100) break;
+      }
+      return out;
+    });
+    const results = items
+      .filter(i => i.company)
+      .filter(i => INTERN_RE.test(i.title || ''))
+      .map(i => norm({
+        name:       i.company.trim(),
+        jobTitle:   i.title || 'Intern',
+        location:   i.location || 'USA',
+        careersUrl: i.url || '',
+        source:     'handshake',
+      }))
+      .filter(r => r.name.length > 1)
+      .filter(r => isUSLocation(r.location));
+    console.log(`[handshake] returned ${results.length} results from ${items.length} cards`);
+    return results;
+  } catch (err) {
+    console.error(`[handshake] failed: ${err.message}`);
+    return [];
+  } finally {
+    if (browser) { try { await browser.close(); } catch {} }
+  }
 }
 
 // ─── Tier 4: Direct fetch ─────────────────────────────────────────────────────
@@ -719,7 +895,8 @@ async function scrapeAIJobs() {
           });
         })
         .filter(Boolean)
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[ai_jobs] returned ${results.length} results (${url})`);
         return results;
@@ -796,7 +973,8 @@ async function scrapeProsple() {
           careersUrl: i.url || i.applyUrl || '',
           source:     'prosple',
         }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length > 0) {
         console.log(`[prosple] returned ${results.length} results`);
         return results;
@@ -824,7 +1002,8 @@ async function scrapeAIJobsAI() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.apply_url || '', source: 'aijobs_ai' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[aijobs.ai] ${results.length} results`); return results; }
     }
   } catch (_) {}
@@ -866,7 +1045,8 @@ async function scrapeStartupJobs() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.startup?.name || i.company || '').trim(), jobTitle: i.title, location: i.location || i.remote ? 'Remote' : 'USA', careersUrl: i.url || i.link || '', source: 'startup_jobs' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[startup.jobs] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -908,7 +1088,8 @@ async function scrapeRemoteAI() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'Remote', careersUrl: i.url || i.apply_url || '', source: 'remoteai' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[remoteai.io] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -950,7 +1131,8 @@ async function scrapeArcDev() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company?.name || i.company || '').trim(), jobTitle: i.title, location: i.location || 'Remote', careersUrl: i.url || i.apply_url || '', source: 'arc_dev' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[arc.dev] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -976,7 +1158,8 @@ async function scrapeAIJobsNet() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.link || '', source: 'aijobs_net' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[aijobs.net] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -1018,7 +1201,8 @@ async function scrapeHiringCafe() {
       const results = items
         .filter(i => INTERN_RE.test(i.title || ''))
         .map(i => norm({ name: (i.company || i.company_name || '').trim(), jobTitle: i.title, location: i.location || 'USA', careersUrl: i.url || i.apply_url || '', source: 'hiring_cafe' }))
-        .filter(r => r.name.length > 1);
+        .filter(r => r.name.length > 1)
+        .filter(r => isUSLocation(r.location));
       if (results.length) { console.log(`[hiring.cafe] ${results.length} results`); return results; }
     } catch (_) {}
   }
@@ -1125,7 +1309,28 @@ export const SOURCES = [
   { key: 'google_jobs',  fn: (terms) => scrapeGoogleJobs(terms) },
   { key: 'ai_jobs',      fn: ()      => scrapeAIJobs() },
   { key: 'prosple',      fn: ()      => scrapeProsple() },
+  { key: 'handshake',    fn: (terms) => scrapeHandshake(terms) },
 ];
+
+const SOURCE_ALIASES = {
+  google:      ['google_jobs'],
+  google_jobs: ['google_jobs'],
+  github:      ['simplify', 'speedyapply', 'internlist'],
+};
+
+function selectSources(sourceFilter = '') {
+  if (!sourceFilter) return SOURCES;
+  const requested = String(sourceFilter)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const keys = requested.flatMap(key => SOURCE_ALIASES[key] || [key]);
+  const selected = SOURCES.filter(source => keys.includes(source.key));
+  if (selected.length === 0) {
+    throw new Error(`Unknown scrape source: ${sourceFilter}`);
+  }
+  return selected;
+}
 
 /**
  * Run all scraping sources in parallel, normalize, and deduplicate.
@@ -1134,18 +1339,19 @@ export const SOURCES = [
  *
  * @returns {{ results: NormalizedCompany[], bySource: Record<string,number>, errors: Record<string,string> }}
  */
-export async function scrapeAllSources(subcategory = '', category = '') {
+export async function scrapeAllSources(subcategory = '', category = '', sourceFilter = '') {
   const searchTerms = getSearchTerms(category, subcategory);
-  console.log(`[scraper] starting ${SOURCES.length} sources — subcategory="${subcategory}" terms=[${searchTerms.slice(0, 2).join(', ')}]`);
+  const selectedSources = selectSources(sourceFilter);
+  console.log(`[scraper] starting ${selectedSources.length} sources${sourceFilter ? ` (${sourceFilter})` : ''} — subcategory="${subcategory}" terms=[${searchTerms.slice(0, 2).join(', ')}]`);
 
-  const settled = await Promise.allSettled(SOURCES.map(s => s.fn(searchTerms)));
+  const settled = await Promise.allSettled(selectedSources.map(s => s.fn(searchTerms)));
 
   const bySource = {};
   const errors   = {};
   const allRaw   = [];
 
-  for (let i = 0; i < SOURCES.length; i++) {
-    const { key } = SOURCES[i];
+  for (let i = 0; i < selectedSources.length; i++) {
+    const { key } = selectedSources[i];
     const result  = settled[i];
     if (result.status === 'fulfilled') {
       bySource[key] = result.value.length;

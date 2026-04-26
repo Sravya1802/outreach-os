@@ -10,6 +10,31 @@ setTimeout(() => {
   console.log(`[serper] key present: ${(process.env.SERPER_API_KEY || '').length > 10}`);
 }, 0);
 
+// ── Quota-burn sentinel ─────────────────────────────────────────────────────
+// Apify's /v2/users/me endpoint reports the *account's* platform credit balance,
+// which is reliably 0/0 on FREE accounts even when the actor-side monthly limit
+// has been blown. So creditChecker can't detect a burn from the Apify API
+// alone. We track it here: every actor-failure path that throws with a
+// quota-shaped message bumps a module-level timestamp + last error. The
+// /api/credits/status route reads this via getApifyQuotaBurn() and flags
+// `critical: true` when the burn was recent (last 6h). The sidebar Apify dot
+// turns red within seconds of the next failed scrape — no polling needed.
+const apifyQuotaBurn = { lastFailureAt: 0, lastError: null, lastActor: null };
+const QUOTA_RE = /hard limit|monthly usage|quota|exhausted|insufficient.*credit|402|payment required/i;
+export function noteApifyError(actor, err) {
+  const msg = err?.message || String(err);
+  if (QUOTA_RE.test(msg)) {
+    apifyQuotaBurn.lastFailureAt = Date.now();
+    apifyQuotaBurn.lastError     = msg.slice(0, 200);
+    apifyQuotaBurn.lastActor     = actor || null;
+  }
+}
+export function getApifyQuotaBurn() {
+  if (!apifyQuotaBurn.lastFailureAt) return null;
+  const ageMs = Date.now() - apifyQuotaBurn.lastFailureAt;
+  return { ...apifyQuotaBurn, ageMs, recent: ageMs < 6 * 60 * 60 * 1000 };
+}
+
 // ── Serper.dev Google search (replaces Apify google-search-scraper) ──────────
 // Returns { organic: [{ title, link, snippet }] }
 async function serperSearch(query, num = 10) {
@@ -34,14 +59,21 @@ async function serperSearch(query, num = 10) {
 async function runActor(actorId, input, waitSecs = 120) {
   const client = getClient();
   console.log(`[apify] starting actor ${actorId}...`);
-  const run = await client.actor(actorId).call(input, { waitSecs });
-  console.log(`[apify] run ID: ${run.id} — status: ${run.status}`);
-  if (run.status !== 'SUCCEEDED') {
-    throw new Error(`Actor ${actorId} finished with status ${run.status}`);
+  try {
+    const run = await client.actor(actorId).call(input, { waitSecs });
+    console.log(`[apify] run ID: ${run.id} — status: ${run.status}`);
+    if (run.status !== 'SUCCEEDED') {
+      throw new Error(`Actor ${actorId} finished with status ${run.status}`);
+    }
+    const { items } = await client.dataset(run.defaultDatasetId).listItems();
+    console.log(`[apify] dataset items: ${items.length}`);
+    return items;
+  } catch (err) {
+    // Defense in depth: even if the caller forgets to call noteApifyError,
+    // central runActor catches any quota-shaped error before re-throwing.
+    noteApifyError(actorId, err);
+    throw err;
   }
-  const { items } = await client.dataset(run.defaultDatasetId).listItems();
-  console.log(`[apify] dataset items: ${items.length}`);
-  return items;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -177,7 +209,9 @@ const LINKEDIN_ACTOR_CONFIGS = [
 ];
 
 export async function scrapeLinkedInJobs(subcategory = '', category = '') {
-  const query = [subcategory, 'Software Engineer Intern 2026'].filter(Boolean).join(' ');
+  // Role-agnostic by default — covers product, design, data, marketing, finance,
+  // not just SWE. Subcategory still narrows when caller provides one.
+  const query = [subcategory, 'Intern 2026'].filter(Boolean).join(' ');
   const cookie = process.env.LINKEDIN_SESSION_COOKIE || '';
   console.log(`[linkedin] starting — query: "${query}"`);
 
@@ -214,6 +248,7 @@ export async function scrapeLinkedInJobs(subcategory = '', category = '') {
 
     } catch (err) {
       lastError = err;
+      noteApifyError(actorId, err);
       console.error(`[linkedin] actor ${actorId} failed: ${err.message}`);
     }
   }
@@ -261,8 +296,8 @@ export async function scrapeLinkedInJobs(subcategory = '', category = '') {
 
 export async function scrapeGoogleJobs(subcategory = '', category = '') {
   const query = subcategory
-    ? `${subcategory} Software Engineer Internship 2026 United States`
-    : 'Software Engineer Internship 2026 site:jobs.lever.co OR site:greenhouse.io OR site:myworkdayjobs.com';
+    ? `${subcategory} Internship 2026 United States`
+    : 'Internship 2026 site:jobs.lever.co OR site:greenhouse.io OR site:myworkdayjobs.com';
 
   try {
     console.log(`[google_jobs] Serper search: "${query}"`);
@@ -297,13 +332,13 @@ export async function scrapeGoogleJobs(subcategory = '', category = '') {
 // Source 5: Wellfound — Apify with multiple actor fallbacks + Serper
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function scrapeWellfound(roleQuery = 'software engineer intern', subcategory = '', category = '') {
-  const role = subcategory ? `${subcategory} software engineer intern` : roleQuery;
+export async function scrapeWellfound(roleQuery = 'intern 2026', subcategory = '', category = '') {
+  const role = subcategory ? `${subcategory} intern 2026` : roleQuery;
 
   // Try multiple known actors in order
   const ACTORS = [
     { id: 'curious_coder/wellfound-scraper',  input: { role, location: 'United States', maxJobs: 100 } },
-    { id: 'clearpath/wellfound-api-ppe',       input: { role: 'Software Engineer Intern', location: 'United States', maxJobs: 50 } },
+    { id: 'clearpath/wellfound-api-ppe',       input: { role: 'Intern', location: 'United States', maxJobs: 50 } },
     { id: 'apify/rag-web-browser',             input: { startUrls: [{ url: 'https://wellfound.com/role/r/software-engineer-intern' }], maxCrawlDepth: 0, maxCrawlPages: 1, outputFormats: ['text'] } },
   ];
 
@@ -347,6 +382,7 @@ export async function scrapeWellfound(roleQuery = 'software engineer intern', su
           source:      'wellfound',
         }));
     } catch (err) {
+      noteApifyError(id, err);
       console.error(`[wellfound] ${id} failed: ${err.message}`);
     }
   }
@@ -355,8 +391,8 @@ export async function scrapeWellfound(roleQuery = 'software engineer intern', su
   try {
     console.log('[wellfound] trying Serper fallback');
     const q = subcategory
-      ? `site:wellfound.com ${subcategory} software engineer intern`
-      : 'site:wellfound.com/companies software engineer intern 2026';
+      ? `site:wellfound.com ${subcategory} intern 2026`
+      : 'site:wellfound.com/companies intern 2026';
     const data = await serperSearch(q, 10);
     const organic = data.organic || [];
     return organic
@@ -405,8 +441,8 @@ export async function scrapeYCStartups(subcategory = '', category = '') {
   // Layer 1: Serper search on WorkAtAStartup
   try {
     const q = subcategory
-      ? `site:workatastartup.com "${subcategory}" intern`
-      : 'site:workatastartup.com software engineer intern 2026';
+      ? `site:workatastartup.com "${subcategory}" intern 2026`
+      : 'site:workatastartup.com intern 2026';
     console.log(`[yc] Serper: "${q}"`);
     const data = await serperSearch(q, 10);
     for (const item of (data.organic || [])) {
@@ -453,8 +489,8 @@ export async function scrapeYCStartups(subcategory = '', category = '') {
   if (results.length < 5) {
     try {
       const q2 = subcategory
-        ? `YC startup "${subcategory}" hiring software intern 2026 site:ycombinator.com`
-        : 'YC startup hiring software engineer intern 2026 site:ycombinator.com/companies';
+        ? `YC startup "${subcategory}" hiring intern 2026 site:ycombinator.com`
+        : 'YC startup hiring intern 2026 site:ycombinator.com/companies';
       const data2 = await serperSearch(q2, 10);
       for (const item of (data2.organic || [])) {
         const link = item.link || '';
@@ -760,6 +796,7 @@ export async function findPeopleAtLinkedInCompany(
             .filter(p => p.name && p.name.length > 2);
         }
       } catch (err) {
+        noteApifyError(actorId, err);
         console.warn(`[people/linkedin] ${actorId} failed: ${err.message}`);
       }
     }
@@ -852,6 +889,7 @@ export async function scrapeLinkedInProfile(linkedinUrl) {
     const p = items[0];
     return { name: p.fullName || p.name || '', title: p.headline || p.title || '', linkedin_url: linkedinUrl, summary: p.summary || '', company: p.currentCompany || p.company || '' };
   } catch (err) {
+    noteApifyError('curious_coder/linkedin-profile-scraper', err);
     console.error('[profile] scrape failed:', err.message);
     return null;
   }
