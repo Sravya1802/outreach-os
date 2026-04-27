@@ -7,13 +7,16 @@ const publishableKey = (
 ).trim()
 
 export const hasAuthEnv = Boolean(
-  process.env.E2E_REFRESH_TOKEN &&
-  publishableKey.startsWith('sb_publishable_')
+  publishableKey.startsWith('sb_publishable_') &&
+  (
+    (process.env.E2E_TEST_EMAIL && process.env.E2E_TEST_PASSWORD) ||
+    process.env.E2E_REFRESH_TOKEN
+  )
 )
 
 export function skipWithoutAuthEnv() {
   test.skip(
     !hasAuthEnv,
-    'E2E_REFRESH_TOKEN and E2E_SUPABASE_PUBLISHABLE_KEY=sb_publishable_... are required for authenticated e2e specs.'
+    'E2E_SUPABASE_PUBLISHABLE_KEY=sb_publishable_... plus E2E_TEST_EMAIL/E2E_TEST_PASSWORD are required for authenticated e2e specs.'
   )
 }

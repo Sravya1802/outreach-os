@@ -3,8 +3,9 @@
 // session in storageState. Subsequent specs reuse it via Playwright's
 // dependsOn project relationship (see playwright.config.js).
 //
-// Reads E2E_REFRESH_TOKEN from env. Locally: paste it manually after running
-// scripts/create-e2e-user.mjs once. In CI: GitHub Actions secret.
+// Reads E2E_TEST_EMAIL/E2E_TEST_PASSWORD from env in CI to mint a fresh
+// session. E2E_REFRESH_TOKEN remains as a local fallback, but refresh tokens
+// rotate and are too brittle for repeated scheduled GitHub runs.
 //
 // Supabase URL + publishable key are public, but keep them in env so the
 // harness keeps working after legacy JWT anon keys are disabled or rotated.
@@ -28,27 +29,35 @@ const STORAGE_KEY   = 'sb-dkifhfqgoremdjhkcojc-auth-token'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const STORAGE_PATH = path.join(__dirname, '.auth', 'storage.json')
 
-setup('refresh session and save storage state', async ({ page }) => {
+setup('sign in and save storage state', async ({ page }) => {
+  const email = process.env.E2E_TEST_EMAIL
+  const password = process.env.E2E_TEST_PASSWORD
   const rt = process.env.E2E_REFRESH_TOKEN
-  if (!rt) {
-    setup.skip(true, 'E2E_REFRESH_TOKEN not set — run scripts/create-e2e-user.mjs first or paste a refresh_token from a browser session.')
-  }
+
   if (!SUPABASE_PUBLISHABLE_KEY) {
     setup.skip(true, 'E2E_SUPABASE_PUBLISHABLE_KEY not set — use the Supabase sb_publishable_ key after disabling legacy API keys.')
   }
   if (!SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')) {
     throw new Error('E2E_SUPABASE_PUBLISHABLE_KEY must start with sb_publishable_. The current GitHub secret appears to be the old legacy anon key.')
   }
+  if ((!email || !password) && !rt) {
+    setup.skip(true, 'Set E2E_TEST_EMAIL + E2E_TEST_PASSWORD for CI, or E2E_REFRESH_TOKEN as a local fallback.')
+  }
 
-  // Mint a fresh access_token. Refresh tokens rotate, but Playwright caches
-  // storageState per run so we always start with a freshly minted access.
-  const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
-    method:  'POST',
+  // Password auth gives CI a fresh session each run. Refresh-token fallback is
+  // kept for local one-off runs, but should not be used for scheduled CI
+  // because Supabase refresh tokens rotate.
+  const grantType = email && password ? 'password' : 'refresh_token'
+  const body = grantType === 'password'
+    ? { email, password }
+    : { refresh_token: rt }
+  const r = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=${grantType}`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json', apikey: SUPABASE_PUBLISHABLE_KEY },
-    body:    JSON.stringify({ refresh_token: rt }),
+    body: JSON.stringify(body),
   })
   if (!r.ok) {
-    throw new Error(`Supabase refresh failed (${r.status}): ${(await r.text()).slice(0, 200)}`)
+    throw new Error(`Supabase ${grantType} auth failed (${r.status}): ${(await r.text()).slice(0, 200)}`)
   }
   const session = await r.json()
 

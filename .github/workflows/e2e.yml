@@ -3,11 +3,9 @@
 # Runs at 09:00 UTC daily (≈04:00 ET, when traffic is lowest). Manual runs
 # allowed via workflow_dispatch.
 #
-# Required secret:
-#   E2E_REFRESH_TOKEN — from `node scripts/create-e2e-user.mjs` output.
-#                       Used by tests/e2e/auth.setup.js to mint an access
-#                       token for the shared test account at the start of
-#                       the run.
+# Required secrets:
+#   E2E_TEST_EMAIL / E2E_TEST_PASSWORD — shared e2e account credentials.
+#                       Password auth mints a fresh session on every run.
 #   E2E_SUPABASE_PUBLISHABLE_KEY — Supabase API key that starts with
 #                       sb_publishable_. Required now that legacy JWT-based
 #                       anon keys are disabled.
@@ -38,7 +36,8 @@ jobs:
 
       - name: Run e2e suite against prod
         env:
-          E2E_REFRESH_TOKEN: ${{ secrets.E2E_REFRESH_TOKEN }}
+          E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
+          E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
           E2E_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.E2E_SUPABASE_PUBLISHABLE_KEY }}
         run: npm run test:e2e
 
