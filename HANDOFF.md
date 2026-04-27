@@ -67,7 +67,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 3. **Role Eligibility / Ranked Roles loading bug** — hardened again in frontend `6f84fda`: `/apply/ranked` now has a visible error/retry state and normalizes non-string `fit_assessment` values before rendering. Vercel route returns HTTP 200. Browser-verify while logged in; if it still fails, capture the rendered error or DevTools Console.
 4. ~~**Sign in / Sign up UI**~~ — implemented in the current uncommitted stabilization pass: Login now has Sign in / Sign up tabs, with magic link kept as a secondary sign-in option.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
-6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Still no typecheck/e2e scripts; authenticated browser flows remain unverified without a live session token.
+6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Typecheck/e2e scripts now exist. Authenticated browser flows require both `E2E_REFRESH_TOKEN` and `E2E_SUPABASE_PUBLISHABLE_KEY`; without them, local e2e runs only the unauth/public checks and skips logged-in specs.
 
 ### Deferred / acknowledged
 - Apify actor quota/key can still block LinkedIn/Wellfound/Google Jobs scrapers even when `/api/health` says `has_apify: true`; latest frontend `6f84fda` refreshes `/credits/status?refresh=true` after scrape failures so the sidebar status should turn red/critical quickly. If actors keep returning 0 or quota errors, fix is Apify account/quota/actor choice, not only app code.
@@ -98,7 +98,7 @@ If the session resumes my work as of this snapshot:
 1. **Browser-verify** after hard refresh: `/apply/ranked`, `/apply/auto-apply` Setup/Queue/Completed/History, `/discover/scraper`, `/discover/companies`, `/outreach`, and mobile sidebar layout.
 2. **Auto Apply setup action:** open Career Ops / Auto-Apply Setup, review the expanded profile fields, explicitly check Auto Apply consent, save, then preview/queue. Backend now refuses queue/run without consent.
 3. **Apify reality check:** retry scrapers and watch sidebar API Status. If Apify turns red or sources still return quota/no-data results, check Apify console actor limits and upgrade/swap actors.
-4. **Quick wins left:** Supabase magic-link rate-limit config, no typecheck/e2e scripts, and any browser-verified regressions.
+4. **Quick wins left:** Supabase magic-link rate-limit config, add `E2E_SUPABASE_PUBLISHABLE_KEY` to GitHub Actions secrets, and any browser-verified regressions.
 
 Confirm you can read `~/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/MEMORY.md` and the auto-loaded memory files, then ask me which item I want to start with.
 
@@ -122,6 +122,18 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-26 — E2E auth harness migrated off legacy Supabase anon JWT
+- **What:** Removed the hardcoded legacy JWT anon key from Playwright auth setup and switched e2e session refresh to `E2E_SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_ANON_KEY`. Added a guard so authenticated specs skip cleanly when local auth env is missing, plus a regression test that fails if source/test config hardcodes JWT-looking API keys.
+- **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:18), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:1), [tests/security-hygiene.test.mjs](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/security-hygiene.test.mjs:1), [.github/workflows/e2e.yml](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.github/workflows/e2e.yml:11), [.env.example](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.env.example:32)
+- **Status:** uncommitted on `main`; local checks pass: root tests 8/8, backend tests 12/12, typecheck/lint clean, frontend build clean. `npm run test:e2e` outside sandbox passes 12 unauth/public checks and skips 11 authenticated/mobile specs because this machine lacks `E2E_REFRESH_TOKEN` + `E2E_SUPABASE_PUBLISHABLE_KEY`.
+- **Follow-up:** Add `E2E_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...` to GitHub repo secrets alongside `E2E_REFRESH_TOKEN`, then rerun full e2e to convert authenticated/mobile rows from skipped/unverified to verified.
+
+### 2026-04-26 — Supabase legacy API-key disable broke login; publishable-key migration started
+- **What:** After legacy JWT-based Supabase API keys were disabled, OutreachOS login showed `Legacy API keys are disabled` because Vercel still had `VITE_SUPABASE_ANON_KEY` set to the old JWT `anon` key. User updated Vercel to use the new `sb_publishable_...` key.
+- **Files:** [frontend/src/supabaseClient.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/frontend/src/supabaseClient.js:6), Vercel env var `VITE_SUPABASE_ANON_KEY`, Supabase Settings → API Keys
+- **Status:** dashboard/env change by user; repo unchanged except this handoff entry; browser verification pending after Vercel redeploy/hard refresh.
+- **Follow-up:** Verify login works after redeploy. If storage/resume operations fail, migrate backend VM `SUPABASE_SERVICE_ROLE_KEY` from legacy JWT `service_role` to a new `sb_secret_...` key and restart pm2.
 
 ### 2026-04-26 — Production-readiness audit closed (9/9 + 1 latent bug) + e2e harness shipped
 - **What:** End-to-end pass through the production-readiness audit. All 9 section-N recommendations addressed:

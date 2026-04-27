@@ -4,6 +4,9 @@
 // Asserts that key pages render without horizontal overflow and that the
 // primary heading is still visible at mobile width.
 import { test, expect } from '@playwright/test'
+import { skipWithoutAuthEnv } from './auth-env.js'
+
+skipWithoutAuthEnv()
 
 const ROUTES = [
   { path: '/dashboard',          heading: 'Dashboard' },

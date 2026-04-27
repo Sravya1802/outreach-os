@@ -4,6 +4,9 @@
 // redirects unknown paths to /dashboard while logged in, instead of
 // rendering a 404 page or the login form.
 import { test, expect } from '@playwright/test'
+import { skipWithoutAuthEnv } from './auth-env.js'
+
+skipWithoutAuthEnv()
 
 test('unknown URL redirects to /dashboard when authenticated', async ({ page }) => {
   await page.goto('/this-route-does-not-exist')

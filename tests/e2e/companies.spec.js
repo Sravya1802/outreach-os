@@ -1,5 +1,8 @@
 // Discover → Companies happy-path: page renders + search input is present.
 import { test, expect } from '@playwright/test'
+import { skipWithoutAuthEnv } from './auth-env.js'
+
+skipWithoutAuthEnv()
 
 test('companies page renders + search is interactable', async ({ page }) => {
   await page.goto('/discover/companies')
