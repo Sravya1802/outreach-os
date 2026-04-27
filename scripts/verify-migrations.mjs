@@ -49,6 +49,7 @@ const EXPECTED_UNIQUE_INDEXES = [
   'idx_job_contacts_user_job_name_unique',
   'idx_company_applications_user_company_unique',
   'idx_companies_user_name_role_unique',
+  'evaluations_submitted_unique',
 ]
 
 const checks = [

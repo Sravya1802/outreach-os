@@ -1,23 +1,27 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import { api } from './api'
 import { supabase } from './supabaseClient'
 import Spin from './components/Spin'
 import { timeAgo } from './utils/time'
+// Top-level routes that are always reachable from the sidebar load eagerly.
 import CompanyDashboard from './components/CompanyDashboard'
-import CategoryView     from './components/CategoryView'
-import CompanyDetail    from './components/CompanyDetail'
-import Dashboard        from './components/Dashboard'
 import DashboardPage    from './components/DashboardPage'
-import OutreachPage     from './components/OutreachPage'
-import ScraperPage      from './components/ScraperPage'
-import CareerOpsPage    from './components/CareerOpsPage'
-import CareerOps        from './components/CareerOps'
-import ApplicationPipeline from './components/ApplicationPipeline'
-import JobDashboard     from './components/JobDashboard'
-import AutoApplyPage    from './components/AutoApplyPage'
-import TemplatesPage    from './components/TemplatesPage'
 import Login            from './components/Login'
+// Heavy / detail-only routes are lazy — the initial bundle was a single 728 KB
+// chunk because everything was eager. Splitting the largest leaves
+// (CompanyDetail, CareerOps, AutoApplyPage, etc.) brings the first paint down.
+const CategoryView        = lazy(() => import('./components/CategoryView'))
+const CompanyDetail       = lazy(() => import('./components/CompanyDetail'))
+const OutreachPage        = lazy(() => import('./components/OutreachPage'))
+const ScraperPage         = lazy(() => import('./components/ScraperPage'))
+const CareerOpsPage       = lazy(() => import('./components/CareerOpsPage'))
+const CareerOps           = lazy(() => import('./components/CareerOps'))
+const ApplicationPipeline = lazy(() => import('./components/ApplicationPipeline'))
+const JobDashboard        = lazy(() => import('./components/JobDashboard'))
+const AutoApplyPage       = lazy(() => import('./components/AutoApplyPage'))
+const TemplatesPage       = lazy(() => import('./components/TemplatesPage'))
+const ResetPassword       = lazy(() => import('./components/ResetPassword'))
 
 
 // ── Settings page ─────────────────────────────────────────────────────────────
@@ -218,6 +222,31 @@ function NavBadge({ n }) {
   )
 }
 
+// ── Mobile / small-screen warning ─────────────────────────────────────────────
+// Until we do a real mobile pass, surface an unmistakable banner so users on
+// phones know what they're seeing isn't broken — it's not optimized yet.
+function MobileBanner() {
+  const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280)
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem('mobile-banner-dismissed') === '1' } catch { return false }
+  })
+  useEffect(() => {
+    const onResize = () => setWidth(window.innerWidth)
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+  if (dismissed || width >= 900) return null
+  return (
+    <div style={{ position:'fixed', top:0, left:0, right:0, zIndex:9999, padding:'10px 14px', background:'#fef3c7', borderBottom:'1px solid #fde68a', fontSize:12, color:'#92400e', display:'flex', alignItems:'center', gap:10, justifyContent:'space-between' }}>
+      <span>Optimized for desktop — some screens may overflow on mobile.</span>
+      <button onClick={() => { try { sessionStorage.setItem('mobile-banner-dismissed', '1') } catch (_) {} setDismissed(true) }}
+        style={{ background:'transparent', border:'1px solid #fbbf24', color:'#92400e', borderRadius:6, padding:'3px 10px', fontSize:11, fontWeight:700, cursor:'pointer' }}>
+        Dismiss
+      </button>
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession]         = useState(null)
@@ -268,6 +297,16 @@ export default function App() {
       </div>
     )
   }
+  // /reset-password is the redirect target for password-recovery emails. The
+  // user may or may not have a session yet (Supabase recovers it from the URL
+  // hash on mount), so render the page outside the session gate.
+  if (typeof window !== 'undefined' && window.location.pathname === '/reset-password') {
+    return (
+      <Suspense fallback={<div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#0f172a' }}><Spin size={28} color="#a5b4fc" /></div>}>
+        <ResetPassword />
+      </Suspense>
+    )
+  }
   if (!session) return <Login />
 
   async function signOut() {
@@ -293,6 +332,7 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ height:'100vh', display:'flex', overflow:'hidden', fontFamily:'var(--font)', background:'var(--bg)' }}>
+      <MobileBanner />
 
       {/* ── Sidebar ── */}
       <aside className="app-sidebar" style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
@@ -406,6 +446,7 @@ export default function App() {
 
       {/* ── Main content ── */}
       <main className="app-main" style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        <Suspense fallback={<div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}><Spin size={24} color="#6366f1" /></div>}>
         <Routes>
           {/* Top-level */}
           <Route path="/"               element={<Navigate to="/dashboard" replace />} />
@@ -443,6 +484,7 @@ export default function App() {
 
           <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
+        </Suspense>
       </main>
     </div>
   )

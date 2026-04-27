@@ -1,9 +1,62 @@
 # OutreachOS Deployment Guide
 
-> ⚠️ **DEPRECATED — pre-Phase-4 document.** This guide describes a
-> Vercel-Serverless + Railway + SQLite architecture that is no longer in
-> use. As of 2026-04-24 the backend runs on an Oracle Cloud Always Free
-> VM against Supabase Postgres, and the Vercel `api/` directory has been
+## Production env vars (Oracle VM + Supabase, current deploy)
+
+Required on the backend (Oracle VM, set in `backend/.env` and consumed by pm2):
+
+| Var | Required | Purpose |
+| --- | --- | --- |
+| `NODE_ENV=production` | yes | Forces the auth middleware boot-time check (refuses to start if `AUTH_MODE!=='enforce'`). |
+| `AUTH_MODE=enforce` | yes | Reject every request without a valid Supabase JWT. The middleware now defaults to `enforce`; production must keep it explicit. |
+| `SUPABASE_URL` | yes | JWKS source for ES256 token verification + DB hostname inference. |
+| `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-side Supabase calls (Storage uploads, admin-scoped queries). |
+| `DATABASE_URL` | yes | Direct Postgres URL used by `pg` and the migration verifier. |
+| `CORS_ORIGINS` | yes | Comma-separated list of frontend origins allowed to hit the API. |
+| `GEMINI_API_KEY` | yes | Default AI provider for evaluation + tailoring. |
+| `APIFY_API_TOKEN` | yes | Greenhouse / Lever / Ashby scrapes. |
+| `APOLLO_API_KEY` | optional | Contact enrichment. |
+| `SERPER_API_KEY` | optional | Google search for contact discovery. |
+| `HUNTER_API_KEY` / `PROSPEO_API_KEY` | optional | Email-finder fallbacks. |
+| `LINKEDIN_SESSION_COOKIE` | optional | LinkedIn `li_at` for company-page scrapes. |
+| `AUTO_APPLY_DAILY_CAP` | optional, default `100` | Hard cap on real (non-dryRun) submissions per user per 24h. |
+| `NIGHTLY_CRON_DISABLED` | optional kill-switch | Any truthy value short-circuits the 06:00 UTC daily refresh and 07:00 UTC nightly auto-apply pipeline without a redeploy. |
+| `WIPE_DB_ON_START` | NEVER set in prod | Dev-only one-shot full wipe. |
+
+Required on the frontend build (Vercel env):
+
+| Var | Required | Purpose |
+| --- | --- | --- |
+| `VITE_SUPABASE_URL` | yes | Browser auth client. |
+| `VITE_SUPABASE_ANON_KEY` | yes | Browser auth client. |
+| `VITE_API_URL` | yes | Backend base URL (e.g. `https://outreach-jt.duckdns.org/api`). |
+
+### Verification step (do BEFORE letting any user in)
+
+```bash
+# 1. Hit /api/health — must show enforce + cron-disabled flag explicitly.
+curl -s https://<backend-host>/api/health | jq
+# Expect: { "status":"ok", "auth_mode":"enforce", "nightly_cron_disabled": false, ... }
+
+# 2. Confirm a no-token request is rejected.
+curl -s -o /dev/null -w "%{http_code}\n" https://<backend-host>/api/career-ops/profile
+# Expect: 401
+
+# 3. Run schema-invariant checks against the live DB.
+DATABASE_URL=postgres://... npm run verify-migrations
+# Expect: "All checks passed." — including evaluations_submitted_unique.
+
+# 4. Run the e2e suite end-to-end (don't trust .last-run.json):
+E2E_REFRESH_TOKEN=... E2E_TEST_EMAIL=... E2E_TEST_PASSWORD=... npm run test:e2e
+```
+
+If `auth_mode` shows anything other than `enforce`, **stop**: the API is publicly readable.
+
+---
+
+> ⚠️ **DEPRECATED — pre-Phase-4 document below.** The remainder of this guide
+> describes a Vercel-Serverless + Railway + SQLite architecture that is no
+> longer in use. As of 2026-04-24 the backend runs on an Oracle Cloud Always
+> Free VM against Supabase Postgres, and the Vercel `api/` directory has been
 > retired. See [PLAN.txt](PLAN.txt) and the "Architecture" section of
 > [README.md](README.md) for the current setup. Preserved for historical
 > context only — **do not follow these steps on a fresh deploy.**

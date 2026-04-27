@@ -667,6 +667,13 @@ export function AutoApplySetup() {
               style={{ width:14, height:14, marginTop:2 }} />
             I understand Auto Apply may submit real job applications using this profile and my selected resumes. Only queue roles that match my saved preferences.
           </label>
+          <label style={{ display:'flex', gap:8, alignItems:'flex-start', fontSize:12, color: p.auto_apply_paused ? '#b45309' : '#475569', lineHeight:1.5, padding:p.auto_apply_paused ? '8px 10px' : 0, background: p.auto_apply_paused ? '#fef3c7' : 'transparent', borderRadius:8, border: p.auto_apply_paused ? '1px solid #fde68a' : 'none' }}>
+            <input type="checkbox" checked={!!p.auto_apply_paused} onChange={e => set('auto_apply_paused', e.target.checked ? 1 : 0)}
+              style={{ width:14, height:14, marginTop:2 }} />
+            <span>
+              <strong>Pause Auto Apply</strong> — keep my consent and profile, but the worker and the nightly pipeline will not submit any applications until I unpause.
+            </span>
+          </label>
           <label style={{ display:'flex', gap:8, alignItems:'flex-start', fontSize:12, color:'#475569', lineHeight:1.5 }}>
             <input type="checkbox" checked={!!p.demographic_consent} onChange={e => set('demographic_consent', e.target.checked ? 1 : 0)}
               style={{ width:14, height:14, marginTop:2 }} />

@@ -68,7 +68,8 @@ app.get('/api/health', (req, res) => {
     has_hunter:   !!process.env.HUNTER_API_KEY,
     has_prospeo:  !!process.env.PROSPEO_API_KEY,
     has_linkedin: !!process.env.LINKEDIN_SESSION_COOKIE && process.env.LINKEDIN_SESSION_COOKIE !== 'your_li_at_cookie_here',
-    auth_mode:    process.env.AUTH_MODE || 'log-only',
+    auth_mode:    process.env.AUTH_MODE || 'enforce',
+    nightly_cron_disabled: !!process.env.NIGHTLY_CRON_DISABLED,
   });
 });
 
@@ -430,6 +431,10 @@ async function runDailyRefresh(userId, onProgress = null) {
 // call runDailyRefresh(null) which skips per-user writes; a multi-tenant
 // scheduler should iterate over active users and invoke this once per user.
 cron.schedule('0 6 * * *', () => {
+  if (process.env.NIGHTLY_CRON_DISABLED) {
+    console.log('[Cron] Daily refresh skipped — NIGHTLY_CRON_DISABLED is set');
+    return;
+  }
   runDailyRefresh(null).catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
 });
 
@@ -443,6 +448,10 @@ cron.schedule('0 6 * * *', () => {
 // settings row at all.
 import { runNightlyPipelineForUser } from './services/nightlyPipeline.js';
 cron.schedule('0 7 * * *', async () => {
+  if (process.env.NIGHTLY_CRON_DISABLED) {
+    console.log('[nightly-cron] skipped — NIGHTLY_CRON_DISABLED is set');
+    return;
+  }
   try {
     const users = await all(
       `SELECT user_id, value FROM meta WHERE key = 'nightly_pipeline_settings'`
