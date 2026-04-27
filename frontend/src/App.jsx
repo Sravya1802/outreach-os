@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
-import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
+import { Routes, Route, NavLink, Navigate, useLocation } from 'react-router-dom'
 import { api } from './api'
 import { supabase } from './supabaseClient'
 import Spin from './components/Spin'
@@ -222,31 +222,6 @@ function NavBadge({ n }) {
   )
 }
 
-// ── Mobile / small-screen warning ─────────────────────────────────────────────
-// Until we do a real mobile pass, surface an unmistakable banner so users on
-// phones know what they're seeing isn't broken — it's not optimized yet.
-function MobileBanner() {
-  const [width, setWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1280)
-  const [dismissed, setDismissed] = useState(() => {
-    try { return sessionStorage.getItem('mobile-banner-dismissed') === '1' } catch { return false }
-  })
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth)
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
-  }, [])
-  if (dismissed || width >= 900) return null
-  return (
-    <div style={{ position:'fixed', top:0, left:0, right:0, zIndex:9999, padding:'10px 14px', background:'#fef3c7', borderBottom:'1px solid #fde68a', fontSize:12, color:'#92400e', display:'flex', alignItems:'center', gap:10, justifyContent:'space-between' }}>
-      <span>Optimized for desktop — some screens may overflow on mobile.</span>
-      <button onClick={() => { try { sessionStorage.setItem('mobile-banner-dismissed', '1') } catch (_) {} setDismissed(true) }}
-        style={{ background:'transparent', border:'1px solid #fbbf24', color:'#92400e', borderRadius:6, padding:'3px 10px', fontSize:11, fontWeight:700, cursor:'pointer' }}>
-        Dismiss
-      </button>
-    </div>
-  )
-}
-
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [session, setSession]         = useState(null)
@@ -256,6 +231,11 @@ export default function App() {
   const [stats, setStats]             = useState(null)
   const [profileName, setProfileName] = useState('')
   const [aiProvider, setAiProvider]   = useState('gemini')
+  // Mobile drawer state. CSS hides the hamburger and pins the sidebar in
+  // place on screens ≥ 900px, so this only has user-visible effect on phones.
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const location = useLocation()
+  useEffect(() => { setSidebarOpen(false) }, [location.pathname])
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -332,10 +312,29 @@ export default function App() {
 
   return (
     <div className="app-shell" style={{ height:'100vh', display:'flex', overflow:'hidden', fontFamily:'var(--font)', background:'var(--bg)' }}>
-      <MobileBanner />
+
+      {/* ── Mobile hamburger (CSS-hidden ≥900px) ── */}
+      <button
+        type="button"
+        className="app-hamburger"
+        onClick={() => setSidebarOpen(true)}
+        aria-label="Open navigation"
+        style={{ display: sidebarOpen ? 'none' : undefined }}
+      >
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+          <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
+      </button>
+
+      {/* ── Mobile backdrop — taps close the drawer ── */}
+      <div
+        className={`app-backdrop ${sidebarOpen ? 'is-open' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+        aria-hidden="true"
+      />
 
       {/* ── Sidebar ── */}
-      <aside className="app-sidebar" style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
+      <aside className={`app-sidebar ${sidebarOpen ? 'is-open' : ''}`} style={{ width:228, background:'#0f172a', display:'flex', flexDirection:'column', flexShrink:0, borderRight:'1px solid #1e293b', position:'relative', zIndex:60 }}>
 
         {/* Logo */}
         <div style={{ padding:'20px 18px 16px', borderBottom:'1px solid #1e293b' }}>

@@ -237,23 +237,74 @@ input::placeholder, textarea::placeholder { color: var(--text3); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:focus:not(:focus-visible) { outline: none; }
 
+/* ── Mobile drawer (Option A): hide sidebar by default, slide in via JS ──── */
+.app-hamburger { display: none; }
+.app-backdrop  { display: none; }
+
 /* ── Responsive production safeguards ─────────────────────────────────────── */
 @media (max-width: 900px) {
+  /* Layout stays horizontal; sidebar becomes an off-canvas drawer. */
   .app-shell {
-    flex-direction: column !important;
-    height: auto !important;
-    min-height: 100vh !important;
-    overflow: auto !important;
+    flex-direction: row !important;
+    height: 100vh !important;
+    overflow: hidden !important;
   }
   .app-sidebar {
-    width: 100% !important;
-    max-height: 42vh !important;
-    border-right: none !important;
-    border-bottom: 1px solid var(--sidebar-border) !important;
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    height: 100vh !important;
+    width: 260px !important;
+    max-height: none !important;
+    z-index: 200 !important;
+    border-right: 1px solid var(--sidebar-border) !important;
+    border-bottom: none !important;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease-out;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.35);
   }
+  .app-sidebar.is-open { transform: translateX(0); }
+
+  .app-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0);
+    z-index: 150;
+    pointer-events: none;
+    transition: background 0.22s ease-out;
+  }
+  .app-backdrop.is-open {
+    background: rgba(0, 0, 0, 0.45);
+    pointer-events: auto;
+  }
+
+  .app-hamburger {
+    display: flex;
+    position: fixed;
+    top: 12px;
+    left: 12px;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: rgba(15, 23, 42, 0.92);
+    color: #f1f5f9;
+    border: 1px solid #1e293b;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app-hamburger:active { background: #1e293b; }
+
   .app-main {
-    min-height: 58vh !important;
-    overflow: visible !important;
+    width: 100% !important;
+    flex: 1 !important;
+    min-height: 0 !important;
+    overflow: auto !important;
+    /* Leave room for the floating hamburger so page headers don't sit under it. */
+    padding-top: 8px;
   }
   [style*="padding: 32px 40px"],
   [style*="padding:32px 40px"],
