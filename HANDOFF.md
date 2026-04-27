@@ -123,6 +123,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-27 — GitHub e2e current-main run now blocked on invalid test credentials
+- **What:** Triggered current-main e2e run `24977765259` after the password-auth workflow fix. The run is on the latest code and `E2E_SUPABASE_PUBLISHABLE_KEY` is accepted, but setup fails with Supabase `invalid_credentials`, meaning `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` are wrong, missing from the target project, or the auth user has no matching password.
+- **Files:** GitHub Actions secrets `E2E_TEST_EMAIL`, `E2E_TEST_PASSWORD`, `E2E_SUPABASE_PUBLISHABLE_KEY`; [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:32)
+- **Status:** no code change; e2e run result: 12 unauth/public tests passed, setup failed, 10 authenticated/mobile specs did not run.
+- **Follow-up:** In Supabase Auth users, create or reset the e2e user password, then update GitHub repository secrets `E2E_TEST_EMAIL` and `E2E_TEST_PASSWORD` exactly; rerun `e2e` on latest `main`.
+
 ### 2026-04-27 — E2E CI auth switched from refresh token to password grant
 - **What:** Fresh GitHub e2e run `24976916697` reached Supabase with the publishable key but failed because `E2E_REFRESH_TOKEN` was invalid/rotated (`refresh_token_not_found`). Updated Playwright setup to prefer `E2E_TEST_EMAIL` + `E2E_TEST_PASSWORD` password grant for CI so each run mints a fresh session; refresh token remains only as local fallback.
 - **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:32), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:8), [.github/workflows/e2e.yml](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.github/workflows/e2e.yml:6), [.env.example](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.env.example:35)
