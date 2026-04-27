@@ -279,6 +279,8 @@ export const api = {
     // ── Profile + resumes library ────────────────────────────────────────────
     profile:        () => apiCall('/career/profile'),
     updateProfile:  (profile) => apiCall('/career/profile', { method: 'PUT', body: profile }),
+    exportData:     () => apiCall('/career/privacy/export'),
+    eraseSensitiveProfile: (dryRun = false) => apiCall('/career/privacy/sensitive-profile' + (dryRun ? '?dryRun=true' : ''), { method: 'DELETE' }),
     resumesLibrary: () => apiCall('/career/resumes-library'),
     storageLibrary: () => apiCall('/career/library'),
     uploadLibrary:  async (archetype, file) => {
@@ -310,7 +312,7 @@ export const api = {
     // ── Bulk queue (slider in Auto Apply → Queue tab) ────────────────────────
     bulkQueuePreview: (params) => apiCall('/career/bulk-queue/preview' + (
       params instanceof URLSearchParams ? `?${params.toString()}` : (
-        params && (params.minGrade || params.minScore != null)
+        params && Object.entries(params).some(([, v]) => v !== '' && v != null)
           ? '?' + new URLSearchParams(Object.fromEntries(Object.entries(params).filter(([, v]) => v !== '' && v != null))).toString()
           : ''
       )

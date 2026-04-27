@@ -9,6 +9,12 @@
 #   E2E_SUPABASE_PUBLISHABLE_KEY — Supabase API key that starts with
 #                       sb_publishable_. Required now that legacy JWT-based
 #                       anon keys are disabled.
+# Optional:
+#   E2E_SECOND_TEST_EMAIL / E2E_SECOND_TEST_PASSWORD — enables two-user
+#                       write/read isolation coverage.
+#   E2E_AUTO_APPLY_EVAL_ID — enables full Auto Apply dry-run execution against
+#                       a seeded supported-ATS evaluation with consent + resume.
+#   E2E_RUN_REAL_APIFY=1 — enables the quota-spending real Apify scrape test.
 
 name: e2e
 on:
@@ -39,6 +45,11 @@ jobs:
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
           E2E_TEST_PASSWORD: ${{ secrets.E2E_TEST_PASSWORD }}
           E2E_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.E2E_SUPABASE_PUBLISHABLE_KEY }}
+          E2E_SECOND_TEST_EMAIL: ${{ secrets.E2E_SECOND_TEST_EMAIL }}
+          E2E_SECOND_TEST_PASSWORD: ${{ secrets.E2E_SECOND_TEST_PASSWORD }}
+          E2E_AUTO_APPLY_EVAL_ID: ${{ vars.E2E_AUTO_APPLY_EVAL_ID }}
+          E2E_RUN_REAL_APIFY: ${{ vars.E2E_RUN_REAL_APIFY }}
+          E2E_BACKEND_URL: ${{ vars.E2E_BACKEND_URL }}
         run: npm run test:e2e
 
       - name: Upload Playwright artifacts on failure

@@ -94,3 +94,31 @@ test('outreach template endpoints use the generate API routes', async () => {
   }, { templates: { email: 'Email', linkedin: 'DM' } })
   await api.generate.saveTemplates({ email: 'Email', linkedin: 'DM' })
 })
+
+test('privacy controls use authenticated career routes', async () => {
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/career/privacy/export')
+    assert.equal(init.method, 'GET')
+  }, { data: {} })
+  await api.career.exportData()
+
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/career/privacy/sensitive-profile?dryRun=true')
+    assert.equal(init.method, 'DELETE')
+  }, { dryRun: true })
+  await api.career.eraseSensitiveProfile(true)
+
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/career/privacy/sensitive-profile')
+    assert.equal(init.method, 'DELETE')
+  }, { ok: true })
+  await api.career.eraseSensitiveProfile(false)
+})
+
+test('bulk queue preview sends any non-empty filter combination', async () => {
+  mockJsonFetch((url, init) => {
+    assert.equal(url, '/api/career/bulk-queue/preview?jobType=intern&supportedOnly=true')
+    assert.equal(init.method, 'GET')
+  }, { count: 0, rows: [] })
+  await api.career.bulkQueuePreview({ jobType: 'intern', supportedOnly: true })
+})

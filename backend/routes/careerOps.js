@@ -18,6 +18,7 @@ import { runNightlyPipelineForUser } from '../services/nightlyPipeline.js';
 import {
   uploadLibraryArchetype, listLibrary, removeLibraryFile, isStorageConfigured,
 } from '../services/resumeStorage.js';
+import { buildBulkQueueFilter } from '../services/bulkQueueFilter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const RESUME_DIR = path.join(__dirname, '..', 'data', 'resume');
@@ -505,80 +506,8 @@ router.post('/bulk-queue', async (req, res) => {
   }
 });
 
-// Build the shared WHERE fragment for bulk-queue preview + apply.
-// Excludes rows that are already queued or past "not_started" (don't clobber
-// in-flight applications). Scoped to the caller's user_id.
 async function getAutoApplyProfile(userId) {
   return (await one('SELECT * FROM user_profile WHERE user_id = $1', [userId])) || {};
-}
-
-function buildBulkQueueFilter({ minGrade, minScore, userId, profile = {}, jobType, location, country, workLocation, supportedOnly }) {
-  const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F'];
-  const params = [];
-  let i = 1;
-  // user_id scope comes first — ahead of the grade/score clauses.
-  const parts = [`user_id = $${i++}`];
-  params.push(userId);
-  parts.push("(apply_status IS NULL OR apply_status = 'not_started')");
-
-  if (minGrade && GRADE_ORDER.includes(String(minGrade).toUpperCase())) {
-    const allowed = GRADE_ORDER.slice(0, GRADE_ORDER.indexOf(String(minGrade).toUpperCase()) + 1);
-    parts.push(`grade = ANY($${i++})`);
-    params.push(allowed);
-  }
-  if (minScore !== undefined && minScore !== null && minScore !== '') {
-    const n = Number(minScore);
-    if (!Number.isNaN(n)) {
-      parts.push(`score >= $${i++}`);
-      params.push(n);
-    }
-  }
-
-  const normalizedJobType = String(jobType || profile.target_job_type || '').toLowerCase();
-  const jobTypeNeedles = {
-    intern: ['intern', 'internship', 'co-op', 'coop'],
-    new_grad: ['new grad', 'new graduate', 'entry level', 'early career', 'university grad'],
-    full_time: ['full time', 'full-time', 'software engineer', 'engineer'],
-  }[normalizedJobType] || [];
-  if (jobTypeNeedles.length > 0) {
-    parts.push(`(${jobTypeNeedles.map(() => `COALESCE(job_title,'') || ' ' || COALESCE(job_description,'') ILIKE $${i++}`).join(' OR ')})`);
-    params.push(...jobTypeNeedles.map(s => `%${s}%`));
-  }
-
-  const targetLocation = String(location || profile.preferred_locations || profile.location || '').trim();
-  if (targetLocation) {
-    const firstLocation = targetLocation.split(/[,;\n]/).map(s => s.trim()).find(Boolean);
-    if (firstLocation) {
-      parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(company_name,'') ILIKE $${i++})`);
-      params.push(`%${firstLocation}%`, `%${firstLocation}%`);
-    }
-  }
-
-  const targetCountry = String(country || profile.country || '').trim();
-  if (targetCountry && !/^any$/i.test(targetCountry)) {
-    const countryNeedle = /^us|usa|united states$/i.test(targetCountry) ? 'United States' : targetCountry;
-    parts.push(`(COALESCE(job_description,'') ILIKE $${i++} OR COALESCE(job_description,'') = '')`);
-    params.push(`%${countryNeedle}%`);
-  }
-
-  const remotePref = String(workLocation || profile.work_location_preference || 'any').toLowerCase();
-  if (remotePref && remotePref !== 'any') {
-    parts.push(`COALESCE(job_description,'') ILIKE $${i++}`);
-    params.push(`%${remotePref === 'onsite' ? 'on-site' : remotePref}%`);
-  }
-
-  if (profile.needs_sponsorship) {
-    parts.push(`COALESCE(job_description,'') !~* $${i++}`);
-    params.push('no (visa|sponsorship)|cannot sponsor|will not sponsor|unable to sponsor|us citizens? only|us citizenship required|must be (a )?us citizen|do(es)? not (offer|provide)( visa)? sponsorship');
-  }
-
-  const onlySupported = supportedOnly === undefined || supportedOnly === null || supportedOnly === '' || String(supportedOnly) === 'true';
-  if (onlySupported) {
-    parts.push(`job_url ~* $${i++}`);
-    params.push('greenhouse|lever|ashby');
-  }
-
-  return { sql: parts.join(' AND '), params, consentRequired: !profile.auto_apply_consent };
 }
 
 // ── Preview which resume a URL will use when auto-apply runs ─────────────────
@@ -1212,6 +1141,144 @@ router.post('/batch-evaluate', async (req, res) => {
   results.sort((a, b) => (b.evaluation?.overallScore || 0) - (a.evaluation?.overallScore || 0));
 
   res.json({ results, total: results.length, done: results.filter(r => r.status === 'done').length });
+});
+
+// ── Privacy export / erasure helpers ────────────────────────────────────────
+const EXPORT_TABLES = [
+  'jobs',
+  'companies',
+  'contacts',
+  'outreach',
+  'job_contacts',
+  'prospects',
+  'evaluations',
+  'activity_log',
+  'roles',
+  'company_applications',
+  'documents',
+  'meta',
+];
+
+const SENSITIVE_PROFILE_FIELDS = [
+  'first_name',
+  'last_name',
+  'email',
+  'phone',
+  'linkedin_url',
+  'github_url',
+  'portfolio_url',
+  'location',
+  'address',
+  'city',
+  'state_province',
+  'country',
+  'postal_code',
+  'preferred_locations',
+  'work_authorization',
+  'needs_sponsorship',
+  'work_location_preference',
+  'willing_to_relocate',
+  'target_job_type',
+  'education_school',
+  'education_degree',
+  'education_major',
+  'graduation_date',
+  'gpa',
+  'certifications',
+  'current_company',
+  'current_title',
+  'years_experience',
+  'skills',
+  'projects',
+  'gender',
+  'race',
+  'veteran_status',
+  'disability_status',
+  'demographic_consent',
+  'auto_apply_consent',
+  'resume_dir',
+];
+
+const SENSITIVE_META_KEYS = [
+  'user_resume_text',
+  'user_resume_name',
+  'user_resume_date',
+];
+
+router.get('/privacy/export', async (req, res) => {
+  try {
+    const data = {};
+    for (const table of EXPORT_TABLES) {
+      data[table] = await all(`SELECT * FROM ${table} WHERE user_id = $1`, [req.user.id]);
+    }
+
+    data.user_profile = (await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id])) || null;
+    data.resume_library = await listLibrary(req.user.id).catch(err => ({
+      error: err.message,
+      storageConfigured: isStorageConfigured(),
+    }));
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      exportedAt: new Date().toISOString(),
+      userId: req.user.id,
+      security: {
+        transport: 'Requires authenticated HTTPS request with Bearer JWT',
+        storage: 'Supabase managed at-rest encryption plus app-level user_id scoping/RLS',
+        erasure: 'Use DELETE /api/career/privacy/sensitive-profile to clear profile PII, demographic fields, consent flags, and saved resume text.',
+      },
+      data,
+    });
+  } catch (err) {
+    console.error('[privacy/export]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/privacy/sensitive-profile', async (req, res) => {
+  try {
+    const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
+    const profile = (await one('SELECT * FROM user_profile WHERE user_id = $1', [req.user.id])) || {};
+    const populatedProfileFields = SENSITIVE_PROFILE_FIELDS.filter(k => profile[k] !== undefined && profile[k] !== null && profile[k] !== '');
+    const metaRows = await all(
+      'SELECT key FROM meta WHERE user_id = $1 AND key = ANY($2)',
+      [req.user.id, SENSITIVE_META_KEYS]
+    );
+    const populatedMetaKeys = metaRows.map(r => r.key);
+
+    if (dryRun) {
+      return res.json({
+        dryRun: true,
+        profileFields: populatedProfileFields,
+        metaKeys: populatedMetaKeys,
+        message: 'No data changed. Send the same request without dryRun=true to erase these fields.',
+      });
+    }
+
+    if (populatedProfileFields.length > 0) {
+      await run(
+        `UPDATE user_profile
+         SET ${SENSITIVE_PROFILE_FIELDS.map(f => `${f} = NULL`).join(', ')}, updated_at = NOW()
+         WHERE user_id = $1`,
+        [req.user.id]
+      );
+    }
+    await run(
+      'DELETE FROM meta WHERE user_id = $1 AND key = ANY($2)',
+      [req.user.id, SENSITIVE_META_KEYS]
+    );
+
+    res.json({
+      ok: true,
+      erased: {
+        profileFields: populatedProfileFields,
+        metaKeys: populatedMetaKeys,
+      },
+    });
+  } catch (err) {
+    console.error('[privacy/sensitive-profile]', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── Document upload storage ───────────────────────────────────────────────────

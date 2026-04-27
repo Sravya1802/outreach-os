@@ -23,6 +23,56 @@ import Login            from './components/Login'
 // ── Settings page ─────────────────────────────────────────────────────────────
 function Settings({ name, setName, aiProvider, setAiProvider, onSignOut, userEmail }) {
   const initials = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+  const [privacyStatus, setPrivacyStatus] = useState(null)
+  const [privacyBusy, setPrivacyBusy] = useState(false)
+
+  async function exportMyData() {
+    setPrivacyBusy(true)
+    setPrivacyStatus(null)
+    try {
+      const data = await api.career.exportData()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `outreachos-export-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 5000)
+      setPrivacyStatus({ ok: true, text: 'Export downloaded' })
+    } catch (err) {
+      setPrivacyStatus({ ok: false, text: err.message || 'Export failed' })
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
+  async function eraseSensitiveProfile() {
+    setPrivacyBusy(true)
+    setPrivacyStatus(null)
+    try {
+      const preview = await api.career.eraseSensitiveProfile(true)
+      const count = (preview.profileFields?.length || 0) + (preview.metaKeys?.length || 0)
+      if (count === 0) {
+        setPrivacyStatus({ ok: true, text: 'No sensitive profile fields found' })
+        return
+      }
+      const confirmed = window.confirm(`Erase ${count} sensitive profile/resume field(s)? This clears Auto Apply consent and saved resume text but does not delete job history.`)
+      if (!confirmed) {
+        setPrivacyStatus({ ok: true, text: 'Erase cancelled' })
+        return
+      }
+      const result = await api.career.eraseSensitiveProfile(false)
+      const erased = (result.erased?.profileFields?.length || 0) + (result.erased?.metaKeys?.length || 0)
+      setPrivacyStatus({ ok: true, text: `Erased ${erased} sensitive field(s)` })
+    } catch (err) {
+      setPrivacyStatus({ ok: false, text: err.message || 'Erase failed' })
+    } finally {
+      setPrivacyBusy(false)
+    }
+  }
+
   return (
     <div style={{ flex:1, overflowY:'auto', padding:40, maxWidth:520 }}>
       <h2 style={{ fontSize:22, fontWeight:800, color:'#0f172a', marginBottom:4 }}>Settings</h2>
@@ -62,6 +112,26 @@ function Settings({ name, setName, aiProvider, setAiProvider, onSignOut, userEma
             <code style={{ background:'#dbeafe', padding:'1px 5px', borderRadius:3 }}>{key}</code> — {label}
           </div>
         ))}
+      </div>
+
+      <div style={{ padding:16, background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0', marginBottom:20 }}>
+        <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', marginBottom:6 }}>Privacy controls</div>
+        <p style={{ fontSize:11, color:'#64748b', margin:'0 0 12px' }}>
+          Export your account data, or erase saved Auto Apply profile fields and resume text.
+        </p>
+        <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+          <button onClick={exportMyData} disabled={privacyBusy}
+            style={{ padding:'7px 12px', background:'#fff', color:'#1d4ed8', border:'1px solid #bfdbfe', borderRadius:8, fontSize:12, fontWeight:700, cursor:privacyBusy ? 'default' : 'pointer' }}>
+            Export data
+          </button>
+          <button onClick={eraseSensitiveProfile} disabled={privacyBusy}
+            style={{ padding:'7px 12px', background:'#fff', color:'#b91c1c', border:'1px solid #fecaca', borderRadius:8, fontSize:12, fontWeight:700, cursor:privacyBusy ? 'default' : 'pointer' }}>
+            Erase sensitive profile
+          </button>
+        </div>
+        {privacyStatus && (
+          <div style={{ marginTop:10, fontSize:11, color:privacyStatus.ok ? '#15803d' : '#b91c1c' }}>{privacyStatus.text}</div>
+        )}
       </div>
 
       {onSignOut && (
