@@ -41,8 +41,11 @@ if (!SUPABASE_URL || !SERVICE_KEY || !EMAIL) {
 }
 
 const RESUME_DIR = process.env.E2E_RESUME_DIR || '/home/ubuntu/outreach/resumes';
+// Cloudflare-fronted boards (anthropic, doordash, airbnb) often hit the
+// auto-apply worker with a captcha wall. Lighter boards first so the
+// dry-run gets a real form to fill more often.
 const BOARDS     = (process.env.E2E_GREENHOUSE_BOARDS
-  || 'anthropic,gitlab,robinhood,1password,duolingo,doordash,airbnb,instacart,dropbox')
+  || 'gitlab,1password,duolingo,instacart,dropbox,robinhood,doordash,anthropic,airbnb')
   .split(',').map(s => s.trim()).filter(Boolean);
 const FALLBACK_URL = process.env.E2E_FALLBACK_JOB_URL
   || 'https://job-boards.greenhouse.io/anthropic';
