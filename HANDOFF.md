@@ -38,19 +38,19 @@ Supabase Postgres 17.6 (session pooler: aws-1-us-east-1)
 ## Recent commits (main branch, latest first)
 
 ```
+cbdb5cf  test: deepen audit coverage and privacy controls
+a2616eb  docs: record green e2e verification
+4233ff4  docs: record e2e credential failure
 0b59c6d  fix: cache companies dashboard counts
 4584276  fix: prevent company count flicker and route scrapes
 e986b4d  docs: record dashboard auto-apply queue widget
 8d87bf2  ux(dashboard): surface auto-apply queue counts with needs-review urgency
-dddee6f  docs: record nightly auto-apply pipeline + visible queue
-3682c1b  ux(auto-apply): visible queue card + nightly pipeline UI
-c755cf5  docs: record portal scanner UX bundle + auto-apply queue button
-b6e2030  feat(career ops): 'Add to Auto-Apply Queue' button on Evaluate result
 …
 ```
 
 phase-4-pg tip:
 ```
+8005128  fix: deepen auto-apply audit backend coverage
 d0016ee  fix: scrape selected sources into jobs
 2890bf0  feat(career ops): nightly auto-apply pipeline + visible queue
 60615c5  feat(scrape): broaden role queries beyond CS + persist new-company names
@@ -67,7 +67,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 3. **Role Eligibility / Ranked Roles loading bug** — hardened again in frontend `6f84fda`: `/apply/ranked` now has a visible error/retry state and normalizes non-string `fit_assessment` values before rendering. Vercel route returns HTTP 200. Browser-verify while logged in; if it still fails, capture the rendered error or DevTools Console.
 4. ~~**Sign in / Sign up UI**~~ — implemented in the current uncommitted stabilization pass: Login now has Sign in / Sign up tabs, with magic link kept as a secondary sign-in option.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
-6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Typecheck/e2e scripts now exist. CI e2e is green (23/23, run `24979149149`) using password-grant auth with `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` / `E2E_SUPABASE_PUBLISHABLE_KEY` GitHub secrets; locally, those same env vars (or `E2E_REFRESH_TOKEN` as a fallback) are required to exercise authenticated/mobile specs — otherwise only unauth/public checks run.
+6. **Audit follow-ups** — current CI e2e is green on `main` (`24980521017`): **25 passed / 4 skipped**. Newly verified by default: combined Companies + Auto Apply queue filters, authenticated privacy export + sensitive-profile dry-run, render smoke, mobile smoke, and protected unauth API rejection. The 4 skipped tests are intentionally gated until their required data/secrets are present: seeded company row for application tracking Save, `E2E_SECOND_TEST_EMAIL`/`E2E_SECOND_TEST_PASSWORD` for two-user write/read isolation, `E2E_AUTO_APPLY_EVAL_ID` for full Auto Apply dry-run execution, and `E2E_RUN_REAL_APIFY=1` for a quota-spending real Apify scrape.
 
 ### Deferred / acknowledged
 - Apify actor quota/key can still block LinkedIn/Wellfound/Google Jobs scrapers even when `/api/health` says `has_apify: true`; latest frontend `6f84fda` refreshes `/credits/status?refresh=true` after scrape failures so the sidebar status should turn red/critical quickly. If actors keep returning 0 or quota errors, fix is Apify account/quota/actor choice, not only app code.
@@ -97,8 +97,9 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 If the session resumes my work as of this snapshot:
 1. **Browser-verify** after hard refresh: `/apply/ranked`, `/apply/auto-apply` Setup/Queue/Completed/History, `/discover/scraper`, `/discover/companies`, `/outreach`, and mobile sidebar layout.
 2. **Auto Apply setup action:** open Career Ops / Auto-Apply Setup, review the expanded profile fields, explicitly check Auto Apply consent, save, then preview/queue. Backend now refuses queue/run without consent.
-3. **Apify reality check:** retry scrapers and watch sidebar API Status. If Apify turns red or sources still return quota/no-data results, check Apify console actor limits and upgrade/swap actors.
-4. **Quick wins left:** Supabase magic-link rate-limit config, add `E2E_SUPABASE_PUBLISHABLE_KEY` to GitHub Actions secrets, and any browser-verified regressions.
+3. **Convert the remaining 4 e2e skips to full verification:** seed one company row for the e2e user, add `E2E_SECOND_TEST_EMAIL` + `E2E_SECOND_TEST_PASSWORD`, set `E2E_AUTO_APPLY_EVAL_ID` to a queued supported-ATS evaluation with consent/resume, and only set `E2E_RUN_REAL_APIFY=1` when you intentionally want to spend Apify quota.
+4. **Apify reality check:** retry scrapers and watch sidebar API Status. If Apify turns red or sources still return quota/no-data results, check Apify console actor limits and upgrade/swap actors.
+5. **Quick wins left:** Supabase magic-link rate-limit config and any browser-verified regressions.
 
 Confirm you can read `~/.claude/projects/-Users-lakshmisravyarachakonda-VS-CODE-email-tracker/memory/MEMORY.md` and the auto-loaded memory files, then ask me which item I want to start with.
 
@@ -122,6 +123,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ---
 
 ## Session log
+
+### 2026-04-27 — Deep audit coverage + privacy controls deployed
+- **What:** Deepened the remaining production-audit coverage. Auto Apply dry-run now fills supported ATS forms and runs the required-field scan before skipping submit. Bulk queue filters were extracted and unit-tested, Settings gained authenticated export/erase privacy controls, and the prod e2e suite now covers combined filters + privacy export plus optional gates for app-tracking Save, two-user isolation, full Auto Apply dry-run, and real Apify scraping.
+- **Files:** [backend/services/autoApplier.js:364](backend/services/autoApplier.js#L364), [backend/services/bulkQueueFilter.js:1](backend/services/bulkQueueFilter.js#L1), [backend/routes/careerOps.js:1146](backend/routes/careerOps.js#L1146), [frontend/src/App.jsx:24](frontend/src/App.jsx#L24), [tests/e2e/deep-audit.spec.js:1](tests/e2e/deep-audit.spec.js#L1), [.github/workflows/e2e.yml:12](.github/workflows/e2e.yml#L12)
+- **Status:** frontend/main committed + pushed as `cbdb5cf`; VM backend branch committed + pushed as `8005128`; VM fast-forwarded and PM2 manually restarted after the deploy script hit a `git log` pager; public health OK; unauth `/api/career/privacy/export` correctly returns 401; GitHub e2e run `24980521017` green with 25 passed / 4 intentional skips.
+- **Follow-up:** To mark the last partial audit rows as fully verified, add the optional CI inputs named in Known gaps item 6, then rerun `e2e`. Real Apify remains intentionally opt-in because it spends quota.
 
 ### 2026-04-27 — GitHub e2e green: 23/23 passing on current main
 - **What:** Resolved the `invalid_credentials` block. Recreated the e2e Supabase user `e2e@outreach-os.local` (id `7f3bbd9b-…`) with auto-confirm on, verified password grant works locally with `sb_publishable_…` key (`HTTP/2 200` + `access_token`). CI was still failing with the same creds because the GitHub web-UI paste introduced trailing whitespace into `E2E_TEST_PASSWORD`. Re-set both secrets via `printf '%s' … | gh secret set` for byte-exact values; re-ran e2e — `gh run` `24979149149` finished in 1m9s with **23/23 passed**.
