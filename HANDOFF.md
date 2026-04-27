@@ -67,7 +67,7 @@ d8bf3b4  fix(scraper): align linkedin actors with apify schema changes
 3. **Role Eligibility / Ranked Roles loading bug** — hardened again in frontend `6f84fda`: `/apply/ranked` now has a visible error/retry state and normalizes non-string `fit_assessment` values before rendering. Vercel route returns HTTP 200. Browser-verify while logged in; if it still fails, capture the rendered error or DevTools Console.
 4. ~~**Sign in / Sign up UI**~~ — implemented in the current uncommitted stabilization pass: Login now has Sign in / Sign up tabs, with magic link kept as a secondary sign-in option.
 5. **"Email rate limit exceeded" on magic link** — Supabase auth config issue, not code.
-6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Typecheck/e2e scripts now exist. Authenticated browser flows require both `E2E_REFRESH_TOKEN` and `E2E_SUPABASE_PUBLISHABLE_KEY`; without them, local e2e runs only the unauth/public checks and skips logged-in specs.
+6. **Audit follow-ups** — frontend lint exits 0 with no output after targeted cleanup; backend has a package-lock and `npm audit --prefix backend --audit-level=high` passes. Typecheck/e2e scripts now exist. CI e2e is green (23/23, run `24979149149`) using password-grant auth with `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` / `E2E_SUPABASE_PUBLISHABLE_KEY` GitHub secrets; locally, those same env vars (or `E2E_REFRESH_TOKEN` as a fallback) are required to exercise authenticated/mobile specs — otherwise only unauth/public checks run.
 
 ### Deferred / acknowledged
 - Apify actor quota/key can still block LinkedIn/Wellfound/Google Jobs scrapers even when `/api/health` says `has_apify: true`; latest frontend `6f84fda` refreshes `/credits/status?refresh=true` after scrape failures so the sidebar status should turn red/critical quickly. If actors keep returning 0 or quota errors, fix is Apify account/quota/actor choice, not only app code.
@@ -123,7 +123,13 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
-### 2026-04-27 — GitHub e2e current-main run now blocked on invalid test credentials
+### 2026-04-27 — GitHub e2e green: 23/23 passing on current main
+- **What:** Resolved the `invalid_credentials` block. Recreated the e2e Supabase user `e2e@outreach-os.local` (id `7f3bbd9b-…`) with auto-confirm on, verified password grant works locally with `sb_publishable_…` key (`HTTP/2 200` + `access_token`). CI was still failing with the same creds because the GitHub web-UI paste introduced trailing whitespace into `E2E_TEST_PASSWORD`. Re-set both secrets via `printf '%s' … | gh secret set` for byte-exact values; re-ran e2e — `gh run` `24979149149` finished in 1m9s with **23/23 passed**.
+- **Files:** GitHub Actions secrets `E2E_TEST_EMAIL`, `E2E_TEST_PASSWORD` (re-set 2026-04-27 06:02:43Z and 06:02:44Z respectively); no code changes.
+- **Status:** main e2e workflow green; all 23 specs (incl. authenticated + mobile) now run and pass.
+- **Follow-up:** (a) Rotate the e2e test password because it was disclosed in chat while diagnosing; reset password in Supabase + re-run `gh secret set E2E_TEST_PASSWORD`. (b) Whenever editing GitHub secrets, use `printf '%s' '<value>' | gh secret set <NAME>` instead of the web UI to avoid trailing-newline regressions. (c) Optional cleanup: bump the Node 20 actions (`actions/checkout@v4`, `actions/setup-node@v4`, `actions/upload-artifact@v4`) before the June 2026 deprecation.
+
+### ~~2026-04-27 — GitHub e2e current-main run now blocked on invalid test credentials~~ (resolved above)
 - **What:** Triggered current-main e2e run `24977765259` after the password-auth workflow fix. The run is on the latest code and `E2E_SUPABASE_PUBLISHABLE_KEY` is accepted, but setup fails with Supabase `invalid_credentials`, meaning `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` are wrong, missing from the target project, or the auth user has no matching password.
 - **Files:** GitHub Actions secrets `E2E_TEST_EMAIL`, `E2E_TEST_PASSWORD`, `E2E_SUPABASE_PUBLISHABLE_KEY`; [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:32)
 - **Status:** no code change; e2e run result: 12 unauth/public tests passed, setup failed, 10 authenticated/mobile specs did not run.
