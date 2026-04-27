@@ -18,9 +18,11 @@ const SUPABASE_URL =
   process.env.E2E_SUPABASE_URL ||
   process.env.VITE_SUPABASE_URL ||
   'https://dkifhfqgoremdjhkcojc.supabase.co'
-const SUPABASE_PUBLISHABLE_KEY =
+const SUPABASE_PUBLISHABLE_KEY = (
   process.env.E2E_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  ''
+).trim()
 const STORAGE_KEY   = 'sb-dkifhfqgoremdjhkcojc-auth-token'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -33,6 +35,9 @@ setup('refresh session and save storage state', async ({ page }) => {
   }
   if (!SUPABASE_PUBLISHABLE_KEY) {
     setup.skip(true, 'E2E_SUPABASE_PUBLISHABLE_KEY not set — use the Supabase sb_publishable_ key after disabling legacy API keys.')
+  }
+  if (!SUPABASE_PUBLISHABLE_KEY.startsWith('sb_publishable_')) {
+    throw new Error('E2E_SUPABASE_PUBLISHABLE_KEY must start with sb_publishable_. The current GitHub secret appears to be the old legacy anon key.')
   }
 
   // Mint a fresh access_token. Refresh tokens rotate, but Playwright caches

@@ -123,6 +123,12 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-04-26 — E2E publishable-key secret validation clarified
+- **What:** GitHub e2e run failed with `Legacy API keys are disabled`, which means `E2E_SUPABASE_PUBLISHABLE_KEY` was missing or set to the old `eyJ...` anon key. Hardened Playwright auth setup to require a trimmed key starting with `sb_publishable_` before calling Supabase, so future failures point directly at the bad secret.
+- **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:21), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:3)
+- **Status:** uncommitted at time of entry; local checks pass: root tests 8/8, typecheck/lint clean, local e2e 12 passed / 11 skipped without auth env.
+- **Follow-up:** In GitHub repository secrets, edit `E2E_SUPABASE_PUBLISHABLE_KEY` so the value is the Supabase publishable key beginning `sb_publishable_`, not the legacy anon JWT beginning `eyJ...`; rerun e2e.
+
 ### 2026-04-26 — E2E auth harness migrated off legacy Supabase anon JWT
 - **What:** Removed the hardcoded legacy JWT anon key from Playwright auth setup and switched e2e session refresh to `E2E_SUPABASE_PUBLISHABLE_KEY` / `VITE_SUPABASE_ANON_KEY`. Added a guard so authenticated specs skip cleanly when local auth env is missing, plus a regression test that fails if source/test config hardcodes JWT-looking API keys.
 - **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:18), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:1), [tests/security-hygiene.test.mjs](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/security-hygiene.test.mjs:1), [.github/workflows/e2e.yml](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.github/workflows/e2e.yml:11), [.env.example](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.env.example:32)
