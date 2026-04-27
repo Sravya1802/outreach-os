@@ -29,6 +29,20 @@ export async function runNightlyPipelineForUser(userId, cfgOverrides = {}) {
   const startedAt = new Date().toISOString();
   const cfg = { ...DEFAULTS, ...cfgOverrides };
 
+  // Honor the soft pause — same gate as POST /auto-apply/run. Without this the
+  // 07:00 UTC cron would happily submit applications for users who paused via
+  // the UI but kept consent granted.
+  const profile = await one(
+    'SELECT auto_apply_consent, auto_apply_paused FROM user_profile WHERE user_id = $1',
+    [userId]
+  );
+  if (!profile?.auto_apply_consent) {
+    return { startedAt, finishedAt: new Date().toISOString(), error: 'Auto Apply consent not granted', cfg };
+  }
+  if (profile?.auto_apply_paused) {
+    return { startedAt, finishedAt: new Date().toISOString(), error: 'Auto Apply paused', cfg };
+  }
+
   const resumeText = (await one(
     "SELECT value FROM meta WHERE key = $2 AND user_id = $1",
     [userId, 'user_resume_text']

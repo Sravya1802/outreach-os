@@ -22,10 +22,16 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 
 const SUPABASE_URL = process.env.SUPABASE_URL
-// Default is 'log-only' (safe) — a missed env var during rollout won't lock
-// anyone out. Flip to 'enforce' explicitly in .env once frontend is sending
-// Authorization headers and observation logs look clean.
-const AUTH_MODE = (process.env.AUTH_MODE || 'log-only').toLowerCase()
+const NODE_ENV = process.env.NODE_ENV
+// Default is 'enforce' — a forgotten env var must not silently leave the API
+// world-readable. The 'log-only' / 'off' modes remain available for local dev
+// and the original staged rollout, but production REQUIRES enforce.
+const AUTH_MODE = (process.env.AUTH_MODE || 'enforce').toLowerCase()
+
+if (NODE_ENV === 'production' && AUTH_MODE !== 'enforce') {
+  // Hard-fail at boot rather than serve traffic with a permissive auth posture.
+  throw new Error(`[auth] refusing to start: NODE_ENV=production but AUTH_MODE=${AUTH_MODE}. Set AUTH_MODE=enforce.`)
+}
 
 let JWKS = null
 if (SUPABASE_URL) {
@@ -68,9 +74,16 @@ export async function requireAuth(req, res, next) {
       email: payload.email,
       role: payload.role,
     }
-    // Keep success logs terse to avoid noise; turn off once enforcing stable.
+    // Defense-in-depth: if verification somehow yields no sub, refuse rather
+    // than letting downstream handlers run with req.user.id === undefined.
+    if (!req.user?.id) {
+      console.warn(`[auth] NO_SUB ${req.method} ${req.path} mode=${AUTH_MODE}`)
+      if (AUTH_MODE === 'enforce') return res.status(401).json({ error: 'Unauthorized' })
+      return next()
+    }
     if (AUTH_MODE === 'log-only') {
-      console.log(`[auth] OK ${req.method} ${req.path} user=${payload.sub} email=${payload.email}`)
+      // No email in logs — sub is enough to correlate.
+      console.log(`[auth] OK ${req.method} ${req.path} user=${payload.sub}`)
     }
     return next()
   } catch (err) {

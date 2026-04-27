@@ -234,6 +234,7 @@ router.put('/profile', async (req, res) => {
       'target_job_type','education_school','education_degree','education_major','graduation_date',
       'gpa','certifications','current_company','current_title','years_experience','skills','projects',
       'gender','race','veteran_status','disability_status','demographic_consent','auto_apply_consent',
+      'auto_apply_paused',
       'resume_dir',
     ];
     const data = { ...(req.body || {}) };
@@ -440,14 +441,52 @@ router.post('/auto-apply-company/:companyId/scrape-and-queue', async (req, res) 
 // The worker runs in-process (Playwright). This endpoint returns when all
 // currently-queued evaluations have been attempted. For large queues the caller
 // can poll again.
+// Daily cap on real (non-dry-run) auto-applies per user. Without this, one user
+// can fire hundreds of submissions in an hour and get the shared VM IP / our
+// Apify account flagged by Greenhouse / Lever, which would blast-radius every
+// other user. Override via env for test/admin accounts.
+const AUTO_APPLY_DAILY_CAP = Number(process.env.AUTO_APPLY_DAILY_CAP || 100);
+
 router.post('/auto-apply/run', async (req, res) => {
   try {
     const { dryRun = false, headless = true, limit = 10 } = req.body || {};
-    const profile = await one('SELECT auto_apply_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
+    const profile = await one('SELECT auto_apply_consent, auto_apply_paused FROM user_profile WHERE user_id = $1', [req.user.id]);
     if (!profile?.auto_apply_consent) {
       return res.status(400).json({ error: 'Auto Apply requires explicit consent in the profile before the worker can run.' });
     }
-    const summary = await runQueueOnce({ dryRun, headless, limit, userId: req.user.id });
+    if (profile?.auto_apply_paused) {
+      return res.status(409).json({ error: 'Auto Apply is paused. Resume it from the profile to run the worker.' });
+    }
+    if (!dryRun) {
+      const row = await one(
+        `SELECT COUNT(*)::int AS n
+           FROM evaluations
+          WHERE user_id = $1
+            AND apply_status = 'submitted'
+            AND applied_at IS NOT NULL
+            AND applied_at::timestamptz > now() - interval '24 hours'`,
+        [req.user.id]
+      );
+      const submittedToday = row?.n || 0;
+      if (submittedToday >= AUTO_APPLY_DAILY_CAP) {
+        return res.status(429).json({
+          error: `Daily auto-apply cap reached (${submittedToday}/${AUTO_APPLY_DAILY_CAP}). Try again in 24 hours.`,
+          submittedToday,
+          cap: AUTO_APPLY_DAILY_CAP,
+        });
+      }
+      // Don't let this run blow past the cap either.
+      const remaining = AUTO_APPLY_DAILY_CAP - submittedToday;
+      if (typeof limit === 'number' && limit > remaining) {
+        req.body.limit = remaining;
+      }
+    }
+    const summary = await runQueueOnce({
+      dryRun,
+      headless,
+      limit: req.body?.limit ?? limit,
+      userId: req.user.id,
+    });
     res.json(summary);
   } catch (err) {
     console.error('[auto-apply/run]', err);
