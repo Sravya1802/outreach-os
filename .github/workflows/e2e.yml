@@ -25,10 +25,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
+      # Root package-lock.json is gitignored, so use `npm install` not `npm ci`.
       - name: Install root deps
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
       - name: Install chromium
         run: npx playwright install --with-deps chromium
