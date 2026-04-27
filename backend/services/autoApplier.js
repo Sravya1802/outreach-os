@@ -361,11 +361,6 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
       return { ok: false, platform, error: 'Login required' };
     }
 
-    if (dryRun) {
-      await setStatus(userId, evalId, STATUS.in_progress, { error: '(dry run) form-fill skipped', platform });
-      return { ok: true, platform, dryRun: true };
-    }
-
     // Fill (no submit yet).
     if (platform === 'greenhouse') await fillGreenhouse(page, profile, resume.absPath);
     else if (platform === 'lever') await fillLever(page, profile, resume.absPath);
@@ -383,6 +378,15 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
       console.log(`[autoApply] eval ${evalId}: ${unfilled.length} unfilled required → needs_review`);
       await setStatus(userId, evalId, STATUS.needs_review, { error: reason, platform, resumeUsed: resume.filename });
       return { ok: false, platform, error: reason, needsReview: true };
+    }
+
+    if (dryRun) {
+      await setStatus(userId, evalId, STATUS.in_progress, {
+        error: '(dry run) form filled and required-field scan passed; submit skipped',
+        platform,
+        resumeUsed: resume.filename,
+      });
+      return { ok: true, platform, resume: resume.filename, dryRun: true, readyToSubmit: true };
     }
 
     // All required filled — click submit.
