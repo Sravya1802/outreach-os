@@ -1,0 +1,49 @@
+# Nightly Playwright e2e suite against production.
+#
+# Runs at 09:00 UTC daily (≈04:00 ET, when traffic is lowest). Manual runs
+# allowed via workflow_dispatch.
+#
+# Required secret:
+#   E2E_REFRESH_TOKEN — from `node scripts/create-e2e-user.mjs` output.
+#                       Used by tests/e2e/auth.setup.js to mint an access
+#                       token for the shared test account at the start of
+#                       the run.
+
+name: e2e
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root deps
+        run: npm ci
+
+      - name: Install chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run e2e suite against prod
+        env:
+          E2E_REFRESH_TOKEN: ${{ secrets.E2E_REFRESH_TOKEN }}
+        run: npm run test:e2e
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

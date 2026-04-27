@@ -115,6 +115,17 @@ npm run test:e2e          # runs against PLAYWRIGHT_BASE_URL (default: prod Verc
 PLAYWRIGHT_BASE_URL=http://localhost:5173 npm run test:e2e   # local dev
 ```
 
+The authenticated specs need an `E2E_REFRESH_TOKEN` env var. To create the test account once:
+
+```bash
+SUPABASE_URL=https://<ref>.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY=eyJ... \
+node scripts/create-e2e-user.mjs
+# → prints E2E_REFRESH_TOKEN. Add to your local .env and as a GitHub Actions secret.
+```
+
+CI runs the suite nightly (09:00 UTC) via `.github/workflows/e2e.yml`. Manual runs allowed via the GitHub Actions "Run workflow" button.
+
 Frontend build / lint:
 ```bash
 npm run build --prefix frontend

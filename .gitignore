@@ -52,6 +52,7 @@ __pycache__/
 test-results/
 playwright-report/
 .playwright/
+tests/e2e/.auth/
 
 # OS specific
 .DS_Store
