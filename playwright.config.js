@@ -41,17 +41,17 @@ export default defineConfig({
 
     // 2. Unauthenticated specs: landing-page smoke (PR-A) + the auth-required
     //    regression suite (PR-C) which probes protected endpoints without
-    //    credentials and asserts 401.
+    //    credentials and asserts 401, plus PR-D edge-case routing.
     {
       name: 'chromium',
-      testMatch: [/auth\.spec\.js$/, /auth-required\.spec\.js$/],
+      testMatch: [/auth\.spec\.js$/, /auth-required\.spec\.js$/, /edge-cases\.spec\.js$/],
       use: { ...devices['Desktop Chrome'] },
     },
 
-    // 3. Authenticated specs (PR-B). Reuses storageState produced by `setup`.
+    // 3. Authenticated specs (PR-B + PR-D edge-cases-authed). Reuses storageState.
     {
       name: 'chromium-authed',
-      testIgnore: [/auth\.spec\.js$/, /auth-required\.spec\.js$/, /auth\.setup\.js$/, /\.mobile\.spec\.js$/],
+      testIgnore: [/auth\.spec\.js$/, /auth-required\.spec\.js$/, /^.*edge-cases\.spec\.js$/, /auth\.setup\.js$/, /\.mobile\.spec\.js$/],
       use: {
         ...devices['Desktop Chrome'],
         storageState: STORAGE_PATH,
