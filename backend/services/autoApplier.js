@@ -354,11 +354,11 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
 
     if (await hasCaptcha(page)) {
       await setStatus(userId, evalId, STATUS.captcha, { error: 'Captcha detected — leaving in progress for manual completion', platform });
-      return { ok: false, platform, error: 'Captcha present' };
+      return { ok: false, platform, error: 'Captcha present', needsReview: true };
     }
     if (await looksLikeLogin(page)) {
       await setStatus(userId, evalId, STATUS.login, { error: 'Login required — leaving in progress for manual completion', platform });
-      return { ok: false, platform, error: 'Login required' };
+      return { ok: false, platform, error: 'Login required', needsReview: true };
     }
 
     // Fill (no submit yet).
