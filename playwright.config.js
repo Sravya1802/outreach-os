@@ -39,19 +39,34 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
 
-    // 2. Unauthenticated landing-page smoke test (PR-A).
+    // 2. Unauthenticated specs: landing-page smoke (PR-A) + the auth-required
+    //    regression suite (PR-C) which probes protected endpoints without
+    //    credentials and asserts 401.
     {
       name: 'chromium',
-      testMatch: /auth\.spec\.js/,
+      testMatch: [/auth\.spec\.js$/, /auth-required\.spec\.js$/],
       use: { ...devices['Desktop Chrome'] },
     },
 
     // 3. Authenticated specs (PR-B). Reuses storageState produced by `setup`.
     {
       name: 'chromium-authed',
-      testIgnore: [/auth\.spec\.js/, /auth\.setup\.js/],
+      testIgnore: [/auth\.spec\.js$/, /auth-required\.spec\.js$/, /auth\.setup\.js$/, /\.mobile\.spec\.js$/],
       use: {
         ...devices['Desktop Chrome'],
+        storageState: STORAGE_PATH,
+      },
+      dependencies: ['setup'],
+    },
+
+    // 4. Mobile viewport (PR-C). Runs only specs ending in .mobile.spec.js
+    //    against a Pixel 7 emulation (chromium-based — keeps the browser
+    //    install footprint small; webkit isn't required).
+    {
+      name: 'mobile-pixel',
+      testMatch: /\.mobile\.spec\.js$/,
+      use: {
+        ...devices['Pixel 7'],
         storageState: STORAGE_PATH,
       },
       dependencies: ['setup'],
