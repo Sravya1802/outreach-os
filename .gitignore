@@ -2,6 +2,7 @@
 node_modules/
 package-lock.json
 !frontend/package-lock.json
+!backend/package-lock.json
 yarn.lock
 
 # Environment — never commit secrets, including ad-hoc backups

@@ -21,7 +21,7 @@ router.post('/import-startup-sheet', async (req, res) => {
   try {
     emit('start', { message: 'Starting import...' });
 
-    const result = await importStartupSheet(msg => emit('progress', { message: msg }));
+    const result = await importStartupSheet(req.user.id, msg => emit('progress', { message: msg }));
 
     emit('complete', result);
     if (!closed) res.end();

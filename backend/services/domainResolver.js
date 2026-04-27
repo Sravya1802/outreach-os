@@ -1,5 +1,5 @@
 import { findDomainByCompany } from './hunter.js';
-import db from '../db.js';
+import db, { run } from '../db.js';
 
 // ATS subdomain prefixes to strip when parsing from careersUrl
 const ATS_PREFIXES = [
@@ -103,9 +103,12 @@ async function headCheck(domain) {
 /**
  * Persist the resolved domain back to the jobs table.
  */
-function saveResolvedDomain(jobId, domain) {
+async function saveResolvedDomain(userId, jobId, domain) {
   try {
-    db.prepare('UPDATE jobs SET resolved_domain = ? WHERE id = ?').run(domain, jobId);
+    await run(
+      'UPDATE jobs SET resolved_domain = $1 WHERE id = $2 AND user_id = $3',
+      [domain, jobId, userId]
+    );
   } catch (err) {
     console.warn(`[domainResolver] Failed to persist resolved_domain for job ${jobId}: ${err.message}`);
   }
@@ -114,10 +117,12 @@ function saveResolvedDomain(jobId, domain) {
 /**
  * Resolve the real company domain for a job record.
  *
+ * @param {string} userId - owning user (required for persistence)
  * @param {Object} job - { id, name, url, domain } — job.domain may already exist
  * @returns {Promise<string|null>} - e.g. "cloudflare.com", or null if all methods fail
  */
-export async function resolveCompanyDomain(job) {
+export async function resolveCompanyDomain(userId, job) {
+  if (!userId) throw new Error('resolveCompanyDomain requires userId');
   try {
     const companyName = (job.name || '').trim();
 
@@ -136,7 +141,7 @@ export async function resolveCompanyDomain(job) {
         const stripped = stripAtsPrefixes(host);
         if (looksReal(stripped)) {
           console.log(`[domainResolver] Step 1 (careersUrl) resolved "${companyName}" → ${stripped}`);
-          if (job.id) saveResolvedDomain(job.id, stripped);
+          if (job.id) await saveResolvedDomain(userId, job.id, stripped);
           return stripped;
         }
       } catch (err) {
@@ -149,7 +154,7 @@ export async function resolveCompanyDomain(job) {
     for (const [key, domain] of Object.entries(DOMAIN_OVERRIDES)) {
       if (nameLower === key || nameLower.includes(key)) {
         console.log(`[domainResolver] Step 2 (override) resolved "${companyName}" → ${domain}`);
-        if (job.id) saveResolvedDomain(job.id, domain);
+        if (job.id) await saveResolvedDomain(userId, job.id, domain);
         return domain;
       }
     }
@@ -167,7 +172,7 @@ export async function resolveCompanyDomain(job) {
         const domain = results?.[0]?.domain;
         if (domain && looksReal(domain)) {
           console.log(`[domainResolver] Step 3 (Clearbit) resolved "${companyName}" → ${domain}`);
-          if (job.id) saveResolvedDomain(job.id, domain);
+          if (job.id) await saveResolvedDomain(userId, job.id, domain);
           return domain;
         } else {
           console.log(`[domainResolver] Step 3 (Clearbit) no usable result for "${companyName}"`);
@@ -185,7 +190,7 @@ export async function resolveCompanyDomain(job) {
       const domain = await findDomainByCompany(companyName);
       if (domain && looksReal(domain)) {
         console.log(`[domainResolver] Step 4 (Hunter) resolved "${companyName}" → ${domain}`);
-        if (job.id) saveResolvedDomain(job.id, domain);
+        if (job.id) await saveResolvedDomain(userId, job.id, domain);
         return domain;
       } else {
         console.log(`[domainResolver] Step 4 (Hunter) no result for "${companyName}"`);
@@ -204,7 +209,7 @@ export async function resolveCompanyDomain(job) {
         const alive = await headCheck(candidate);
         if (alive) {
           console.log(`[domainResolver] Step 5 (slug HEAD) resolved "${companyName}" → ${candidate}`);
-          if (job.id) saveResolvedDomain(job.id, candidate);
+          if (job.id) await saveResolvedDomain(userId, job.id, candidate);
           return candidate;
         }
       }

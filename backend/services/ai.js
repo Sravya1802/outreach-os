@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { cleanOutreachTemplate } from './outreachTemplates.js';
 
 const CANDIDATE = {
   name:    'Sravya Rachakonda',
@@ -241,6 +242,25 @@ const LINKEDIN_TEMPLATES = {
   }),
 };
 
+function templateGuidance(type, customTemplates) {
+  if (!customTemplates) return ''
+  const key = type === 'linkedin' ? 'linkedin' : 'email'
+  const primary = cleanOutreachTemplate(customTemplates[key])
+  const variants = Array.isArray(customTemplates.variants)
+    ? customTemplates.variants.filter(v => v && v.kind === key && v.body)
+    : []
+  if (!primary && variants.length === 0) return ''
+  let guidance = ''
+  if (primary) {
+    guidance += `\n\nUser's preferred ${key} template/style anchor. Mirror its tone, structure, length, and directness while still personalizing to the recipient and company. Do not copy placeholders literally:\n${primary}`
+  }
+  if (variants.length > 0) {
+    guidance += `\n\nAdditional ${key} style examples the user has saved (treat as alternative tones; pick the closest match for this recipient):\n`
+    guidance += variants.slice(0, 5).map(v => `[${v.name || 'Variant'}]\n${v.body}`).join('\n---\n')
+  }
+  return guidance
+}
+
 // Detect scenario and return best template
 function detectScenarioAndTemplate(params) {
   const { recipientName, recipientTitle, companyName, hasApplied, rolesAvailable, specificAchievement, isRecruiter } = params;
@@ -363,9 +383,11 @@ export async function generateWaaSMessage({ companyName, companyDescription, ind
   };
 }
 
-export async function generateOutreach({ type, recipientName, recipientTitle, companyName, companyCategory, companyStage, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter, extraContext }) {
-  // Try high-response-rate templates FIRST for email
-  if (type !== 'linkedin') {
+export async function generateOutreach({ type, recipientName, recipientTitle, companyName, companyCategory, companyStage, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter, extraContext, customTemplates }) {
+  // Try high-response-rate templates FIRST for email unless the user has saved
+  // a custom style anchor. Saved templates should shape the AI output instead
+  // of being bypassed by the static scenario templates.
+  if (type !== 'linkedin' && !customTemplates?.email) {
     const templateResult = generateOutreachTemplate({
       recipientName,
       recipientTitle,
@@ -387,9 +409,12 @@ export async function generateOutreach({ type, recipientName, recipientTitle, co
   // Fall back to AI generation
   const category = companyCategory || companyStage || '';
   const params = { recipientName, recipientTitle, companyName, companyCategory: category, extraContext };
-  const { system, user } = type === 'linkedin'
+  const built = type === 'linkedin'
     ? buildLinkedInPrompt(params)
     : buildEmailPrompt(params);
+  const guidance = templateGuidance(type, customTemplates);
+  const system = built.system + guidance;
+  const user = built.user;
 
   const provider  = process.env.AI_PROVIDER || 'gemini';
   const providers = [provider, 'gemini', 'anthropic', 'openai'].filter((v, i, a) => a.indexOf(v) === i);

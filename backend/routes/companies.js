@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { one, all, run, tx } from '../db.js';
 import fs from 'fs';
 import path from 'path';
 import multer from 'multer';
@@ -56,10 +56,10 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
         const rawText = result?.pages ? result.pages.map(p => p.text || '').join('\n') : String(result || '');
         const text = rawText.trim();
         if (text && text.length > 50) {
-          const upsert = db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
-          upsert.run('user_resume_text', text);
-          upsert.run('user_resume_name', req.file.originalname);
-          upsert.run('user_resume_date', new Date().toISOString());
+          const upsertSql = "INSERT INTO meta (key, value, user_id) VALUES ($1, $2, $3) ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value";
+          await run(upsertSql, ['user_resume_text', text, req.user.id]);
+          await run(upsertSql, ['user_resume_name', req.file.originalname, req.user.id]);
+          await run(upsertSql, ['user_resume_date', new Date().toISOString(), req.user.id]);
           console.log(`[companies] Parsed resume text: ${text.length} chars`);
         }
       } catch (parseErr) {
@@ -67,17 +67,17 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
       }
     }
 
-    db.prepare(`
-      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at)
-      VALUES (?, 'interested', ?, ?, ?, datetime('now'))
-      ON CONFLICT(company_id) DO UPDATE SET
-        resume_path = excluded.resume_path,
-        resume_original_name = excluded.resume_original_name,
-        resume_size = excluded.resume_size,
-        updated_at = datetime('now')
-    `).run(req.params.id, req.file.path, req.file.originalname, req.file.size);
+    await run(`
+      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
+      VALUES ($1, 'interested', $2, $3, $4, NOW(), $5)
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
+        resume_path = EXCLUDED.resume_path,
+        resume_original_name = EXCLUDED.resume_original_name,
+        resume_size = EXCLUDED.resume_size,
+        updated_at = NOW()
+    `, [req.params.id, req.file.path, req.file.originalname, req.file.size, req.user.id]);
 
-    const app = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const app = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     res.json({ resume: { original_name: app.resume_original_name, size: app.resume_size, resume_path: app.resume_path }, application: app });
   } catch (err) {
     console.error('[companies] career-ops resume upload failed:', err.message);
@@ -85,16 +85,51 @@ router.post('/:id/career-ops/resume', resumeUpload.single('resume'), async (req,
   }
 });
 
-// DELETE /api/companies/:id/career-ops/resume — delete uploaded resume
-router.delete('/:id/career-ops/resume', (req, res) => {
+// POST /api/companies/:id/career-ops/resume/from-library
+// Pick a resume from the user's storage library instead of uploading. Records
+// resume_path with the `storage://` prefix so the auto-apply worker knows to
+// download from Supabase Storage at run time.
+router.post('/:id/career-ops/resume/from-library', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM company_applications WHERE company_id = ?').get(req.params.id);
+    const { archetype, filename } = req.body || {};
+    if (!archetype || !filename) return res.status(400).json({ error: 'archetype + filename required' });
+    const safeArch = String(archetype).toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 32) || 'misc';
+    const safeFile = String(filename).replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+    // resume_path format: storage://library/<userId>/<archetype>/<filename>
+    // The autoApplier detects the storage:// prefix and downloads to a temp
+    // file before handing the path to Playwright.
+    const storagePath = `storage://library/${req.user.id}/${safeArch}/${safeFile}`;
+    await run(`
+      INSERT INTO company_applications (company_id, status, resume_path, resume_original_name, resume_size, updated_at, user_id)
+      VALUES ($1, 'interested', $2, $3, NULL, NOW(), $4)
+      ON CONFLICT(user_id, company_id) DO UPDATE SET
+        resume_path = EXCLUDED.resume_path,
+        resume_original_name = EXCLUDED.resume_original_name,
+        resume_size = NULL,
+        updated_at = NOW()
+    `, [req.params.id, storagePath, safeFile, req.user.id]);
+    const app = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    res.json({ ok: true, resume: { original_name: app.resume_original_name, archetype: safeArch, source: 'library', resume_path: app.resume_path }, application: app });
+  } catch (err) {
+    console.error('[companies] career-ops resume from-library failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/companies/:id/career-ops/resume
+router.delete('/:id/career-ops/resume', async (req, res) => {
+  try {
+    const row = await one('SELECT * FROM company_applications WHERE company_id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row?.resume_path) return res.status(404).json({ error: 'Resume not found' });
-    try { fs.unlinkSync(row.resume_path); } catch (_) {}
-    db.prepare(`
-      UPDATE company_applications SET resume_path = NULL, resume_original_name = NULL, resume_size = NULL, updated_at = datetime('now')
-      WHERE company_id = ?
-    `).run(req.params.id);
+    // Skip filesystem unlink for storage:// paths — those reference Supabase
+    // Storage objects which the user manages via the library UI.
+    if (!row.resume_path.startsWith('storage://')) {
+      try { fs.unlinkSync(row.resume_path); } catch (_) {}
+    }
+    await run(`
+      UPDATE company_applications SET resume_path = NULL, resume_original_name = NULL, resume_size = NULL, updated_at = NOW()
+      WHERE company_id = $1 AND user_id = $2
+    `, [req.params.id, req.user.id]);
     res.json({ ok: true });
   } catch (err) {
     console.error('[companies] career-ops resume delete failed:', err.message);
@@ -103,15 +138,15 @@ router.delete('/:id/career-ops/resume', (req, res) => {
 });
 
 // Categories sorted by count
-router.get('/categories', (req, res) => {
+router.get('/categories', async (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT category as name, COUNT(*) as count
+    const rows = await all(`
+      SELECT category as name, COUNT(*)::int as count
       FROM jobs
-      WHERE category IS NOT NULL AND category != 'Unclassified' AND category != ''
+      WHERE user_id = $1 AND category IS NOT NULL AND category != 'Unclassified' AND category != ''
       GROUP BY category
       ORDER BY count DESC
-    `).all();
+    `, [req.user.id]);
     res.json({ categories: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -119,29 +154,23 @@ router.get('/categories', (req, res) => {
 });
 
 // List all companies
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const { source, status, search, limit = 200, offset = 0 } = req.query;
-    let sql = 'SELECT * FROM companies WHERE 1=1';
-    const params = [];
-
-    if (source) {
-      sql += ' AND source = ?';
-      params.push(source);
-    }
-    if (status) {
-      sql += ' AND status = ?';
-      params.push(status);
-    }
+    let sql = 'SELECT * FROM companies WHERE user_id = $1';
+    const params = [req.user.id];
+    let i = 2;
+    if (source) { sql += ` AND source = $${i++}`; params.push(source); }
+    if (status) { sql += ` AND status = $${i++}`; params.push(status); }
     if (search) {
-      sql += ' AND (name LIKE ? OR role LIKE ?)';
+      sql += ` AND (name ILIKE $${i} OR role ILIKE $${i+1})`;
+      i += 2;
       params.push(`%${search}%`, `%${search}%`);
     }
-
-    sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+    sql += ` ORDER BY created_at DESC LIMIT $${i++} OFFSET $${i++}`;
     params.push(Number(limit), Number(offset));
 
-    const companies = db.prepare(sql).all(...params);
+    const companies = await all(sql, params);
     res.json(companies);
   } catch (err) {
     console.error('List companies error:', err.message);
@@ -156,8 +185,7 @@ router.post('/search-by-name', async (req, res) => {
     if (!companyName?.trim()) return res.status(400).json({ error: 'companyName required' });
     const name = companyName.trim();
 
-    // Check if already in DB
-    const existing = db.prepare("SELECT * FROM jobs WHERE name LIKE ? LIMIT 1").get(`%${name}%`);
+    const existing = await one("SELECT * FROM jobs WHERE user_id = $1 AND name ILIKE $2 LIMIT 1", [req.user.id, `%${name}%`]);
     const already_existed = !!existing;
 
     let ycData    = null;
@@ -167,7 +195,6 @@ router.post('/search-by-name', async (req, res) => {
     let location  = null;
     let teamSize  = null;
 
-    // Step 1a: Check YC database (free, fast)
     try {
       ycData = await findYCCompany(name);
       if (ycData) {
@@ -181,7 +208,6 @@ router.post('/search-by-name', async (req, res) => {
       console.log(`[company-search] YC lookup failed: ${err.message}`);
     }
 
-    // Step 1b + 2a: Google search for open roles (via Apify or Serper)
     const serperKey = (process.env.SERPER_API_KEY || '').trim();
     if (serperKey && serperKey.length > 10) {
       try {
@@ -208,18 +234,17 @@ router.post('/search-by-name', async (req, res) => {
       }
     }
 
-    // Step 2b: If YC company, get WaaS jobs page
     if (ycData?.slug && roles.length < 3) {
       try {
         const waasUrl = `https://www.workatastartup.com/companies/${ycData.slug}`;
         const apifyToken = process.env.APIFY_API_TOKEN || '';
         if (apifyToken && apifyToken.length > 10) {
           const client = getApifyClient();
-          const run = await client.actor('apify/rag-web-browser').call({
+          const runRes = await client.actor('apify/rag-web-browser').call({
             startUrls: [{ url: waasUrl }],
             maxCrawlDepth: 0, maxCrawlPages: 1, outputFormats: ['text'],
           }, { waitForFinish: 60 });
-          const { items } = await client.dataset(run.defaultDatasetId).listItems();
+          const { items } = await client.dataset(runRes.defaultDatasetId).listItems();
           const text = items[0]?.text || '';
           for (const line of text.split('\n')) {
             const m = line.match(/^(Software|ML|Data|Frontend|Backend|Full Stack|iOS|Android|Infrastructure|Platform)[^\n]{3,60}(Intern|Engineer|Developer)/i);
@@ -233,7 +258,6 @@ router.post('/search-by-name', async (req, res) => {
       }
     }
 
-    // Step 3: Save to jobs table if not already there
     if (!already_existed) {
       try {
         const roleText = roles.length > 0 ? roles[0].title : 'Software Engineer Intern';
@@ -243,21 +267,24 @@ router.post('/search-by-name', async (req, res) => {
         const category = ycData ? mapYCIndustry(ycData.industry) : 'Startups';
         const stage    = ycData?.batch || (ycData ? 'YC' : 'startup');
 
-        db.prepare(`
-          INSERT OR IGNORE INTO jobs (name, roles, location, source, url, tag, category, stage)
-          VALUES (?, ?, ?, 'manual_search', ?, ?, ?, ?)
-        `).run(name, roleText, location || 'USA', applyUrl, name.toLowerCase().replace(/\s+/g, '-'), category, stage);
+        await run(`
+          INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id)
+          VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7)
+          ON CONFLICT (user_id, name) DO NOTHING
+        `, [name, roleText, location || 'USA', applyUrl, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
 
-        // Insert additional roles
+        // Insert additional roles — but jobs table has UNIQUE(name), so only the first
+        // unique name goes in. These are just role variations of the same company name
+        // → noop via ON CONFLICT.
         for (const role of roles.slice(1, 5)) {
           try {
-            db.prepare(`INSERT OR IGNORE INTO jobs (name, roles, location, source, url, tag, category, stage) VALUES (?, ?, ?, 'manual_search', ?, ?, ?, ?)`)
-              .run(name, role.title, role.location || 'USA', role.apply_url, name.toLowerCase().replace(/\s+/g, '-'), category, stage);
+            await run(`INSERT INTO jobs (name, roles, location, source, url, tag, category, user_id) VALUES ($1, $2, $3, 'manual_search', $4, $5, $6, $7) ON CONFLICT (user_id, name) DO NOTHING`,
+              [name, role.title, role.location || 'USA', role.apply_url, name.toLowerCase().replace(/\s+/g, '-'), category, req.user.id]);
           } catch (_) {}
         }
 
-        db.prepare("INSERT INTO activity_log (action, details) VALUES ('company_search', ?)")
-          .run(`Searched and added: ${name}`);
+        await run("INSERT INTO activity_log (action, details, user_id) VALUES ('company_search', $1, $2)",
+          [`Searched and added: ${name}`, req.user.id]);
       } catch (err) {
         console.log(`[company-search] DB insert failed: ${err.message}`);
       }
@@ -266,8 +293,7 @@ router.post('/search-by-name', async (req, res) => {
     res.json({
       company: {
         name:      ycData?.name || name,
-        website,
-        description,
+        website, description,
         industry:  ycData?.industry || null,
         stage:     ycData?.batch || null,
         team_size: teamSize,
@@ -299,6 +325,20 @@ function mapYCIndustry(industry) {
   return 'Startups';
 }
 
+function normalizeLegacyCompanyResult(item) {
+  const company = (item?.company || item?.name || item?.companyName || '').trim();
+  if (!company) return null;
+  return {
+    company,
+    role:      item.role || item.jobTitle || item.title || 'Software Engineering Intern',
+    location:  item.location || 'USA',
+    stage:     item.stage || null,
+    source:    item.source || 'scrape',
+    apply_url: item.apply_url || item.careersUrl || item.url || '',
+    posted_at: item.posted_at || null,
+  };
+}
+
 // Scrape ALL sources in parallel
 router.post('/scrape', async (req, res) => {
   try {
@@ -318,26 +358,19 @@ router.post('/scrape', async (req, res) => {
       ...(google.status === 'fulfilled' ? google.value : []),
       ...(github.status === 'fulfilled' ? github.value : []),
       ...(yc.status === 'fulfilled' ? yc.value : []),
-    ];
-
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO companies (name, role, location, stage, source, apply_url, posted_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
+    ].map(normalizeLegacyCompanyResult).filter(Boolean);
 
     let inserted = 0;
-    const insertMany = db.transaction((items) => {
-      for (const item of items) {
-        const result = insert.run(
-          item.company, item.role, item.location,
-          item.stage || null, item.source,
-          item.apply_url, item.posted_at || null
-        );
-        if (result.changes > 0) inserted++;
+    await tx(async (client) => {
+      for (const item of allResults) {
+        const r = await client.query(`
+          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (user_id, name, role) DO NOTHING
+        `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
+        if (r.rowCount > 0) inserted++;
       }
     });
-
-    insertMany(allResults);
 
     res.json({
       inserted,
@@ -365,33 +398,30 @@ router.post('/scrape/:src', async (req, res) => {
     let results = [];
 
     switch (src) {
-      case 'linkedin': results = await apify.scrapeLinkedInJobs(query); break;
-      case 'wellfound': results = await apify.scrapeWellfound(); break;
-      case 'google': results = await apify.scrapeGoogleJobs(query); break;
-      case 'github': results = await apify.scrapeGitHubInternships(); break;
-      case 'yc': results = await apify.scrapeYCStartups(); break;
+      case 'linkedin':    results = await apify.scrapeLinkedInJobs(query); break;
+      case 'wellfound':   results = await apify.scrapeWellfound(); break;
+      case 'google':                                                          // frontend uses 'google_jobs' — accept both
+      case 'google_jobs': results = await apify.scrapeGoogleJobs(query); break;
+      case 'github':      results = await apify.scrapeGitHubInternships(); break;
+      case 'yc':          results = await apify.scrapeYCStartups(); break;
       default: return res.status(400).json({ error: `Unknown source: ${src}` });
     }
 
-    const insert = db.prepare(`
-      INSERT OR IGNORE INTO companies (name, role, location, stage, source, apply_url, posted_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `);
+    const cleaned = results.map(normalizeLegacyCompanyResult).filter(Boolean);
 
     let inserted = 0;
-    const insertMany = db.transaction((items) => {
-      for (const item of items) {
-        const result = insert.run(
-          item.company, item.role, item.location,
-          item.stage || null, item.source,
-          item.apply_url, item.posted_at || null
-        );
-        if (result.changes > 0) inserted++;
+    await tx(async (client) => {
+      for (const item of cleaned) {
+        const r = await client.query(`
+          INSERT INTO companies (name, role, location, stage, source, apply_url, posted_at, user_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (user_id, name, role) DO NOTHING
+        `, [item.company, item.role, item.location, item.stage, item.source, item.apply_url, item.posted_at, req.user.id]);
+        if (r.rowCount > 0) inserted++;
       }
     });
 
-    insertMany(results);
-    res.json({ inserted, skipped: results.length - inserted, total: results.length });
+    res.json({ inserted, skipped: cleaned.length - inserted, total: cleaned.length, rawTotal: results.length });
   } catch (err) {
     console.error(`Scrape ${req.params.src} error:`, err.message);
     res.status(500).json({ error: err.message });
@@ -399,13 +429,13 @@ router.post('/scrape/:src', async (req, res) => {
 });
 
 // Update company status
-router.put('/:id/status', (req, res) => {
+router.put('/:id/status', async (req, res) => {
   try {
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: 'status required' });
 
-    const result = db.prepare('UPDATE companies SET status = ? WHERE id = ?').run(status, req.params.id);
-    if (result.changes === 0) return res.status(404).json({ error: 'Company not found' });
+    const r = await run('UPDATE companies SET status = $1 WHERE id = $2 AND user_id = $3', [status, req.params.id, req.user.id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Company not found' });
 
     res.json({ success: true });
   } catch (err) {
@@ -415,10 +445,10 @@ router.put('/:id/status', (req, res) => {
 });
 
 // Delete company
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
-    const result = db.prepare('DELETE FROM companies WHERE id = ?').run(req.params.id);
-    if (result.changes === 0) return res.status(404).json({ error: 'Company not found' });
+    const r = await run('DELETE FROM companies WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Company not found' });
     res.json({ success: true });
   } catch (err) {
     console.error('Delete company error:', err.message);

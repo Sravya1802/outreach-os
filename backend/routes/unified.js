@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import db from '../db.js';
+import { one, all } from '../db.js';
 
 const router = Router();
 
@@ -7,14 +7,15 @@ const router = Router();
 
 // ── Category counts (lightweight — for category card badges) ─────────────────
 
-router.get('/category-counts', (req, res) => {
+router.get('/category-counts', async (req, res) => {
   try {
-    const rows = db.prepare(`
-      SELECT COALESCE(NULLIF(category,''), 'Unclassified') AS category, COUNT(*) as count
+    const rows = await all(`
+      SELECT COALESCE(NULLIF(category,''), 'Unclassified') AS category, COUNT(*)::int AS count
       FROM jobs
+      WHERE user_id = $1
       GROUP BY COALESCE(NULLIF(category,''), 'Unclassified')
       ORDER BY count DESC
-    `).all();
+    `, [req.user.id]);
     res.json({ counts: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -23,44 +24,48 @@ router.get('/category-counts', (req, res) => {
 
 // ── City counts for location filter pills ─────────────────────────────────────
 
-router.get('/city-counts', (req, res) => {
+router.get('/city-counts', async (req, res) => {
   try {
     const { category, subcategory } = req.query;
-    let where = "city IS NOT NULL AND city != ''";
-    const params = [];
-    if (subcategory)                         { where += ' AND subcategory = ?'; params.push(subcategory); }
-    else if (category && category !== 'All') { where += ' AND category = ?';    params.push(category); }
+    let where = "city IS NOT NULL AND city != '' AND user_id = $1";
+    const params = [req.user.id];
+    let i = 2;
+    if (subcategory)                         { where += ` AND subcategory = $${i++}`; params.push(subcategory); }
+    else if (category && category !== 'All') { where += ` AND category = $${i++}`;    params.push(category); }
 
-    const rows = db.prepare(`
-      SELECT city, state, COUNT(*) as count
+    const rows = await all(`
+      SELECT city, state, COUNT(*)::int AS count
       FROM jobs
       WHERE ${where}
       GROUP BY city, state
       ORDER BY count DESC
       LIMIT 30
-    `).all(...params);
+    `, params);
     res.json({ cities: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.get('/companies', (req, res) => {
+router.get('/companies', async (req, res) => {
   try {
-    const { category, subcategory, search, page: pageStr, pageSize: pageSizeStr, cities: citiesStr, includeRemote } = req.query;
+    const { category, subcategory, search, page: pageStr, pageSize: pageSizeStr, cities: citiesStr, includeRemote, source, status, sort } = req.query;
     const page     = Math.max(0, parseInt(pageStr, 10) || 0);
     const pageSize = Math.min(200, Math.max(1, parseInt(pageSizeStr, 10) || 50));
     const offset   = page * pageSize;
     const cityList = citiesStr ? citiesStr.split(',').map(c => c.trim()).filter(Boolean) : [];
     const withRemote = includeRemote === 'true' || includeRemote === '1';
 
-    let where = '1=1';
-    const params = [];
-    if (subcategory)                          { where += ' AND subcategory = ?'; params.push(subcategory); }
-    else if (category && category !== 'All')  { where += ' AND category = ?';    params.push(category); }
-    if (search) { where += ' AND name LIKE ?'; params.push(`%${search}%`); }
+    let where = 'user_id = $1';
+    const params = [req.user.id];
+    let i = 2;
+    if (subcategory)                          { where += ` AND subcategory = $${i++}`; params.push(subcategory); }
+    else if (category && category !== 'All')  { where += ` AND category = $${i++}`;    params.push(category); }
+    if (search) { where += ` AND name ILIKE $${i++}`; params.push(`%${search}%`); }
+    if (source) { where += ` AND source ILIKE $${i++}`; params.push(`%${source}%`); }
+    if (status) { where += ` AND status = $${i++}`; params.push(status); }
     if (cityList.length > 0) {
-      const placeholders = cityList.map(() => '?').join(',');
+      const placeholders = cityList.map(() => `$${i++}`).join(',');
       if (withRemote) {
         where += ` AND (city IN (${placeholders}) OR city = 'Remote')`;
       } else {
@@ -70,10 +75,27 @@ router.get('/companies', (req, res) => {
     }
 
     // Total count (for hasMore)
-    const { total: jobTotal } = db.prepare(`SELECT COUNT(*) AS total FROM jobs j WHERE ${where}`).get(...params);
+    const totalRow = await one(`SELECT COUNT(*)::int AS total FROM jobs j WHERE ${where}`, params);
+    const jobTotal = totalRow?.total || 0;
 
     // Companies from jobs table — paginated
-    const jobRows = db.prepare(`
+    // Note: `where` uses the jobs table column `user_id`; for `j` alias we need
+    // j.user_id. Prepend the alias for the job rows query below.
+    const whereJobAlias = where.replace(/\buser_id\b/g, 'j.user_id');
+    const userIdParamIdx = 1; // req.user.id is params[0]
+
+    const SORT_CLAUSES = {
+      hiring:   'j.is_hiring DESC NULLS LAST, j.pay DESC NULLS LAST',
+      contacts: `(
+        (SELECT COUNT(*)::int FROM job_contacts WHERE job_id = j.id AND user_id = $${userIdParamIdx}) +
+        (SELECT COUNT(*)::int FROM prospects   WHERE company_name = j.name AND user_id = $${userIdParamIdx})
+      ) DESC, j.is_hiring DESC NULLS LAST`,
+      recent:   'j.created_at DESC NULLS LAST, j.id DESC',
+      az:       'j.name ASC',
+      za:       'j.name DESC',
+    };
+    const orderBy = SORT_CLAUSES[sort] || SORT_CLAUSES.hiring;
+    const jobRows = await all(`
       SELECT
         'job'                AS source,
         j.id                 AS id,
@@ -94,21 +116,19 @@ router.get('/companies', (req, res) => {
         j.country,
         j.intern_roles_count,
         j.intern_roles_checked_at,
-        (SELECT COUNT(*) FROM job_contacts WHERE job_id = j.id AND source = 'linkedin') AS linkedin_count,
-        (SELECT COUNT(*) FROM job_contacts WHERE job_id = j.id AND source = 'hunter')   AS email_count,
-        (SELECT COUNT(*) FROM prospects WHERE company_name = j.name)                    AS prospects_count
+        (SELECT COUNT(*)::int FROM job_contacts WHERE job_id = j.id AND source = 'linkedin' AND user_id = $${userIdParamIdx}) AS linkedin_count,
+        (SELECT COUNT(*)::int FROM job_contacts WHERE job_id = j.id AND source = 'hunter' AND user_id = $${userIdParamIdx})   AS email_count,
+        (SELECT COUNT(*)::int FROM prospects WHERE company_name = j.name AND user_id = $${userIdParamIdx})                    AS prospects_count
       FROM jobs j
-      WHERE ${where}
-      ORDER BY j.is_hiring DESC, j.pay DESC
-      LIMIT ? OFFSET ?
-    `).all(...params, pageSize, offset);
+      WHERE ${whereJobAlias}
+      ORDER BY ${orderBy}
+      LIMIT $${i++} OFFSET $${i++}
+    `, [...params, pageSize, offset]);
 
     // Prospect-only companies — only included on page 0 when no category filter
     let prospectRows = [];
     if (page === 0 && !category && !subcategory) {
-      const prospectWhere = search ? 'AND p.company_name LIKE ?' : '';
-      const prospectParams = search ? [`%${search}%`] : [];
-      prospectRows = db.prepare(`
+      let prospectSql = `
         SELECT
           'prospect'       AS source,
           NULL             AS id,
@@ -128,12 +148,18 @@ router.get('/companies', (req, res) => {
           NULL             AS intern_roles_checked_at,
           0                AS linkedin_count,
           0                AS email_count,
-          COUNT(*)         AS prospects_count
+          COUNT(*)::int    AS prospects_count
         FROM prospects p
-        WHERE p.company_name NOT IN (SELECT name FROM jobs)
-        ${prospectWhere}
-        GROUP BY p.company_name
-      `).all(...prospectParams);
+        WHERE p.user_id = $1
+          AND p.company_name NOT IN (SELECT name FROM jobs WHERE user_id = $1)
+      `;
+      const prospectParams = [req.user.id];
+      if (search) {
+        prospectSql += ` AND p.company_name ILIKE $2`;
+        prospectParams.push(`%${search}%`);
+      }
+      prospectSql += ` GROUP BY p.company_name, p.company_type`;
+      prospectRows = await all(prospectSql, prospectParams);
     }
 
     const companies = [...jobRows, ...prospectRows].map(c => ({
@@ -152,18 +178,27 @@ router.get('/companies', (req, res) => {
 
 // ── All contacts for a company (both tables) ──────────────────────────────────
 
-router.get('/contacts/:name', (req, res) => {
+router.get('/contacts/:name', async (req, res) => {
   try {
     const name = decodeURIComponent(req.params.name);
 
     // job_contacts (LinkedIn search + Hunter.io)
-    const job = db.prepare('SELECT id FROM jobs WHERE name = ?').get(name);
+    const job = await one(
+      'SELECT id FROM jobs WHERE name = $1 AND user_id = $2',
+      [name, req.user.id]
+    );
     const jobContacts = job
-      ? db.prepare('SELECT * FROM job_contacts WHERE job_id = ? ORDER BY source, created_at DESC').all(job.id)
+      ? await all(
+          'SELECT * FROM job_contacts WHERE job_id = $1 AND user_id = $2 ORDER BY source, created_at DESC',
+          [job.id, req.user.id]
+        )
       : [];
 
     // prospects (auto-discovered people)
-    const prospectRows = db.prepare('SELECT * FROM prospects WHERE company_name = ? ORDER BY created_at DESC').all(name);
+    const prospectRows = await all(
+      'SELECT * FROM prospects WHERE company_name = $1 AND user_id = $2 ORDER BY created_at DESC',
+      [name, req.user.id]
+    );
 
     // Normalize into a single contacts array that the frontend expects
     const contacts = [
@@ -180,104 +215,107 @@ router.get('/contacts/:name', (req, res) => {
 
 // ── Dashboard stats + outreach pipeline ──────────────────────────────────────
 
-router.get('/dashboard', (req, res) => {
+router.get('/dashboard', async (req, res) => {
   try {
-    // Overall stats for Kanban pipeline summary
-    const stats = db.prepare(`
-      SELECT
-        (SELECT COUNT(*) FROM prospects) +
-        (SELECT COUNT(*) FROM job_contacts) AS total,
+    const [stats, prospectRows, jobRows] = await Promise.all([
+      one(`
+        SELECT
+          (SELECT COUNT(*)::int FROM prospects   WHERE user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE user_id = $1) AS total,
 
-        (SELECT COUNT(*) FROM prospects   WHERE status = 'generated') +
-        (SELECT COUNT(*) FROM job_contacts WHERE status = 'generated') AS generated,
+          (SELECT COUNT(*)::int FROM prospects   WHERE status = 'generated' AND user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE status = 'generated' AND user_id = $1) AS generated,
 
-        (SELECT COUNT(*) FROM prospects   WHERE status IN ('sent','email_sent')) +
-        (SELECT COUNT(*) FROM job_contacts WHERE status IN ('sent','email_sent')) AS sent,
+          (SELECT COUNT(*)::int FROM prospects   WHERE status IN ('sent','email_sent') AND user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE status IN ('sent','email_sent') AND user_id = $1) AS sent,
 
-        (SELECT COUNT(*) FROM prospects   WHERE status = 'dm_sent') +
-        (SELECT COUNT(*) FROM job_contacts WHERE status = 'dm_sent') AS dm_sent,
+          (SELECT COUNT(*)::int FROM prospects   WHERE status = 'dm_sent' AND user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE status = 'dm_sent' AND user_id = $1) AS dm_sent,
 
-        (SELECT COUNT(*) FROM prospects   WHERE status = 'replied') +
-        (SELECT COUNT(*) FROM job_contacts WHERE status = 'replied') AS replied,
+          (SELECT COUNT(*)::int FROM prospects   WHERE status = 'replied' AND user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE status = 'replied' AND user_id = $1) AS replied,
 
-        (SELECT COUNT(*) FROM prospects   WHERE status IN ('closed','skip')) +
-        (SELECT COUNT(*) FROM job_contacts WHERE status IN ('closed','skip')) AS closed,
+          (SELECT COUNT(*)::int FROM prospects   WHERE status IN ('closed','skip') AND user_id = $1) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE status IN ('closed','skip') AND user_id = $1) AS closed,
 
-        (SELECT COUNT(*) FROM prospects   WHERE (email_subject IS NOT NULL AND email_subject != '') OR (linkedin_dm IS NOT NULL AND linkedin_dm != '')) +
-        (SELECT COUNT(*) FROM job_contacts WHERE (generated_subject IS NOT NULL AND generated_subject != '') OR (generated_dm IS NOT NULL AND generated_dm != '')) AS has_content
-    `).get();
-
-    // All contacts — all statuses for Kanban (pending=Identified, generated=Ready, dm_sent, sent, replied, closed)
-    const prospectRows = db.prepare(`
-      SELECT
-        'prospect' AS row_type,
-        p.id,
-        p.name,
-        p.title,
-        p.email,
-        p.linkedin_url,
-        p.linkedin_dm  AS generated_dm,
-        p.email_subject AS generated_subject,
-        p.email_body    AS generated_body,
-        p.status,
-        p.company_name  AS company,
-        NULL            AS company_category,
-        p.updated_at    AS activity_at
-      FROM prospects p
-      ORDER BY p.company_name, p.updated_at DESC
-    `).all();
-
-    const jobRows = db.prepare(`
-      SELECT
-        'job_contact' AS row_type,
-        jc.id,
-        jc.name,
-        jc.title,
-        jc.email,
-        jc.linkedin_url,
-        jc.generated_dm,
-        jc.generated_subject,
-        jc.generated_body,
-        jc.status,
-        j.name     AS company,
-        j.category AS company_category,
-        jc.created_at AS activity_at
-      FROM job_contacts jc
-      JOIN jobs j ON j.id = jc.job_id
-      ORDER BY j.name, jc.created_at DESC
-    `).all();
+          (SELECT COUNT(*)::int FROM prospects   WHERE user_id = $1 AND ((email_subject IS NOT NULL AND email_subject != '') OR (linkedin_dm IS NOT NULL AND linkedin_dm != ''))) +
+          (SELECT COUNT(*)::int FROM job_contacts WHERE user_id = $1 AND ((generated_subject IS NOT NULL AND generated_subject != '') OR (generated_dm IS NOT NULL AND generated_dm != ''))) AS has_content
+      `, [req.user.id]),
+      all(`
+        SELECT
+          'prospect' AS row_type,
+          p.id,
+          p.name,
+          p.title,
+          p.email,
+          p.linkedin_url,
+          p.linkedin_dm  AS generated_dm,
+          p.email_subject AS generated_subject,
+          p.email_body    AS generated_body,
+          p.status,
+          p.company_name  AS company,
+          NULL            AS company_category,
+          p.updated_at    AS activity_at
+        FROM prospects p
+        WHERE p.user_id = $1
+        ORDER BY p.company_name, p.updated_at DESC
+      `, [req.user.id]),
+      all(`
+        SELECT
+          'job_contact' AS row_type,
+          jc.id,
+          jc.name,
+          jc.title,
+          jc.email,
+          jc.linkedin_url,
+          jc.generated_dm,
+          jc.generated_subject,
+          jc.generated_body,
+          jc.status,
+          j.name     AS company,
+          j.category AS company_category,
+          jc.created_at AS activity_at
+        FROM job_contacts jc
+        JOIN jobs j ON j.id = jc.job_id AND j.user_id = $1
+        WHERE jc.user_id = $1
+        ORDER BY j.name, jc.created_at DESC
+      `, [req.user.id]),
+    ]);
 
     // Group by company
-    const byCompany = {}
+    const byCompany = {};
     for (const row of [...prospectRows, ...jobRows]) {
-      if (!byCompany[row.company]) byCompany[row.company] = { company: row.company, category: row.company_category, people: [] }
-      byCompany[row.company].people.push(row)
+      if (!byCompany[row.company]) byCompany[row.company] = { company: row.company, category: row.company_category, people: [] };
+      byCompany[row.company].people.push(row);
     }
 
-    res.json({ stats, companies: Object.values(byCompany).sort((a, b) => a.company.localeCompare(b.company)) })
+    res.json({ stats, companies: Object.values(byCompany).sort((a, b) => a.company.localeCompare(b.company)) });
   } catch (err) {
-    res.status(500).json({ error: err.message })
+    res.status(500).json({ error: err.message });
   }
 });
 
 // ── GET /api/unified/all-contacts — all contacts across all companies ──────────
-router.get('/all-contacts', (req, res) => {
+router.get('/all-contacts', async (req, res) => {
   try {
     const { limit = 200, hasEmail, noEmail } = req.query;
-    let where = ''
-    if (hasEmail === 'true') where = "WHERE jc.email IS NOT NULL AND jc.email != ''"
-    else if (noEmail === 'true') where = "WHERE (jc.email IS NULL OR jc.email = '')"
-    const rows = db.prepare(`
+    let where = 'WHERE jc.user_id = $1';
+    if (hasEmail === 'true') where += " AND jc.email IS NOT NULL AND jc.email != ''";
+    else if (noEmail === 'true') where += " AND (jc.email IS NULL OR jc.email = '')";
+    const rows = await all(`
       SELECT jc.id, jc.name, jc.title, jc.email, jc.email_status, jc.linkedin_url,
              jc.status, jc.job_id, j.name as company_name, j.category
       FROM job_contacts jc
-      LEFT JOIN jobs j ON j.id = jc.job_id
+      LEFT JOIN jobs j ON j.id = jc.job_id AND j.user_id = $1
       ${where}
       ORDER BY jc.created_at DESC
-      LIMIT ?
-    `).all(Number(limit));
-    const total = db.prepare(`SELECT COUNT(*) as n FROM job_contacts jc ${where}`).get().n;
-    res.json({ contacts: rows, total });
+      LIMIT $2
+    `, [req.user.id, Number(limit)]);
+    const totalRow = await one(
+      `SELECT COUNT(*)::int AS n FROM job_contacts jc ${where}`,
+      [req.user.id]
+    );
+    res.json({ contacts: rows, total: totalRow?.n || 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

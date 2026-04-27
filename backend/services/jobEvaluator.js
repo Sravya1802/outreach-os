@@ -100,13 +100,16 @@ async function callAI(prompt) {
 
 export async function fetchJobFromUrl(url) {
   try {
-    const { default: cheerio } = await import('cheerio');
+    // cheerio v1.x ESM exports `load` as a named export, not default.
+    // `{ default: cheerio }` resolves to undefined → `cheerio.load(...)` throws
+    // "Cannot read properties of undefined (reading 'load')".
+    const { load } = await import('cheerio');
     const res = await fetch(url, {
       headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
       signal: AbortSignal.timeout(10000),
     });
     const html = await res.text();
-    const $ = cheerio.load(html);
+    const $ = load(html);
 
     $('script, style, nav, footer, header, iframe, .cookie-banner').remove();
 
