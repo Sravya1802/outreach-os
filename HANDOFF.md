@@ -126,7 +126,7 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ### 2026-04-27 — E2E CI auth switched from refresh token to password grant
 - **What:** Fresh GitHub e2e run `24976916697` reached Supabase with the publishable key but failed because `E2E_REFRESH_TOKEN` was invalid/rotated (`refresh_token_not_found`). Updated Playwright setup to prefer `E2E_TEST_EMAIL` + `E2E_TEST_PASSWORD` password grant for CI so each run mints a fresh session; refresh token remains only as local fallback.
 - **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:32), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:8), [.github/workflows/e2e.yml](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.github/workflows/e2e.yml:6), [.env.example](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/.env.example:35)
-- **Status:** uncommitted at time of entry; local checks pass: root tests 8/8, typecheck/lint clean, local e2e 12 passed / 11 skipped without auth env.
+- **Status:** committed and pushed to `main` as `698f40a`; local checks pass: root tests 8/8, typecheck/lint clean, local e2e 12 passed / 11 skipped without auth env.
 - **Follow-up:** Add GitHub repo secrets `E2E_TEST_EMAIL` and `E2E_TEST_PASSWORD` for the e2e user, keep `E2E_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...`, then rerun e2e. `E2E_REFRESH_TOKEN` is no longer needed for CI.
 
 ### 2026-04-26 — E2E publishable-key secret validation clarified
