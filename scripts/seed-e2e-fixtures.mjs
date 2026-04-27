@@ -110,25 +110,38 @@ function emit(key, value) {
   console.error(`[seed-e2e] e2e user_id = ${userId}`);
 
   // 1. user_profile — fields validateProfileForApply() checks + consent flag.
-  await postgrest(
-    'POST',
-    'user_profile?on_conflict=user_id',
-    {
-      user_id:            userId,
-      first_name:         'E2E',
-      last_name:          'Test',
-      email:              EMAIL,
-      phone:              '+15551234567',
-      country:            'US',
-      work_authorization: 'US Citizen',
-      needs_sponsorship:  0,
-      auto_apply_consent: 1,
-      demographic_consent:0,
-      resume_dir:         RESUME_DIR,
-    },
-    { Prefer: 'resolution=merge-duplicates,return=minimal' },
-  );
-  console.error('[seed-e2e] user_profile upserted');
+  //    The unique index on (user_id) is partial (WHERE user_id IS NOT NULL),
+  //    which PostgREST rejects for on_conflict=user_id (42P10). Manual upsert.
+  const profile = {
+    first_name:          'E2E',
+    last_name:           'Test',
+    email:               EMAIL,
+    phone:               '+15551234567',
+    country:             'US',
+    work_authorization:  'US Citizen',
+    needs_sponsorship:   0,
+    auto_apply_consent:  1,
+    demographic_consent: 0,
+    resume_dir:          RESUME_DIR,
+  };
+  const existing = await postgrest('GET', `user_profile?user_id=eq.${userId}&select=id`);
+  if (Array.isArray(existing) && existing.length > 0) {
+    await postgrest(
+      'PATCH',
+      `user_profile?user_id=eq.${userId}`,
+      profile,
+      { Prefer: 'return=minimal' },
+    );
+    console.error('[seed-e2e] user_profile patched');
+  } else {
+    await postgrest(
+      'POST',
+      'user_profile',
+      { user_id: userId, ...profile },
+      { Prefer: 'return=minimal' },
+    );
+    console.error('[seed-e2e] user_profile inserted');
+  }
 
   // 2. jobs row — unblocks the application-tracking Save gate, which only
   //    needs at least one row for this user under /api/unified/companies.
