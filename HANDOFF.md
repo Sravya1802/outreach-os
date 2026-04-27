@@ -126,7 +126,7 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 ### 2026-04-26 — E2E publishable-key secret validation clarified
 - **What:** GitHub e2e run failed with `Legacy API keys are disabled`, which means `E2E_SUPABASE_PUBLISHABLE_KEY` was missing or set to the old `eyJ...` anon key. Hardened Playwright auth setup to require a trimmed key starting with `sb_publishable_` before calling Supabase, so future failures point directly at the bad secret.
 - **Files:** [tests/e2e/auth.setup.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth.setup.js:21), [tests/e2e/auth-env.js](/Users/lakshmisravyarachakonda/VS%20CODE/email%20tracker/tests/e2e/auth-env.js:3)
-- **Status:** uncommitted at time of entry; local checks pass: root tests 8/8, typecheck/lint clean, local e2e 12 passed / 11 skipped without auth env.
+- **Status:** committed and pushed to `main` as `8f147a1`; local checks pass: root tests 8/8, typecheck/lint clean, local e2e 12 passed / 11 skipped without auth env.
 - **Follow-up:** In GitHub repository secrets, edit `E2E_SUPABASE_PUBLISHABLE_KEY` so the value is the Supabase publishable key beginning `sb_publishable_`, not the legacy anon JWT beginning `eyJ...`; rerun e2e.
 
 ### 2026-04-26 — E2E auth harness migrated off legacy Supabase anon JWT
