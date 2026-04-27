@@ -9,23 +9,32 @@
 #   E2E_SUPABASE_PUBLISHABLE_KEY — Supabase API key that starts with
 #                       sb_publishable_. Required now that legacy JWT-based
 #                       anon keys are disabled.
+#   SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY — used by scripts/seed-e2e-fixtures.mjs
+#                       to seed the deep-audit fixtures (jobs row + queued
+#                       Auto Apply evaluation) before each run.
 # Optional:
 #   E2E_SECOND_TEST_EMAIL / E2E_SECOND_TEST_PASSWORD — enables two-user
 #                       write/read isolation coverage.
-#   E2E_AUTO_APPLY_EVAL_ID — enables full Auto Apply dry-run execution against
-#                       a seeded supported-ATS evaluation with consent + resume.
-#   E2E_RUN_REAL_APIFY=1 — enables the quota-spending real Apify scrape test.
+#   run_real_apify (workflow_dispatch input) — opt into spending Apify quota
+#                       for the real-scrape gate on a manual run. Defaults off.
+#   vars.E2E_RUN_REAL_APIFY=1 — same opt-in via repo variable for scheduled runs.
 
 name: e2e
 on:
   schedule:
     - cron: '0 9 * * *'
   workflow_dispatch:
+    inputs:
+      run_real_apify:
+        description: 'Spend Apify quota on the real-scrape gate'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   playwright:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +49,18 @@ jobs:
       - name: Install chromium
         run: npx playwright install --with-deps chromium
 
+      # Idempotently seed the deep-audit fixtures: a jobs row (unlocks the
+      # application-tracking Save gate) and a queued Auto Apply evaluation
+      # against a fresh Greenhouse URL (unlocks the Auto Apply dry-run gate).
+      # Skips silently if SUPABASE_SERVICE_ROLE_KEY isn't configured.
+      - name: Seed e2e fixtures
+        id: seed
+        env:
+          SUPABASE_URL:              ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          E2E_TEST_EMAIL:            ${{ secrets.E2E_TEST_EMAIL }}
+        run: node scripts/seed-e2e-fixtures.mjs
+
       - name: Run e2e suite against prod
         env:
           E2E_TEST_EMAIL: ${{ secrets.E2E_TEST_EMAIL }}
@@ -47,8 +68,12 @@ jobs:
           E2E_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.E2E_SUPABASE_PUBLISHABLE_KEY }}
           E2E_SECOND_TEST_EMAIL: ${{ secrets.E2E_SECOND_TEST_EMAIL }}
           E2E_SECOND_TEST_PASSWORD: ${{ secrets.E2E_SECOND_TEST_PASSWORD }}
-          E2E_AUTO_APPLY_EVAL_ID: ${{ vars.E2E_AUTO_APPLY_EVAL_ID }}
-          E2E_RUN_REAL_APIFY: ${{ vars.E2E_RUN_REAL_APIFY }}
+          # Prefer the seed step output; fall back to the repo variable so the
+          # gate also works when seeding is disabled but a fixed eval id is set.
+          E2E_AUTO_APPLY_EVAL_ID: ${{ steps.seed.outputs.eval_id || vars.E2E_AUTO_APPLY_EVAL_ID }}
+          # Opt into the quota-spending Apify scrape via either the manual
+          # workflow_dispatch checkbox or the repo variable.
+          E2E_RUN_REAL_APIFY: ${{ (inputs.run_real_apify == true && '1') || vars.E2E_RUN_REAL_APIFY }}
           E2E_BACKEND_URL: ${{ vars.E2E_BACKEND_URL }}
         run: npm run test:e2e
 
