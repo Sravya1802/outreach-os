@@ -856,6 +856,8 @@ function JobScraperTab({ company, onTabSwitch }) {
             { label:'Google Jobs', url:`https://www.google.com/search?q=${encodeURIComponent('"'+company.name+'" intern 2026 site:greenhouse.io OR site:lever.co')}` },
             { label:'Greenhouse', url:`https://boards.greenhouse.io/${company.name.toLowerCase().replace(/\s+/g,'')}` },
             { label:'Lever', url:`https://jobs.lever.co/${company.name.toLowerCase().replace(/\s+/g,'')}` },
+            { label:'💰 Salaries on Levels.fyi', url:`https://www.levels.fyi/companies/${company.name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')}/salaries` },
+            { label:'💰 Salaries on Glassdoor',  url:`https://www.glassdoor.com/Salaries/${encodeURIComponent(company.name)}-salaries-SRCH.htm` },
           ].map(l => (
             <a key={l.label} href={l.url} target="_blank" rel="noreferrer"
               style={{ padding:'10px 14px', background:'#f8fafc', color:'#475569', border:'1px solid #e2e8f0', borderRadius:9, fontSize:12, fontWeight:600, textDecoration:'none', transition:'all 0.15s', display:'flex', alignItems:'center', justifyContent:'center' }} onMouseEnter={e => { e.currentTarget.style.borderColor='#cbd5e1'; e.currentTarget.style.background='#f1f5f9'; e.currentTarget.style.boxShadow='0 2px 6px rgba(0,0,0,0.05)' }} onMouseLeave={e => { e.currentTarget.style.borderColor='#e2e8f0'; e.currentTarget.style.background='#f8fafc'; e.currentTarget.style.boxShadow='none' }}>

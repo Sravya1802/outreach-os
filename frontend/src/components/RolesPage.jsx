@@ -25,6 +25,11 @@ function fmtPosted(iso, scrapedAt) {
   return ts.toISOString().slice(0, 10)
 }
 
+function levelsFyiUrl(company) {
+  const slug = String(company || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+  return slug ? `https://www.levels.fyi/companies/${slug}/salaries` : null
+}
+
 /**
  * RolesPage — daily-scraped role catalog. The route decides role_type:
  *   /apply/intern-roles    → role_type='intern'
@@ -194,7 +199,16 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
                 </a>
                 <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{SOURCE_LABELS[r.source] || r.source}</div>
               </div>
-              <div style={{ color: '#475569', fontWeight: 500 }}>{r.company_name}</div>
+              <div style={{ color: '#475569', fontWeight: 500, minWidth: 0 }}>
+                {r.company_name}
+                {levelsFyiUrl(r.company_name) && (
+                  <a href={levelsFyiUrl(r.company_name)} target="_blank" rel="noreferrer"
+                     title="View salaries on levels.fyi"
+                     style={{ display: 'inline-block', marginLeft: 6, fontSize: 10, color: '#10b981', textDecoration: 'none', fontWeight: 700 }}>
+                    💰
+                  </a>
+                )}
+              </div>
               <div style={{ color: '#64748b', fontSize: 12 }}>{r.location || '—'}</div>
               <div style={{ color: '#64748b', fontSize: 12 }}>{fmtPosted(r.posted_at, r.scraped_at)}</div>
               <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
