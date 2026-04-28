@@ -19,6 +19,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { listLibrary, downloadLibraryFile, isStorageConfigured } from './resumeStorage.js';
 
 // Role-archetype → folder name patterns (lower-case, token match).
 // Order matters: the FIRST matching archetype wins when multiple keywords appear.
@@ -73,6 +74,54 @@ export function scanResumes(resumeDir) {
       absPath:   abs,
       sizeBytes: stat.size,
       mtime:     stat.mtime.toISOString(),
+    });
+  }
+  return results;
+}
+
+/**
+ * Scan the user's Supabase Storage `resume-library` bucket and return the same
+ * shape as scanResumes() — but each entry's `absPath` points at a temp file
+ * downloaded from storage. Caller is responsible for unlinking after use
+ * (Playwright reads it once, then we clean up).
+ *
+ * This is the path that's ACTUALLY refreshed when a user uploads a new PDF
+ * via the CareerOps Library UI (which writes to Supabase Storage, not local FS).
+ *
+ * Returns [] if storage isn't configured or the bucket is empty for this user.
+ */
+export async function scanResumesFromStorage(userId) {
+  if (!userId || !isStorageConfigured()) return [];
+  let items;
+  try { items = await listLibrary(userId); }
+  catch (_) { return []; }
+  if (!items?.length) return [];
+
+  // listLibrary returns one entry per (archetype-folder, filename). Pick the
+  // first PDF per archetype — same convention as scanResumes() — and download
+  // each to a temp file so Playwright can setInputFiles() against it.
+  const seenArchetypes = new Set();
+  const results = [];
+  for (const item of items) {
+    if (!item?.filename || !item.filename.toLowerCase().endsWith('.pdf')) continue;
+    const folder = String(item.archetype || item.folder || 'misc');
+    if (seenArchetypes.has(folder)) continue;
+    seenArchetypes.add(folder);
+
+    const folderNorm = normalizeFolder(folder);
+    const match = ARCHETYPE_FOLDERS.find(a => a.folderPatterns.some(p => folderNorm.includes(normalizeFolder(p))));
+
+    let absPath;
+    try { absPath = await downloadLibraryFile(userId, folder, item.filename); }
+    catch (_) { continue; }
+
+    results.push({
+      archetype: match?.archetype || folder.toLowerCase(),
+      folder,
+      filename:  item.filename,
+      absPath,                  // temp path — caller must clean up
+      sizeBytes: item.sizeBytes || 0,
+      source:    'storage',     // flag so the worker can unlink after use
     });
   }
   return results;
