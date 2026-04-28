@@ -27,8 +27,10 @@ import importSheetRouter from './routes/importSheet.js';
 import careerOpsRouter   from './routes/careerOps.js';
 import automationsRouter  from './routes/automations.js';
 import ycRouter           from './routes/yc.js';
+import scrapedRolesRouter from './routes/scrapedRoles.js';
 import { requireAuth }    from './middleware/requireAuth.js';
 import { scrapeAllSources } from './services/scraper.js';
+import { scrapeAllSourcesAndPersist } from './services/multiSourceScraper.js';
 import { importStartupSheet } from './services/startupSheet.js';
 import { checkAllCredits }   from './services/creditChecker.js';
 
@@ -90,6 +92,7 @@ app.use('/api/jobs',       importSheetRouter);
 app.use('/api/career',    careerOpsRouter);
 app.use('/api/automations', automationsRouter);
 app.use('/api/yc',         ycRouter);
+app.use('/api/scraped-roles', scrapedRolesRouter);
 
 // ── Manual refresh endpoint (SSE) ────────────────────────────────────────────
 app.post('/api/jobs/refresh-all', async (req, res) => {
@@ -436,6 +439,36 @@ cron.schedule('0 6 * * *', () => {
     return;
   }
   runDailyRefresh(null).catch(err => console.error('[Cron] Daily refresh FAILED:', err.message));
+});
+
+// ── Cron: daily multi-source scraped-roles refresh (06:15 UTC) ───────────────
+// Hits every supported source (Greenhouse / Lever / Ashby / LinkedIn /
+// Wellfound / ai_jobs / Jobspresso / Remote Rocketship / InternshipDaily) and
+// upserts into public.scraped_roles. Shared across all users; kill switch
+// `MULTI_SCRAPE_DISABLED` (separate from NIGHTLY_CRON_DISABLED so you can
+// pause auto-apply without losing fresh role discovery).
+cron.schedule('15 6 * * *', async () => {
+  if (process.env.MULTI_SCRAPE_DISABLED) {
+    console.log('[multi-scrape] skipped — MULTI_SCRAPE_DISABLED is set');
+    return;
+  }
+  if (process.env.NIGHTLY_CRON_DISABLED) {
+    console.log('[multi-scrape] skipped — NIGHTLY_CRON_DISABLED is set');
+    return;
+  }
+  try {
+    console.log('[multi-scrape] starting daily multi-source role scrape');
+    const summary = await scrapeAllSourcesAndPersist();
+    const perSrc = Object.entries(summary.perSource)
+      .map(([k, v]) => `${k}=intern:${v.intern}/grad:${v.new_grad}`)
+      .join(' ');
+    console.log(`[multi-scrape] done — total=${summary.total} ${perSrc}`);
+    if (Object.keys(summary.errors).length) {
+      console.warn(`[multi-scrape] errors: ${JSON.stringify(summary.errors).slice(0, 500)}`);
+    }
+  } catch (err) {
+    console.error('[multi-scrape] dispatcher failed:', err.message);
+  }
 });
 
 // ── Cron: nightly auto-apply pipeline at 07:00 UTC (≈2am Central) ────────────
