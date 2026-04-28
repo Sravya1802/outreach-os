@@ -141,6 +141,22 @@ export const api = {
     status: (force = false) => apiCall('/credits/status' + (force ? '?refresh=true' : '')).catch(() => ({})),
   },
 
+  // Global daily-scraped role catalog. Shared across users; cron repopulates
+  // at 06:15 UTC. The `track` and `autoApply` actions create per-user
+  // evaluations rows the Auto Apply queue picks up.
+  scrapedRoles: {
+    list: ({ roleType = 'intern', source = '', search = '', page = 0, pageSize = 50 } = {}) => {
+      const qs = new URLSearchParams({ role_type: roleType, page: String(page), pageSize: String(pageSize) });
+      if (source) qs.set('source', source);
+      if (search) qs.set('search', search);
+      return apiCall(`/scraped-roles?${qs.toString()}`);
+    },
+    sources:   ()    => apiCall('/scraped-roles/sources'),
+    track:     (id)  => apiCall(`/scraped-roles/${id}/track`,      { method: 'POST', body: {} }),
+    autoApply: (id)  => apiCall(`/scraped-roles/${id}/auto-apply`, { method: 'POST', body: {} }),
+    refresh:   ()    => apiCall('/scraped-roles/refresh',          { method: 'POST', body: {} }),
+  },
+
   companies: {
     list:         () => apiCall('/jobs'),
     categories:   () => apiCall('/companies/categories'),

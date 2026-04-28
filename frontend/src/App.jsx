@@ -22,6 +22,7 @@ const JobDashboard        = lazy(() => import('./components/JobDashboard'))
 const AutoApplyPage       = lazy(() => import('./components/AutoApplyPage'))
 const TemplatesPage       = lazy(() => import('./components/TemplatesPage'))
 const ResetPassword       = lazy(() => import('./components/ResetPassword'))
+const RolesPage           = lazy(() => import('./components/RolesPage'))
 
 
 // ── Settings page ─────────────────────────────────────────────────────────────
@@ -461,6 +462,8 @@ export default function App() {
           <Route path="/apply/auto-apply"    element={<AutoApplyPage />} />
           <Route path="/apply/pipeline"      element={<ApplicationPipeline />} />
           <Route path="/apply/ranked"        element={<CareerOpsPage />} />
+          <Route path="/apply/intern-roles"   element={<RolesPage defaultRoleType="intern" />} />
+          <Route path="/apply/new-grad-roles" element={<RolesPage defaultRoleType="new_grad" />} />
 
           {/* OUTREACH section */}
           <Route path="/outreach/messages"   element={<OutreachPage />} />

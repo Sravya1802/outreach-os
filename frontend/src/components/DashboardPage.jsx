@@ -223,8 +223,8 @@ export default function DashboardPage({ onStatsChange }) {
             <div style={{ display:'grid', gridTemplateColumns:'repeat(6, 1fr)', gap:12 }}>
               {[
                 { icon:'🔍', label:'Browse Companies', sub:'Search & explore by category',   action: () => navigate('/companies'),  tint:'#6366f1' },
-                { icon:'🎓', label:'Intern Roles',      sub:'Find open internship positions', action: () => navigate('/scraper'),    tint:'#f59e0b' },
-                { icon:'💼', label:'New Grad Roles',    sub:'Entry-level & new grad roles',   action: () => navigate('/scraper'),    tint:'#10b981' },
+                { icon:'🎓', label:'Intern Roles',      sub:'Daily-scraped open internships', action: () => navigate('/apply/intern-roles'),   tint:'#f59e0b' },
+                { icon:'💼', label:'New Grad Roles',    sub:'Daily-scraped new grad roles',   action: () => navigate('/apply/new-grad-roles'), tint:'#10b981' },
                 { icon:'📥', label:'Scrape New Roles',  sub:'Bulk scraping across sources',   action: () => navigate('/scraper'),    tint:'#059669' },
                 { icon:'✉',  label:'Write Outreach',   sub:'Find contacts & draft emails',   action: () => navigate('/outreach'),   tint:'#0891b2' },
                 { icon:'🎯', label:'Career Ops',        sub:'Evaluate & track applications',  action: () => navigate('/career-ops'), tint:'#7c3aed' },
