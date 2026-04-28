@@ -23,7 +23,7 @@
 import path from 'path';
 import fs from 'fs';
 import db, { one, all, run } from '../db.js';
-import { scanResumes, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
+import { scanResumes, scanResumesFromStorage, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
 import { tailorResume, generateResumePDF } from './resumeGenerator.js';
 import { validateProfileForApply } from './applyValidation.js';
 
@@ -278,13 +278,18 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
   let resume = null;
 
   if (useLibraryResume) {
-    const resumes = scanResumes(profile.resume_dir);
+    // Prefer Supabase Storage (the bucket the CareerOps Library UI writes to —
+    // this is what's actually fresh for non-founder users). Fall back to the
+    // local FS layout only if storage is empty or not configured.
+    const storageResumes = await scanResumesFromStorage(userId);
+    let resumes = storageResumes;
+    if (!resumes.length) resumes = scanResumes(profile.resume_dir);
     resume = pickResumeForRole(resumes, {
       jobTitle:       row.job_title,
       jobDescription: row.job_description || '',
       archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
     });
-    if (resume) console.log(`[autoApply] nightly mode — library resume "${resume.filename}" for eval ${evalId}`);
+    if (resume) console.log(`[autoApply] nightly mode — library resume "${resume.filename}" (${resume.source || 'fs'}) for eval ${evalId}`);
   } else if (row.pdf_path && fs.existsSync(row.pdf_path)) {
     resume = { filename: path.basename(row.pdf_path), absPath: row.pdf_path, source: 'tailored' };
     console.log(`[autoApply] using tailored resume for eval ${evalId}: ${resume.filename}`);
@@ -314,13 +319,16 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
   }
 
   if (!resume) {
-    const resumes = scanResumes(profile.resume_dir);
+    // Same precedence as the nightly path — storage first, FS second.
+    const storageResumes = await scanResumesFromStorage(userId);
+    let resumes = storageResumes;
+    if (!resumes.length) resumes = scanResumes(profile.resume_dir);
     resume = pickResumeForRole(resumes, {
       jobTitle:       row.job_title,
       jobDescription: row.job_description || '',
       archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
     });
-    if (resume) console.log(`[autoApply] fallback to common resume "${resume.filename}" for eval ${evalId}`);
+    if (resume) console.log(`[autoApply] fallback to common resume "${resume.filename}" (${resume.source || 'fs'}) for eval ${evalId}`);
   }
 
   if (!resume) {
@@ -417,6 +425,11 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
     return { ok: false, platform, error: err.message };
   } finally {
     if (browser) { try { await browser.close(); } catch (_) {} }
+    // Unlink temp files we downloaded from Supabase Storage. Skip FS-resident
+    // and tailored PDFs — those are persistent.
+    if (resume?.source === 'storage' && resume.absPath) {
+      try { fs.unlinkSync(resume.absPath); } catch (_) {}
+    }
   }
 }
 
