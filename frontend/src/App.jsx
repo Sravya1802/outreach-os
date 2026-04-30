@@ -11,18 +11,46 @@ import Login            from './components/Login'
 // Heavy / detail-only routes are lazy — the initial bundle was a single 728 KB
 // chunk because everything was eager. Splitting the largest leaves
 // (CompanyDetail, CareerOps, AutoApplyPage, etc.) brings the first paint down.
-const CategoryView        = lazy(() => import('./components/CategoryView'))
-const CompanyDetail       = lazy(() => import('./components/CompanyDetail'))
-const OutreachPage        = lazy(() => import('./components/OutreachPage'))
-const ScraperPage         = lazy(() => import('./components/ScraperPage'))
-const CareerOpsPage       = lazy(() => import('./components/CareerOpsPage'))
-const CareerOps           = lazy(() => import('./components/CareerOps'))
-const ApplicationPipeline = lazy(() => import('./components/ApplicationPipeline'))
-const JobDashboard        = lazy(() => import('./components/JobDashboard'))
-const AutoApplyPage       = lazy(() => import('./components/AutoApplyPage'))
-const TemplatesPage       = lazy(() => import('./components/TemplatesPage'))
-const ResetPassword       = lazy(() => import('./components/ResetPassword'))
-const RolesPage           = lazy(() => import('./components/RolesPage'))
+//
+// `lazyWithRetry` survives the classic post-redeploy crash where the user's
+// open tab still references the old hashed chunk URL but Vercel/CDN only
+// serves the new one. On import failure we retry once after a short backoff;
+// if that also fails we hard-reload the page so they pick up the new HTML
+// + matching chunk URLs. Not catching this just dumps them into ErrorBoundary
+// for what's actually a stale-cache case.
+function lazyWithRetry(importFn, name = 'chunk') {
+  return lazy(async () => {
+    const flagKey = `chunk-reload:${name}`
+    try {
+      const mod = await importFn()
+      sessionStorage.removeItem(flagKey)
+      return mod
+    } catch (err) {
+      const msg = String(err?.message || '')
+      const isChunkErr = /Failed to fetch dynamically imported module|Loading chunk|Importing a module script failed/i.test(msg)
+      if (isChunkErr && !sessionStorage.getItem(flagKey)) {
+        sessionStorage.setItem(flagKey, '1')
+        window.location.reload()
+        // Suspense will show the loader until the page reloads.
+        return new Promise(() => {})
+      }
+      throw err
+    }
+  })
+}
+
+const CategoryView        = lazyWithRetry(() => import('./components/CategoryView'),        'CategoryView')
+const CompanyDetail       = lazyWithRetry(() => import('./components/CompanyDetail'),       'CompanyDetail')
+const OutreachPage        = lazyWithRetry(() => import('./components/OutreachPage'),        'OutreachPage')
+const ScraperPage         = lazyWithRetry(() => import('./components/ScraperPage'),         'ScraperPage')
+const CareerOpsPage       = lazyWithRetry(() => import('./components/CareerOpsPage'),       'CareerOpsPage')
+const CareerOps           = lazyWithRetry(() => import('./components/CareerOps'),           'CareerOps')
+const ApplicationPipeline = lazyWithRetry(() => import('./components/ApplicationPipeline'), 'ApplicationPipeline')
+const JobDashboard        = lazyWithRetry(() => import('./components/JobDashboard'),        'JobDashboard')
+const AutoApplyPage       = lazyWithRetry(() => import('./components/AutoApplyPage'),       'AutoApplyPage')
+const TemplatesPage       = lazyWithRetry(() => import('./components/TemplatesPage'),       'TemplatesPage')
+const ResetPassword       = lazyWithRetry(() => import('./components/ResetPassword'),       'ResetPassword')
+const RolesPage           = lazyWithRetry(() => import('./components/RolesPage'),           'RolesPage')
 
 
 // ── Settings page ─────────────────────────────────────────────────────────────

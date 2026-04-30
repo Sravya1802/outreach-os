@@ -388,7 +388,7 @@ function RegularCategoryView({ categoryName }) {
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
-                  {c.source && (
+                  {c.source && c.source.split(',')[0] !== 'job' && (
                     <span className="cv-source-pill" style={{ background:srcColor.bg, color:srcColor.color, border:`1px solid ${srcColor.border}` }}>
                       {c.source.split(',')[0]}
                     </span>
