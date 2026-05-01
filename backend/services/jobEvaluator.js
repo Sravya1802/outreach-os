@@ -115,25 +115,27 @@ async function callAI(prompt) {
 // though, so we can detour through that and skip the SPA entirely.
 //
 // URL pattern  → API endpoint:
-//   https://<tenant>.<wd>.myworkdayjobs.com/<site>/job/<loc>/<slug>_<jobReqId>
-//   →  https://<tenant>.<wd>.myworkdayjobs.com/wday/cxs/<tenant>/<site>/job/<jobReqId>
+//   https://<tenant>.<wd>.myworkdayjobs.com/[en-US/]<site>/job/<loc>/<slug>_<jobReqId>
+//   →  https://<tenant>.<wd>.myworkdayjobs.com/wday/cxs/<tenant>/<site>/job/<loc>/<slug>_<jobReqId>
+//
+// The CXS API echoes the entire public path after /job/, not just the
+// jobReqId. Strip the optional /en-US/ locale prefix and inject /wday/cxs/.
 function workdayApiUrl(jobUrl) {
   try {
     const u = new URL(jobUrl);
     if (!/myworkdayjobs\.com$/i.test(u.hostname)) return null;
-    // hostname: tempus.wd5.myworkdayjobs.com → tenant=tempus
     const tenant = u.hostname.split('.')[0];
-    // pathname: /Tempus_Careers/job/Chicago/AI-Data-Science-Summer-Associate_JR202600379
     const parts = u.pathname.split('/').filter(Boolean);
-    const siteIdx = parts.findIndex(p => p.toLowerCase() !== 'en-us'); // skip locale prefix
-    const site = parts[siteIdx];
-    const jobIdx = parts.indexOf('job');
-    if (jobIdx < 0) return null;
-    const lastSegment = parts[parts.length - 1] || '';
-    const jobReqMatch = lastSegment.match(/(JR-?\d+|R-?\d+|\d{6,})$/i);
-    const jobReqId = jobReqMatch ? jobReqMatch[1] : lastSegment.split('_').pop();
-    if (!tenant || !site || !jobReqId) return null;
-    return `${u.protocol}//${u.hostname}/wday/cxs/${tenant}/${site}/job/${jobReqId}`;
+    // Drop a leading /en-US (or any /xx-XX) locale prefix.
+    const startIdx = /^[a-z]{2}-[a-z]{2}$/i.test(parts[0]) ? 1 : 0;
+    const tail = parts.slice(startIdx);
+    if (tail.length < 3) return null;
+    const site = tail[0];
+    if (tail[1] !== 'job') return null;
+    // Re-stitch /job/<everything-after> verbatim.
+    const jobPath = '/' + tail.slice(1).join('/');
+    if (!tenant || !site) return null;
+    return `${u.protocol}//${u.hostname}/wday/cxs/${tenant}/${site}${jobPath}`;
   } catch { return null; }
 }
 
