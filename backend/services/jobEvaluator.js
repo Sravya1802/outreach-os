@@ -59,37 +59,49 @@ async function callAI(prompt) {
     }
   }
 
+  // Both Claude and OpenAI now retry once on timeout and use a 60s budget
+  // per attempt (was 30s). Long JD + resume prompts can exceed 30s
+  // first-token latency under provider load — retry-after-timeout almost
+  // always clears it because the second request usually hits a warmer pool.
   if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'optional_fallback') {
-    try {
-      const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-      const msg = await Promise.race([
-        client.messages.create({
-          model: 'claude-haiku-4-5-20251001',
-          max_tokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('Claude timeout')), 30000)),
-      ]);
-      return msg.content[0].text;
-    } catch (err) {
-      errors.push(`Claude: ${err.message?.slice(0, 80)}`);
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    for (let i = 0; i < 2; i++) {
+      try {
+        const msg = await Promise.race([
+          client.messages.create({
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 4096,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Claude timeout')), 60000)),
+        ]);
+        return msg.content[0].text;
+      } catch (err) {
+        errors.push(`Claude: ${err.message?.slice(0, 80)}`);
+        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message)) continue;
+        break;
+      }
     }
   }
 
   if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'optional_fallback') {
-    try {
-      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-      const msg = await Promise.race([
-        client.chat.completions.create({
-          model: 'gpt-4o-mini',
-          max_tokens: 4096,
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('OpenAI timeout')), 30000)),
-      ]);
-      return msg.choices[0].message.content;
-    } catch (err) {
-      errors.push(`OpenAI: ${err.message?.slice(0, 80)}`);
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    for (let i = 0; i < 2; i++) {
+      try {
+        const msg = await Promise.race([
+          client.chat.completions.create({
+            model: 'gpt-4o-mini',
+            max_tokens: 4096,
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('OpenAI timeout')), 60000)),
+        ]);
+        return msg.choices[0].message.content;
+      } catch (err) {
+        errors.push(`OpenAI: ${err.message?.slice(0, 80)}`);
+        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message)) continue;
+        break;
+      }
     }
   }
 
@@ -98,7 +110,68 @@ async function callAI(prompt) {
 
 // ── Fetch job page content from URL ──────────────────────────────────────────
 
+// Workday job pages are JavaScript-rendered SPAs — plain fetch() returns an
+// empty HTML shell. Workday exposes a public JSON API for every posting
+// though, so we can detour through that and skip the SPA entirely.
+//
+// URL pattern  → API endpoint:
+//   https://<tenant>.<wd>.myworkdayjobs.com/<site>/job/<loc>/<slug>_<jobReqId>
+//   →  https://<tenant>.<wd>.myworkdayjobs.com/wday/cxs/<tenant>/<site>/job/<jobReqId>
+function workdayApiUrl(jobUrl) {
+  try {
+    const u = new URL(jobUrl);
+    if (!/myworkdayjobs\.com$/i.test(u.hostname)) return null;
+    // hostname: tempus.wd5.myworkdayjobs.com → tenant=tempus
+    const tenant = u.hostname.split('.')[0];
+    // pathname: /Tempus_Careers/job/Chicago/AI-Data-Science-Summer-Associate_JR202600379
+    const parts = u.pathname.split('/').filter(Boolean);
+    const siteIdx = parts.findIndex(p => p.toLowerCase() !== 'en-us'); // skip locale prefix
+    const site = parts[siteIdx];
+    const jobIdx = parts.indexOf('job');
+    if (jobIdx < 0) return null;
+    const lastSegment = parts[parts.length - 1] || '';
+    const jobReqMatch = lastSegment.match(/(JR-?\d+|R-?\d+|\d{6,})$/i);
+    const jobReqId = jobReqMatch ? jobReqMatch[1] : lastSegment.split('_').pop();
+    if (!tenant || !site || !jobReqId) return null;
+    return `${u.protocol}//${u.hostname}/wday/cxs/${tenant}/${site}/job/${jobReqId}`;
+  } catch { return null; }
+}
+
+async function fetchWorkdayJD(jobUrl) {
+  const api = workdayApiUrl(jobUrl);
+  if (!api) return null;
+  try {
+    const res = await fetch(api, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
+      signal:  AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const info = data?.jobPostingInfo || data;
+    const parts = [
+      info?.title,
+      info?.jobDescription,
+      info?.jobRequisitionLocation?.descriptor,
+      info?.timeType,
+    ].filter(Boolean);
+    if (!parts.length) return null;
+    // jobDescription is HTML; strip tags inline.
+    const { load } = await import('cheerio');
+    const html = parts.join('\n\n');
+    const $ = load(`<div>${html}</div>`);
+    const text = $('div').text().replace(/\s{3,}/g, '\n\n').trim().slice(0, 8000);
+    return text.length > 200 ? text : null;
+  } catch { return null; }
+}
+
 export async function fetchJobFromUrl(url) {
+  // Try Workday's JSON API first if the URL pattern matches — saves us from
+  // a wasted plain-HTML fetch that would only return an empty SPA shell.
+  if (/myworkdayjobs\.com/i.test(url)) {
+    const wdText = await fetchWorkdayJD(url);
+    if (wdText) return { text: wdText, url, source: 'workday-api' };
+  }
+
   try {
     // cheerio v1.x ESM exports `load` as a named export, not default.
     // `{ default: cheerio }` resolves to undefined → `cheerio.load(...)` throws
@@ -108,6 +181,9 @@ export async function fetchJobFromUrl(url) {
       headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' },
       signal: AbortSignal.timeout(10000),
     });
+    if (!res.ok) {
+      return { text: null, url, error: `HTTP ${res.status} ${res.statusText} — site blocked the fetch (try Paste JD instead)` };
+    }
     const html = await res.text();
     const $ = load(html);
 
@@ -129,10 +205,21 @@ export async function fetchJobFromUrl(url) {
     if (!text) text = $('body').text().trim();
 
     text = text.replace(/\s{3,}/g, '\n\n').slice(0, 8000);
+
+    // Pages that are JS-rendered (Workday, Greenhouse-iframe, some Lever
+    // boards) return an HTML shell with ~empty body — call that out instead
+    // of bubbling `undefined` through to the UI.
+    if (text.length < 200) {
+      return {
+        text: null,
+        url,
+        error: `Page returned only ${text.length} chars of text — likely a JavaScript-rendered SPA. Use the Paste JD tab instead.`,
+      };
+    }
     return { text, url };
   } catch (err) {
     console.error('[jobEvaluator] fetchJobFromUrl failed:', err.message);
-    return { text: null, url, error: err.message };
+    return { text: null, url, error: err.message || 'fetch failed' };
   }
 }
 
