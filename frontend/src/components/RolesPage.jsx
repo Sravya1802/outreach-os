@@ -139,6 +139,10 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
   }, [sourceCounts, roleType])
 
   return (
+    // App.jsx wraps every page in <main className="app-main" overflow:hidden>,
+    // so each page provides its own vertical scroll container. Without
+    // overflowY:auto here the table just gets clipped at the viewport edge.
+    <div style={{ flex: 1, overflowY: 'auto', background: '#f8fafc' }}>
     <div style={{ padding: '20px 32px', maxWidth: 1200 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
@@ -260,6 +264,7 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
           {toast}
         </div>
       )}
+    </div>
     </div>
   )
 }
