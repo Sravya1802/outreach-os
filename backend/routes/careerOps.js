@@ -138,7 +138,7 @@ router.post('/evaluate', async (req, res) => {
     if (jobUrl && !rawDescription) {
       console.log(`[careerOps] Fetching job from URL: ${jobUrl}`);
       const fetched = await fetchJobFromUrl(jobUrl);
-      if (!fetched.text) return res.status(400).json({ error: `Could not fetch job page: ${fetched.error}` });
+      if (!fetched.text) return res.status(400).json({ error: `Could not fetch job page: ${fetched.error || 'no content extracted (paste the JD manually instead)'}` });
       jobDescription = fetched.text;
     }
 
