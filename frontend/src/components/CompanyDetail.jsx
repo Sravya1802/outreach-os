@@ -518,6 +518,8 @@ function JobScraperTab({ company, onTabSwitch }) {
   const [activeFilter, setActiveFilter] = useState('All')
   const [sortOrder, setSortOrder] = useState('newest')
   const [careersPageUrl, setCareersPageUrl] = useState(null)
+  const [manualUrlInput, setManualUrlInput] = useState('')
+  const [savingUrl, setSavingUrl]           = useState(false)
   const [scrapingType, setScrapingType] = useState(null) // Track which scrape is running (intern, fulltime, or null)
   const [autoApplyBusy, setAutoApplyBusy] = useState('')   // '' | 'queue' | 'scrape-and-queue'
   const [autoApplyMsg, setAutoApplyMsg]   = useState(null) // { ok, text }
@@ -559,6 +561,21 @@ function JobScraperTab({ company, onTabSwitch }) {
       setScrapeResult({ ok: false, error: err.message })
     }
     setScrapingType(null)
+  }
+
+  async function saveManualUrl() {
+    const url = manualUrlInput.trim()
+    if (!url) return
+    setSavingUrl(true)
+    try {
+      await api.jobs.updateUrl(company.id, url)
+      setCareersPageUrl(url)
+      setManualUrlInput('')
+      setScrapeResult({ ok: true, added: 0, found: roles.length, message: `✓ Careers URL saved — click Scrape to find roles` })
+    } catch (err) {
+      setScrapeResult({ ok: false, error: err.message })
+    }
+    setSavingUrl(false)
   }
 
   async function trackRole(role) {
@@ -665,6 +682,21 @@ function JobScraperTab({ company, onTabSwitch }) {
           <button onClick={() => scrapeRoles('fulltime')} disabled={scrapingType !== null}
             style={{ padding:'11px 16px', background: scrapingType === 'fulltime' ? '#d1fae5' : 'linear-gradient(135deg,#059669,#10b981)', color: scrapingType === 'fulltime' ? '#047857' : '#fff', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor: scrapingType !== null ? 'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:8, transition:'all 0.2s' }}>
             {scrapingType === 'fulltime' ? <><Spin color="#047857" size={16} /> Scraping…</> : '💼 Scrape Full-Time/New Grad'}
+          </button>
+        </div>
+
+        {/* Manual careers URL override — for when auto-scraper can't find the right page */}
+        <div style={{ marginTop:10, display:'flex', gap:8, alignItems:'center' }}>
+          <input
+            value={manualUrlInput}
+            onChange={e => setManualUrlInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && saveManualUrl()}
+            placeholder={careersPageUrl ? `Current: ${careersPageUrl.slice(0, 60)}…` : 'Paste careers URL if scraper can\'t find it…'}
+            style={{ flex:1, padding:'8px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', outline:'none' }}
+          />
+          <button onClick={saveManualUrl} disabled={savingUrl || !manualUrlInput.trim()}
+            style={{ padding:'8px 14px', borderRadius:8, border:'none', background: manualUrlInput.trim() ? '#6366f1' : '#e2e8f0', color: manualUrlInput.trim() ? '#fff' : '#94a3b8', fontSize:12, fontWeight:700, cursor: manualUrlInput.trim() ? 'pointer' : 'default', whiteSpace:'nowrap' }}>
+            {savingUrl ? 'Saving…' : '💾 Set URL'}
           </button>
         </div>
 

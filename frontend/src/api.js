@@ -229,6 +229,7 @@ export const api = {
     scrapeRoles:  (id, roleType = 'intern') => apiCall(`/jobs/${id}/scrape-roles`, { method: 'POST', body: { roleType } }),
     scrape:       (params) => apiCall('/jobs/scrape', { method: 'POST', body: params }),
     updateStatus: (id, status) => apiCall(`/jobs/${id}/status`, { method: 'PUT', body: { status } }),
+    updateUrl:    (id, url)    => apiCall(`/jobs/${id}/url`,    { method: 'PUT', body: { url } }),
     findLinkedIn: (id) => apiCall(`/jobs/${id}/find-linkedin`, { method: 'POST', body: {} }),
     findPeopleStream: (id) => withAuthQuery(apiUrl(`/jobs/${id}/find-people-stream`)),
     findEmails: (id, domain = null) => apiCall(`/jobs/${id}/find-emails`, {

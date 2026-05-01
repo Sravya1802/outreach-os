@@ -207,6 +207,18 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
+// ── Save a manually-entered careers URL for a company ────────────────────────
+router.put('/:id/url', async (req, res) => {
+  try {
+    const { url } = req.body;
+    if (!url || typeof url !== 'string') return res.status(400).json({ error: 'url required' });
+    await run('UPDATE jobs SET url = $1 WHERE id = $2 AND user_id = $3', [url.trim(), req.params.id, req.user.id]);
+    res.json({ success: true, url: url.trim() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Get saved roles for a company ────────────────────────────────────────────
 
 router.get('/:id/roles', async (req, res) => {
