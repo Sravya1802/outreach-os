@@ -1681,9 +1681,25 @@ router.get('/evaluations/:id/report.html', async (req, res) => {
   try {
     const row = await one('SELECT * FROM evaluations WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
     if (!row) return res.status(404).send('<h1>Report not found</h1>');
-    const e = row.report_json ? JSON.parse(row.report_json) : null;
-    if (!e) return res.status(404).send('<h1>No evaluation data for this report</h1>');
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    const e = row.report_json ? JSON.parse(row.report_json) : null;
+    if (!e) {
+      // Older evaluations may lack report_json (tracked before full eval ran).
+      // Render a minimal summary from the row columns so the tab opens cleanly.
+      const gradeC = { A:'#16a34a', B:'#0d9488', C:'#d97706', D:'#ea580c', F:'#dc2626' }[row.grade] || '#94a3b8';
+      return res.send(`<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>${esc(row.job_title || 'Evaluation')} — ${esc(row.company_name || '')}</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:700px;margin:48px auto;padding:0 24px;color:#0f172a;background:#f8fafc}
+.grade{width:72px;height:72px;border-radius:50%;border:3px solid ${gradeC};background:${gradeC}18;display:flex;align-items:center;justify-content:center;font-size:30px;font-weight:900;color:${gradeC}}
+h1{font-size:22px;margin:16px 0 4px}p{color:#64748b;margin:0}
+.note{margin-top:32px;padding:16px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;font-size:13px;color:#92400e}</style></head>
+<body>
+<div class="grade">${esc(row.grade || '—')}</div>
+<h1>${esc(row.job_title || 'Unknown Role')}</h1>
+<p>${esc(row.company_name || '')} · Score: ${row.score || '—'}/100 · ${row.created_at ? new Date(row.created_at).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'}) : ''}</p>
+<div class="note">⚠ This evaluation was tracked before the full AI report was generated. Open the role in CareerOps → Evaluate to run a complete analysis.</div>
+</body></html>`);
+    }
     res.send(renderEvaluationHtml(e, row));
   } catch (err) {
     res.status(500).send(`<h1>Error</h1><pre>${String(err.message).replace(/[<>&]/g, c => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[c]))}</pre>`);

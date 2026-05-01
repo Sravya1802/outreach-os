@@ -319,17 +319,12 @@ function RegularCategoryView({ categoryName }) {
         <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
           <input value={search} onChange={onSearch} placeholder="Filter by name…"
             style={{ padding:'7px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', outline:'none', minWidth:200 }} />
-          <select value={source} onChange={e => { setSource(e.target.value); setPage(0) }}
-            style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
-            <option value="">All Sources</option>
-            {sources.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={status} onChange={e => { setStatus(e.target.value); setPage(0) }}
+          <select value={status} onChange={e => { setStatus(e.target.value); setPage(0); load(0, search, source, e.target.value, sortBy) }}
             style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
             <option value="">All Statuses</option>
             {['new','researching','contacted','responded','skip'].map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(0); load(0, search, source, status, e.target.value) }}
             style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
             <option value="hiring">⭐ Top Companies</option>
             <option value="contacts">👥 Most Contacts</option>

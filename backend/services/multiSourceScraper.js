@@ -30,6 +30,18 @@ import { scrapeLinkedInJobs, scrapeWellfound, noteApifyError } from './apify.js'
 const INTERN_PATTERN  = /\b(intern|internship|co-?op|co\s*op|summer\s*\d{4}|spring\s*\d{4}|fall\s*\d{4})\b/i;
 const NEW_GRAD_PATTERN = /\b(new\s*grad|early\s*career|entry[-\s]?level|graduate|jr\.?|junior|associate)\b/i;
 
+// Reject titles that contain CJK, Arabic, Cyrillic, or other non-Latin scripts.
+// ai-jobs.net sometimes returns Chinese-language listings; filter them out so
+// only English-readable titles reach the database.
+function isEnglishTitle(title = '') {
+  if (!title) return false;
+  // Unicode ranges for scripts we want to reject:
+  //   CJK Unified/Compat, Hiragana, Katakana, Hangul, Arabic, Devanagari,
+  //   Thai, Cyrillic (broad), Hebrew, etc.
+  const nonLatin = (title.match(/[Ѐ-ӿ؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]/g) || []).length;
+  return nonLatin / title.length < 0.1;
+}
+
 export function classifyRoleType(title = '') {
   const t = String(title).toLowerCase();
   if (INTERN_PATTERN.test(t)) return 'intern';
@@ -360,6 +372,7 @@ export async function scrapeAllSourcesAndPersist() {
       if (result.error) summary.errors[result.name] = result.error;
       for (const role of result.rows) {
         if (!role.apply_url || !role.title || !role.company_name) continue;
+        if (!isEnglishTitle(role.title)) continue;    // drop non-English (CJK etc.) listings
         if (!isUSish(role.location)) continue;
         if (seen.has(role.apply_url)) continue;       // intra-run dedupe
         seen.add(role.apply_url);

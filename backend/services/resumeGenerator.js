@@ -276,11 +276,18 @@ export async function generateResumePDF(tailoredData, companyName, jobTitle, can
   // request fails fast instead of timing out the whole HTTP roundtrip.
   let browser;
   try {
-    browser = await puppeteer.launch({
+    // On ARM64 hosts (Oracle VM) the auto-downloaded Puppeteer Chrome is
+    // x86_64 and cannot execute. Set PUPPETEER_EXECUTABLE_PATH in .env to
+    // point at the system Chromium (e.g. /usr/bin/chromium-browser) instead.
+    const launchOpts = {
       headless: true,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
       timeout: 30000,
-    });
+    };
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    browser = await puppeteer.launch(launchOpts);
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'load', timeout: 20000 });
     await page.pdf({

@@ -444,6 +444,7 @@ export function AutoApplySetup() {
   const [running, setRunning]     = useState(false)
   const [runResult, setRunResult] = useState(null)
   const [queue, setQueue]         = useState({ items: [], counts: {} })
+  const [queueFilter, setQueueFilter] = useState('all')
   const [nightly, setNightly]     = useState(null)
   const [nightlySaving, setNightlySaving] = useState(false)
   const [nightlyRunning, setNightlyRunning] = useState(false)
@@ -741,7 +742,11 @@ export function AutoApplySetup() {
             <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:0 }}>Queue & Status</h2>
             <p style={{ fontSize:12, color:'#64748b', margin:'2px 0 0' }}>Every role flagged for auto-apply, by status</p>
           </div>
-          <div style={{ display:'flex', gap:6, flexWrap:'wrap' }}>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+            <button onClick={() => setQueueFilter('all')}
+              style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background: queueFilter === 'all' ? '#0f172a' : '#f1f5f9', color: queueFilter === 'all' ? '#fff' : '#475569', border:'1px solid #e2e8f0', cursor:'pointer' }}>
+              All {queue.items.length}
+            </button>
             {[
               ['needs_review',         queue.counts?.needs_review || 0, '#dc2626', '#fee2e2', 'Needs review'],
               ['queued',               queue.counts?.queued       || 0, '#7c3aed', '#f5f3ff', 'Queued'],
@@ -749,9 +754,13 @@ export function AutoApplySetup() {
               ['failed',               queue.counts?.failed       || 0, '#d97706', '#fffbeb', 'Failed'],
               ['platform_unsupported', queue.counts?.unsupported  || 0, '#64748b', '#f1f5f9', 'Unsupported'],
             ].map(([k, n, color, bg, label]) => n > 0 && (
-              <span key={k} style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background: bg, color, border: `1px solid ${color}30` }}>
+              <button key={k} onClick={() => setQueueFilter(f => f === k ? 'all' : k)}
+                style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, cursor:'pointer',
+                  background: queueFilter === k ? color : bg,
+                  color: queueFilter === k ? '#fff' : color,
+                  border: `1px solid ${color}50` }}>
                 {label}: {n}
-              </span>
+              </button>
             ))}
           </div>
         </div>
@@ -761,7 +770,7 @@ export function AutoApplySetup() {
           </div>
         ) : (
           <div style={{ maxHeight:340, overflowY:'auto', border:'1px solid #f1f5f9', borderRadius:10 }}>
-            {queue.items.map(item => {
+            {queue.items.filter(item => queueFilter === 'all' || item.apply_status === queueFilter).map(item => {
               const statusMeta = {
                 needs_review:         { color:'#dc2626', bg:'#fee2e2', label:'Needs review' },
                 queued:               { color:'#7c3aed', bg:'#f5f3ff', label:'Queued' },
@@ -1272,7 +1281,19 @@ export default function CareerOps() {
 
   async function loadHistory() {
     setHistLoading(true)
-    try { setHistory(await api.career.evaluations()) } finally { setHistLoading(false) }
+    try {
+      const all = await api.career.evaluations()
+      // Dedupe: for the same job_url keep only the most-recent evaluation.
+      // (Multiple track actions on the same scraped role create duplicate rows.)
+      const seen = new Map()
+      for (const ev of (all || [])) {
+        const key = ev.job_url || ev.id
+        if (!seen.has(key) || new Date(ev.created_at) > new Date(seen.get(key).created_at)) {
+          seen.set(key, ev)
+        }
+      }
+      setHistory([...seen.values()].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)))
+    } finally { setHistLoading(false) }
   }
 
   // Resolve the resume text for an evaluation based on the picker mode.
