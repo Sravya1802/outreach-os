@@ -48,7 +48,10 @@ export default function DashboardPage({ onStatsChange }) {
   const navigate = useNavigate()
   const [stats, setStats]       = useState(null)
   const [activity, setActivity] = useState([])
-  const [catCounts, setCatCounts] = useState({})
+  // null sentinel = "still loading" so cards can render '—' instead of a
+  // misleading '0' before the request resolves. Same fix the Companies page
+  // got earlier — empty {} let the renderer fall through to (catCounts[k] || 0).
+  const [catCounts, setCatCounts] = useState(null)
   const [queue, setQueue]       = useState(null)
   const [now, setNow]           = useState(() => Date.now())
 
@@ -253,7 +256,11 @@ export default function DashboardPage({ onStatsChange }) {
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:10 }}>
               {CATEGORIES.map(cat => {
                 // YC card shows actual imported YC startups in YOUR DB (not the global YC API list).
-                const count = cat.label === 'YC Startups' ? (stats?.ycImported ?? 0) : (catCounts[cat.label] || 0)
+                // Return null while the relevant state is still loading so the cell renders
+                // '—' instead of a flickering '0'.
+                const count = cat.label === 'YC Startups'
+                  ? (stats == null ? null : (stats.ycImported ?? 0))
+                  : (catCounts == null ? null : (catCounts[cat.label] ?? 0))
                 return (
                   <div key={cat.label}
                     onClick={() => navigate(`/category/${cat.slug}`)}
