@@ -52,7 +52,7 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
   const [refreshing, setRefreshing]   = useState(false)
   const [toast, setToast]             = useState(null)
 
-  const pageSize = 50
+  const pageSize = 25
   const heading  = roleType === 'new_grad' ? '💼 New Grad Roles' : '🎓 Intern Roles'
   const subtitle = roleType === 'new_grad'
     ? 'Entry-level roles scraped daily from LinkedIn, Wellfound, Greenhouse / Lever / Ashby, ai-jobs.net, Jobspresso, Remote Rocketship, and InternshipDaily.'
@@ -183,6 +183,22 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
       )}
 
       {!loading && !error && rows.length > 0 && (
+        <>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, fontSize: 12, color: '#64748b' }}>
+          <span>
+            Showing <b style={{ color: '#0f172a' }}>{page * pageSize + 1}</b>–
+            <b style={{ color: '#0f172a' }}>{Math.min(total, (page + 1) * pageSize)}</b> of{' '}
+            <b style={{ color: '#0f172a' }}>{total.toLocaleString()}</b>
+            {source ? ` · ${SOURCE_LABELS[source] || source}` : ''}
+          </span>
+          {total > pageSize && (
+            <span style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <button onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0} style={navBtn(page === 0)}>‹ Prev</button>
+              <span>Page {page + 1} / {totalPages}</span>
+              <button onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1} style={navBtn(page >= totalPages - 1)}>Next ›</button>
+            </span>
+          )}
+        </div>
         <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.2fr 1fr 110px 200px', padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0', fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             <div>Role</div>
@@ -228,6 +244,7 @@ export default function RolesPage({ defaultRoleType = 'intern' }) {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {!loading && !error && total > pageSize && (
