@@ -240,8 +240,18 @@ app.get('/api/dashboard/job-metrics', async (req, res) => {
         ORDER BY contact_count DESC LIMIT 10
       `, [uid]),
       all(`
-        SELECT 'evaluation' AS kind, id, company_name, job_title, grade, created_at
-        FROM evaluations WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10
+        -- DISTINCT ON (job_url) keeps only the most recent evaluation per
+        -- unique posting; otherwise repeated Track actions surface the same
+        -- role (e.g. "Intern as Software Developer" × 3) on the dashboard.
+        -- Rows without a job_url fall back to evaluation id so untracked
+        -- evaluations still show.
+        SELECT * FROM (
+          SELECT DISTINCT ON (COALESCE(NULLIF(job_url, ''), id::text))
+            'evaluation' AS kind, id, company_name, job_title, grade, created_at,
+            COALESCE(NULLIF(job_url, ''), id::text) AS dedup_key
+          FROM evaluations WHERE user_id = $1
+          ORDER BY COALESCE(NULLIF(job_url, ''), id::text), created_at DESC
+        ) deduped ORDER BY created_at DESC LIMIT 10
       `, [uid]),
       all(`
         SELECT 'applied' AS kind, id, company_name, job_title, apply_status, applied_at

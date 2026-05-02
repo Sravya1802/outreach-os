@@ -1,14 +1,31 @@
+// Default template style anchors. The AI uses these as TONE references —
+// it personalizes per recipient/company at generation time. The placeholders
+// ({{first_name}}, {{company}}, {{specific_hook}}, {{credential}}) are NOT
+// substituted literally; they show the model the slot structure to follow.
 export const DEFAULT_OUTREACH_TEMPLATES = {
-  email: `Hi {{first_name}},
+  email: `Subject: {{specific_hook_subject}}
 
-I came across your work at {{company}} and wanted to reach out directly. I'm a Master's CS student focused on software engineering, AI/ML, and production systems, and I'm looking for Summer 2026 internship opportunities.
+Hi {{first_name}},
 
-If your team is hiring interns, would you be open to pointing me toward the right person or sharing what makes a strong candidate for {{company}}?
+{{specific_hook_about_their_team_or_product}}. {{credential_that_matches_their_work}}.
+
+{{clear_ask_referral_or_intro}}?
 
 Best,
 Sravya Rachakonda
-sravyarachakonda.com`,
-  linkedin: `Hi {{first_name}}, I came across your work at {{company}}. I'm a Master's CS student focused on SWE/AI systems and looking for Summer 2026 internships. Would you be open to sharing what your team looks for in interns?`,
+sravyarachakonda.com
+
+---
+Tone reference (do NOT copy these placeholders literally — fill them with company-specific content):
+- specific_hook_subject: "Mercedes-Benz pipelines → your data infra at {{company}}?"
+- specific_hook: "Saw your team at Tempus is shipping clinical doc automation"
+- credential: "I've spent the last year building RAG over UIC Cancer Center clinical notes"
+- clear_ask: "Open to a 5-min chat next week, or a pointer to the right person on the data team"`,
+  linkedin: `Hi {{first_name}}, {{specific_hook_about_their_team}}. {{ONE_credential_that_matches}}. {{clear_ask}}?
+
+---
+Tone reference (do NOT copy placeholders — under 280 chars, ONE hook + ONE credential + ONE ask):
+- "Saw your team at Tempus is shipping clinical doc automation. I'm running RAG over Cancer Center notes at UIC. Open to a quick chat about your data team's hiring?"`,
 }
 
 function cleanTemplate(value, fallback) {

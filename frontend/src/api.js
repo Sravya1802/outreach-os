@@ -335,6 +335,7 @@ export const api = {
       )
     )),
     bulkQueue:        (body) => apiCall('/career/bulk-queue', { method: 'POST', body }),
+    queueByIds:       (ids)  => apiCall('/career/queue-by-ids', { method: 'POST', body: { ids } }),
 
     // ── Company documents ────────────────────────────────────────────────────
     documents:        (companyId) => apiCall(`/career/${companyId}/documents`),

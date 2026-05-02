@@ -13,73 +13,105 @@ Looking for Summer 2026 internships at top tech, quant, and AI companies.`,
 
 // ─── Seniority-aware prompt builders ─────────────────────────────────────────
 
-function buildEmailPrompt({ recipientName, recipientTitle, companyName, companyCategory, extraContext }) {
+function buildEmailPrompt({ recipientName, recipientTitle, companyName, companyCategory, extraContext, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter }) {
   const hasTitle = recipientTitle && recipientTitle !== 'No title' && recipientTitle.trim();
   const roleContext = hasTitle
     ? `${recipientName} is a ${recipientTitle} at ${companyName} (${companyCategory || 'tech company'}).`
     : `${recipientName} works at ${companyName} (${companyCategory || 'tech company'}) — exact role unknown.`;
 
-  const system = `You are writing cold outreach for Sravya Rachakonda, a Master's CS student.
-You write sharp, specific, non-generic cold emails that get replies.
+  const audienceMode = isRecruiter
+    ? 'recruiter (lead with relevant credentials + clear ask, NOT with a technical hook they won\'t parse)'
+    : 'engineer/IC (lead with a specific technical hook tied to their team\'s work)';
 
-About Sravya:
-- ${CANDIDATE.degree}
-- Background in software engineering and CS research
-- Targeting internships for Summer 2026
+  const scenarioBrief = hasApplied
+    ? `Sravya has ALREADY APPLIED for ${position || 'a role'} at ${companyName}. The email goal is a referral or visibility boost, NOT a fresh introduction. Acknowledge the application and ask for advice or referral.`
+    : rolesAvailable
+      ? `Sravya is interested in a specific role: ${rolesAvailable}. The email goal is to surface intent + ask for a referral or advice.`
+      : `No specific role identified yet. Goal: get on their radar for Summer 2026 + ask for a quick intro or pointer.`;
+
+  const system = `You are writing cold outreach for Sravya Rachakonda, a Master's CS student. Your output gets sent verbatim — every email is per-recipient, never templated.
+
+About Sravya (use the most relevant 1-2 details for THIS company, not all):
+- ${CANDIDATE.degree} at UIC (University of Illinois Chicago)
+- 2 years at Mercedes-Benz R&D: distributed data pipelines, vehicle telemetry, Kafka/Spark, 500GB+/day
+- Current: LLM/RAG research at UIC Cancer Center — clinical data extraction
+- Skills: Python, Java, TypeScript, React, Node.js, AWS, Kafka, Spark
 - Website: ${CANDIDATE.website}
+- Seeking: ${CANDIDATE.seeking}
 
-Rules — FOLLOW EXACTLY:
-1. NEVER open with "I'm a CS student interested in opportunities" — instant delete
-2. NEVER say "I'd love to chat for 15 minutes" — overused and weak
-3. NEVER write subject line "Internship inquiry — Sravya Rachakonda"
-4. Subject must be specific and curiosity-inducing. Use formats like:
-   - "Master's student → your [team/area]?"
-   - "[Specific skill] background — open to a quick chat at [Company]?"
-   - "Built [X] — interested in [specific team] at [Company]"
-5. Open with a SPECIFIC hook about the company, their product, or the recipient's work/team
-6. Be direct about the ask: a referral, intro to their team, or advice on breaking in
-7. 4–6 sentences max including sign-off. No fluff.
-8. Sound like a real, confident person — not a template
+The audience is a ${audienceMode}.
+
+Hard rules — FOLLOW EXACTLY:
+1. NEVER use these openers: "I'm a CS student interested in opportunities", "I hope this email finds you well", "I came across your profile and wanted to connect", "I'd love to chat for 15 minutes". Auto-deleted.
+2. NEVER use generic subject lines. Forbidden: "Internship inquiry", "Quick question", "Reaching out". Use formats:
+   - "Mercedes-Benz pipelines → your data infra at ${companyName}?"
+   - "Built RAG over clinical data — interested in your [team]"
+   - "Master's CS + Kafka/Spark — open to a 5-min chat at ${companyName}?"
+3. Open with ONE specific hook. Pick the angle that maps best to ${companyName}:
+   - Data/infra company → Mercedes-Benz pipeline work
+   - AI/ML/healthtech → Cancer Center RAG research
+   - Quant/finance → systems + reliability angle
+   - Startup → product velocity + full-stack range
+4. Body structure (4-5 sentences total):
+   (a) Specific hook tied to their team/product/recipient's work
+   (b) ONE relevant credential — quote a specific achievement, not generic skills
+   (c) Clear ask — referral / intro / 5-min chat. Pick one.
+   (d) Sign-off as Sravya
+5. Length: 4-6 sentences MAX including sign-off. Cut anything extra.
+6. Voice: confident engineer, not eager candidate. No hedging ("just wanted to", "if it's not too much trouble").
+7. Use the recipient's first name only. Don't pad with their title.
 
 Return ONLY valid JSON: { "subject": "...", "body": "..." }`;
 
   const user = `Recipient: ${roleContext}
-${extraContext ? `Extra context: ${extraContext}` : ''}
+Scenario: ${scenarioBrief}
+${specificAchievement ? `Surface this achievement specifically if it fits: ${specificAchievement}` : ''}
+${extraContext ? `Extra context to weave in: ${extraContext}` : ''}
 
-Write the cold email from Sravya Rachakonda. Make it specific to their role and company.
-If their role/company is quant/finance: reference quantitative work or trading systems.
-If ML/AI company: reference ML infra, model training, or applied AI research.
-If startup/growth: reference product velocity, technical challenges, or their stack.
-Never write something that would work for a different company with a find-and-replace.`;
+Pick ONE specific hook angle for ${companyName} (data/infra vs AI vs startup vs quant) and write the email. The result should NOT survive a find-and-replace to a different company.`;
 
   return { system, user };
 }
 
-function buildLinkedInPrompt({ recipientName, recipientTitle, companyName, companyCategory, extraContext }) {
+function buildLinkedInPrompt({ recipientName, recipientTitle, companyName, companyCategory, extraContext, hasApplied, rolesAvailable, isRecruiter }) {
   const hasTitle = recipientTitle && recipientTitle !== 'No title' && recipientTitle.trim();
   const roleContext = hasTitle
     ? `${recipientName} is a ${recipientTitle} at ${companyName} (${companyCategory || 'tech company'})`
     : `${recipientName} works at ${companyName} (${companyCategory || 'tech company'})`;
 
-  const system = `You write LinkedIn connection notes for Sravya Rachakonda, a Master's CS student targeting Summer 2026 internships.
+  const audienceMode = isRecruiter ? 'recruiter — lead with credential + clear ask' : 'engineer/IC — lead with technical hook';
+  const scenarioBrief = hasApplied
+    ? `Already applied for ${rolesAvailable || 'a role'}. Goal: referral / visibility, not introduction.`
+    : `No specific role yet. Goal: get on radar + ask for advice or pointer.`;
 
-Rules — FOLLOW EXACTLY:
-1. Under 280 characters (hard limit)
-2. NEVER say "I'm a CS student interested in opportunities"
-3. NEVER say "I'd love to connect" or "I'd love to chat for 15 minutes"
-4. One punchy hook referencing something specific about their team or company
-5. One clear ask (referral, intro, advice)
-6. No emojis. Sound like a confident engineer, not a fan.
+  const system = `You write LinkedIn connection notes for Sravya Rachakonda, a Master's CS student targeting Summer 2026 internships. Your output is sent verbatim — every note is per-recipient, never templated.
 
-Use formats like:
-- "Working on [relevant area] — saw your team at [Company] is doing [specific thing]. Any chance you'd share how you approach [specific problem]?"
-- "Your work on [specific team/area] at [Company] stood out. I'm a CS Master's student focused on [relevant]. Open to connecting?"
+About Sravya (pick ONE relevant detail per note):
+- 2 years Mercedes-Benz R&D: Kafka/Spark pipelines (500GB+/day)
+- Current: LLM/RAG over clinical data at UIC Cancer Center
+- Skills: Python, Java, TS, AWS, Kafka, Spark
+
+Audience: ${audienceMode}.
+
+Hard rules — FOLLOW EXACTLY:
+1. Under 280 characters HARD LIMIT (LinkedIn cuts off).
+2. Banned openers: "I'm a CS student interested in opportunities", "Hope you're doing well", "I'd love to connect", "I'd love to chat for 15 minutes". Auto-rejected.
+3. ONE punchy hook tying YOUR background to THEIR team/product. Pick the angle:
+   - Data/infra company → Mercedes-Benz pipeline angle
+   - AI/healthtech → Cancer Center RAG angle
+   - Quant/finance → systems reliability angle
+4. ONE clear ask — referral / intro / advice. Pick one.
+5. No emojis. Confident engineer voice, not fan voice.
+6. Use first name only.
+
+Format example: "[Specific hook tied to their team]. [One credential]. [Clear ask]?"
 
 Return ONLY valid JSON: { "message": "..." }`;
 
-  const user = `Write a LinkedIn DM from Sravya to: ${roleContext}.
-${extraContext ? `Context: ${extraContext}` : ''}
-Make it specific to their role. Under 280 chars. No generic openers.`;
+  const user = `Recipient: ${roleContext}.
+Scenario: ${scenarioBrief}
+${extraContext ? `Context to weave in: ${extraContext}` : ''}
+Pick ONE hook angle for ${companyName}. Under 280 chars. No generic openers. Output should NOT survive find-and-replace to another company.`;
 
   return { system, user };
 }
@@ -384,31 +416,16 @@ export async function generateWaaSMessage({ companyName, companyDescription, ind
 }
 
 export async function generateOutreach({ type, recipientName, recipientTitle, companyName, companyCategory, companyStage, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter, extraContext, customTemplates }) {
-  // Try high-response-rate templates FIRST for email unless the user has saved
-  // a custom style anchor. Saved templates should shape the AI output instead
-  // of being bypassed by the static scenario templates.
-  if (type !== 'linkedin' && !customTemplates?.email) {
-    const templateResult = generateOutreachTemplate({
-      recipientName,
-      recipientTitle,
-      companyName,
-      hasApplied,
-      rolesAvailable,
-      specificAchievement,
-      position,
-      isRecruiter,
-      extraContext,
-      type,
-    });
-    if (templateResult) {
-      console.log('[ai] Using high-response template for', companyName);
-      return templateResult;
-    }
-  }
+  // ALWAYS use AI generation as the primary path. Per-recipient personalization
+  // (company-specific hook, role-aware angle, recruiter vs IC framing) only
+  // works when a model sees the full context. The static high-response
+  // templates remain as an in-memory fallback if every AI provider fails.
 
-  // Fall back to AI generation
   const category = companyCategory || companyStage || '';
-  const params = { recipientName, recipientTitle, companyName, companyCategory: category, extraContext };
+  const params = {
+    recipientName, recipientTitle, companyName, companyCategory: category,
+    extraContext, hasApplied, rolesAvailable, specificAchievement, position, isRecruiter,
+  };
   const built = type === 'linkedin'
     ? buildLinkedInPrompt(params)
     : buildEmailPrompt(params);
@@ -429,9 +446,18 @@ export async function generateOutreach({ type, recipientName, recipientTitle, co
     }
   }
 
+  // AI failed — fall back to high-response static template
+  if (type !== 'linkedin') {
+    const templateResult = generateOutreachTemplate({
+      recipientName, recipientTitle, companyName, hasApplied, rolesAvailable,
+      specificAchievement, position, isRecruiter, extraContext, type,
+    });
+    if (templateResult) return templateResult;
+  }
+
   // Last-resort fallback (should never be reached with valid API keys)
   return {
-    subject: `${CANDIDATE.degree.split("'")[0]}'s student → ${companyName}?`,
+    subject: `Master's CS → ${companyName}?`,
     body: `Hi ${recipientName},\n\nI came across ${companyName}'s work and wanted to reach out directly. I'm a Master's CS student with a background in software engineering and research, targeting Summer 2026.\n\nWould you be open to a quick intro, or point me to the right person on your team?\n\n— Sravya\n${CANDIDATE.website}`,
     message: `Came across your work at ${companyName} — I'm a CS Master's student focused on [relevant area]. Any chance you'd share how your team approaches [specific challenge]?`,
   };

@@ -549,6 +549,30 @@ async function getAutoApplyProfile(userId) {
   return (await one('SELECT * FROM user_profile WHERE user_id = $1', [userId])) || {};
 }
 
+// ── Queue specific evaluation IDs for auto-apply ─────────────────────────────
+// Used by the multi-select UI (Batch tab + History tab checkboxes). Unlike
+// /bulk-queue (filter-based), this takes an explicit list of evaluation IDs
+// the user has already picked.
+router.post('/queue-by-ids', async (req, res) => {
+  try {
+    const profile = await getAutoApplyProfile(req.user.id);
+    if (!profile?.auto_apply_consent) {
+      return res.status(400).json({ error: 'Auto Apply requires explicit consent in your profile before roles can be queued.' });
+    }
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ error: 'No evaluation ids provided' });
+    const r = await run(
+      `UPDATE evaluations SET apply_mode = 'auto', apply_status = 'queued'
+         WHERE user_id = $1 AND id = ANY($2::int[])`,
+      [req.user.id, ids]
+    );
+    res.json({ queued: r.rowCount });
+  } catch (err) {
+    console.error('[queue-by-ids]', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── Preview which resume a URL will use when auto-apply runs ─────────────────
 // Looks up an existing evaluation by job_url (if any) and reports whether a
 // tailored PDF already exists. Used by the Job Automation tab to show the user
@@ -1355,17 +1379,70 @@ router.get('/stats', async (req, res) => {
 });
 
 // ── GET /api/career/ranked — all applications ranked by fit_score ───────────────
+//
+// Two sources, UNION'd:
+//   1. company_applications — per-company tracked applications (legacy flow)
+//   2. evaluations — every CareerOps evaluation with a real grade
+//
+// Without (2), evaluations a user does in CareerOps never appear in the Apply →
+// Ranked Roles view because they don't auto-create company_applications rows.
+// score/20 normalizes 0-100 → 0-5 to match fit_score units.
 router.get('/ranked', async (req, res) => {
   try {
-    const rows = await all(`
-      SELECT ca.*, j.name as company_name, j.category, j.location, j.website
+    const tracked = await all(`
+      SELECT
+        ca.id, ca.company_id, ca.fit_score, ca.status, ca.notes, ca.updated_at,
+        j.name as company_name, j.category, j.location, j.website,
+        NULL::int   as evaluation_id,
+        NULL::text  as job_url,
+        NULL::text  as job_title,
+        NULL::text  as grade,
+        'tracked'   as source
       FROM company_applications ca
       JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1
       WHERE ca.user_id = $1
-      ORDER BY ca.fit_score DESC NULLS LAST, ca.updated_at DESC
     `, [req.user.id]);
-    res.json({ applications: rows });
+
+    const evaluated = await all(`
+      SELECT
+        NULL::int   as id,
+        NULL::int   as company_id,
+        (e.score::float / 20.0) as fit_score,
+        COALESCE(NULLIF(e.apply_status, ''), 'interested') as status,
+        NULL::text  as notes,
+        e.created_at as updated_at,
+        e.company_name,
+        NULL::text  as category,
+        NULL::text  as location,
+        NULL::text  as website,
+        e.id        as evaluation_id,
+        e.job_url,
+        e.job_title,
+        e.grade,
+        'evaluation' as source
+      FROM evaluations e
+      WHERE e.user_id = $1 AND e.grade IS NOT NULL AND e.grade != ''
+    `, [req.user.id]);
+
+    // Dedup: if a company name appears in `tracked` AND `evaluated`, keep the
+    // tracked row (it's the user's curated state). Match case-insensitively.
+    const trackedCompanies = new Set(tracked.map(r => (r.company_name || '').toLowerCase().trim()).filter(Boolean));
+    const dedupedEvaluated = evaluated.filter(r => {
+      const k = (r.company_name || '').toLowerCase().trim();
+      return k && !trackedCompanies.has(k);
+    });
+
+    const merged = [...tracked, ...dedupedEvaluated]
+      .sort((a, b) => {
+        const sa = a.fit_score == null ? -1 : Number(a.fit_score);
+        const sb = b.fit_score == null ? -1 : Number(b.fit_score);
+        if (sa !== sb) return sb - sa;
+        return new Date(b.updated_at) - new Date(a.updated_at);
+      });
+
+    res.json({ applications: merged });
   } catch (err) {
+    console.error('[ranked]', err);
     res.status(500).json({ error: err.message });
   }
 });

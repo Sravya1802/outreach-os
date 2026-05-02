@@ -487,6 +487,35 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 - **Status:** pushed to `origin/main` through `bc996ce`; local worktree still has unrelated untracked files `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, and `supabase/migrations/003_per_user_isolation.sql`.
 - **Follow-up:** Wait for Vercel deployment, then verify `/outreach` and `/apply/auto-apply` in browser.
 
+### 2026-05-01 — Big bug-bash: prompt overhaul + multi-select + ranked-roles + outreach AI
+**CareerOps prompt overhaul** to fix "Claude.ai gives better output":
+- `jobEvaluator.js`: switched from Haiku 4.5 → Sonnet 4.6 with system-message prompt caching (~90% cost cut on the static rubric across calls). Temperature 0.3, max_tokens 8192, 90s budget.
+- New top-level fields in evaluation JSON: `verdict { headline, oneLineWhy, buriedMatch, interviewOdds.{asIs,properlyTailored,reasoning} }` and `topGaps[3]` — modeled on the user's Claude.ai sample (decisive verdict, buried-match callout, calibrated probability ranges).
+- System prompt rewritten with explicit DO/DO-NOT lists, banned hedging phrases, "every reasoning field must quote evidence" rule.
+- Input limits raised: CV 4500 → 8000 chars, JD 3500 → 6000 chars.
+- Frontend renders the new verdict card + top-3 gaps prominently above Block A; per-row `JustifyToggle` (Why?) on Block B requirements, archetype reasoning, demand trend.
+
+**History tab cleanup:** filtered out tracked-but-unevaluated rows (NULL grade) from `loadHistory`. The "Score: /100" entries the user surfaced via screenshot are gone.
+
+**Multi-select for auto-apply queue:**
+- New `POST /career/queue-by-ids` endpoint takes `{ ids }`, flips evaluations to `apply_mode='auto', apply_status='queued'`.
+- Batch tab: checkbox per result row + Select-all / Clear / "⚡ Queue N for Auto-Apply" buttons.
+- History tab: same checkbox pattern, only enabled on rows with grades; shared queue header.
+
+**Apply → Ranked Roles fixes:**
+- `/career/ranked` now UNIONs `company_applications` with `evaluations` (score normalized 0-100 → 0-5). Evaluations no longer disappear from the ranked view just because they aren't in `company_applications`.
+- Frontend adds Refresh button + auto-reloads on visibility/focus change.
+- Ranked cards now show role title (when from evaluation), grade badge, "From CareerOps" tag, and "See evaluation →" / "Open Posting ↗" deep-links.
+
+**Queue/Unsupported filter pills:** always render in Auto-Apply Setup (previously hidden when count=0). Disabled state when 0 items, but visible.
+
+**Job Dashboard Recent Evaluations dedup:** SQL `DISTINCT ON (job_url)` keeps only the most-recent evaluation per posting.
+
+**Outreach templates → AI personalization always:**
+- `generateOutreach` no longer short-circuits to static high-response templates for cold email — AI is the primary path; statics are emergency fallback only.
+- `buildEmailPrompt` / `buildLinkedInPrompt` now consume `hasApplied`, `rolesAvailable`, `isRecruiter`, `specificAchievement` to pick audience-aware tone, scenario-aware ask, and angle (data/infra vs AI/healthtech vs quant vs startup) based on the company.
+- Default outreach template body rewritten as a **slot-structure** anchor (specific_hook + credential + clear_ask) so the AI sees the structure to follow per recipient instead of substituting placeholders literally.
+
 ### 2026-05-01 — Block G "Why?" justify button
 - **What:** Added collapsible per-signal breakdown to the legitimacy assessment card in CareerOps evaluation reports. Assessment badge (`High Confidence` / `Proceed with Caution` / `Suspicious`) now shows a "▼ Why?" button when signals exist; clicking expands the full signal/finding/weight table inline beneath the badge. Table collapses with "▲ Hide signals". `contextNotes` still shows below in both states.
 - **Files:** [frontend/src/components/CareerOps.jsx:122](frontend/src/components/CareerOps.jsx#L122)

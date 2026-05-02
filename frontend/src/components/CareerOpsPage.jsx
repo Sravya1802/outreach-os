@@ -41,17 +41,34 @@ export default function CareerOpsPage() {
   const navigate = useNavigate()
   const [applications, setApplications] = useState([])
   const [loading, setLoading]   = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [filter, setFilter]     = useState('all')
   const [error, setError]       = useState(null)
 
-  useEffect(() => {
-    api.career.ranked()
+  function loadRanked(silent = false) {
+    if (!silent) setRefreshing(true)
+    return api.career.ranked()
       .then(d => {
         const rows = Array.isArray(d) ? d : (Array.isArray(d?.applications) ? d.applications : [])
         setApplications(rows)
-        setLoading(false)
+        setError(null)
       })
-      .catch(e => { console.warn('Career ranked fetch error:', e); setError(e.message || 'Failed to load ranked roles'); setLoading(false) })
+      .catch(e => { console.warn('Career ranked fetch error:', e); setError(e.message || 'Failed to load ranked roles') })
+      .finally(() => { setLoading(false); setRefreshing(false) })
+  }
+
+  // Initial load + auto-refresh when the tab regains focus. The ranked list is
+  // stale otherwise — fit scores and statuses change in other tabs (CareerOps
+  // evaluations, company-detail tracking) but this page only loaded once.
+  useEffect(() => {
+    loadRanked(true)
+    const onFocus = () => { if (document.visibilityState === 'visible') loadRanked(true) }
+    document.addEventListener('visibilitychange', onFocus)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onFocus)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [])
 
   const filtered = applications.filter(a => {
@@ -106,7 +123,14 @@ export default function CareerOpsPage() {
               </button>
             ))}
           </div>
-          <div style={{ fontSize:12, color:'#94a3b8' }}>Ranked by fit score</div>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <button onClick={() => loadRanked()} disabled={refreshing}
+              title="Refresh ranked roles"
+              style={{ padding:'6px 12px', fontSize:12, fontWeight:600, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, cursor: refreshing ? 'default' : 'pointer', display:'flex', alignItems:'center', gap:6 }}>
+              {refreshing ? <Spin size={11} /> : '↻'} Refresh
+            </button>
+            <div style={{ fontSize:12, color:'#94a3b8' }}>Ranked by fit score</div>
+          </div>
         </div>
 
         {loading ? (
@@ -150,9 +174,26 @@ export default function CareerOpsPage() {
                   )}
                   <ScoreCircle score={app.fit_score} />
                   <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4 }}>
-                      <div style={{ fontWeight:800, fontSize:16, color:'#0f172a' }}>{app.company_name}</div>
+                    <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:4, flexWrap:'wrap' }}>
+                      {/* Role title shown FIRST when this came from an evaluation —
+                          users want the role identity, not just the company. */}
+                      {app.job_title && (
+                        <div style={{ fontWeight:800, fontSize:16, color:'#0f172a' }}>{app.job_title}</div>
+                      )}
+                      <div style={{ fontWeight: app.job_title ? 600 : 800, fontSize: app.job_title ? 13 : 16, color: app.job_title ? '#64748b' : '#0f172a' }}>
+                        {app.job_title ? `· ${app.company_name}` : app.company_name}
+                      </div>
+                      {app.grade && (
+                        <span style={{ fontSize:11, fontWeight:800, padding:'2px 8px', borderRadius:6, background:`${ { A:'#16a34a', B:'#0d9488', C:'#d97706', D:'#ea580c', F:'#dc2626' }[app.grade] || '#94a3b8' }20`, color:{ A:'#16a34a', B:'#0d9488', C:'#d97706', D:'#ea580c', F:'#dc2626' }[app.grade] || '#94a3b8' }}>
+                          Grade {app.grade}
+                        </span>
+                      )}
                       <span style={{ fontSize:10, padding:'3px 8px', borderRadius:6, background:stMeta.bg, color:stMeta.color, fontWeight:700 }}>{stMeta.label}</span>
+                      {app.source === 'evaluation' && (
+                        <span style={{ fontSize:9, padding:'2px 7px', borderRadius:5, background:'#eef2ff', color:'#4f46e5', fontWeight:700, letterSpacing:'0.05em', textTransform:'uppercase' }}>
+                          From CareerOps
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize:12, color:'#64748b', marginBottom:8 }}>
                       {[
@@ -171,10 +212,23 @@ export default function CareerOpsPage() {
                       <div style={{ fontSize:11, color:'#64748b', fontStyle:'italic', marginBottom:8 }}>{app.notes.slice(0, 120)}{app.notes.length > 120 ? '…' : ''}</div>
                     )}
                     <div style={{ display:'flex', gap:8, marginTop:8 }}>
-                      <button onClick={() => navigate(`/company/${app.company_id}`)}
-                        style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
-                        View →
-                      </button>
+                      {app.company_id ? (
+                        <button onClick={() => navigate(`/company/${app.company_id}`)}
+                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                          View →
+                        </button>
+                      ) : app.job_url ? (
+                        <a href={app.job_url} target="_blank" rel="noreferrer"
+                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', textDecoration:'none' }}>
+                          Open Posting ↗
+                        </a>
+                      ) : null}
+                      {app.source === 'evaluation' && app.evaluation_id && (
+                        <button onClick={() => navigate(`/career?evalId=${app.evaluation_id}`)}
+                          style={{ padding:'6px 16px', background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                          See evaluation →
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

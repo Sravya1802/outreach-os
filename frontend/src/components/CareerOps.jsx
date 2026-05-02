@@ -57,6 +57,29 @@ function Block({ title, icon, defaultOpen=false, children }) {
   )
 }
 
+// Inline "Why?" expander — drops a chevron button next to a verdict and
+// reveals reasoning prose underneath when clicked. Used on per-row verdicts
+// (CV match status, demand trend, etc.) so users can drill into "why this
+// got flagged" without leaving the block.
+function JustifyToggle({ reasoning, color = '#6366f1', label = 'Why?' }) {
+  const [open, setOpen] = useState(false)
+  if (!reasoning) return null
+  return (
+    <>
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen(v => !v) }}
+        style={{ marginLeft:6, padding:'1px 7px', fontSize:9, fontWeight:700, background:'transparent', color, border:`1px solid ${color}50`, borderRadius:5, cursor:'pointer', letterSpacing:'0.04em' }}>
+        {open ? '▲ Hide' : `▼ ${label}`}
+      </button>
+      {open && (
+        <div style={{ marginTop:6, padding:'8px 10px', background:'#f8fafc', borderLeft:`2px solid ${color}40`, borderRadius:'0 6px 6px 0', fontSize:11, color:'#475569', lineHeight:1.6, fontStyle:'italic' }}>
+          {reasoning}
+        </div>
+      )}
+    </>
+  )
+}
+
 // ── Resume upload ─────────────────────────────────────────────────────────────
 function ResumeUpload({ resumeInfo, onUploaded }) {
   const [dragging, setDragging] = useState(false)
@@ -208,6 +231,63 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, 
         </div>
       </div>
 
+      {/* Verdict — Claude.ai-style one-liner + buried match + interview odds */}
+      {e.verdict && (
+        <div style={{ background:'linear-gradient(135deg,#fafafa,#f8fafc)', border:'2px solid #1e293b', borderRadius:14, padding:'18px 22px', marginBottom:18 }}>
+          <div style={{ fontSize:10, fontWeight:800, color:'#475569', textTransform:'uppercase', letterSpacing:'0.12em', marginBottom:8 }}>Verdict</div>
+          <div style={{ fontSize:18, fontWeight:800, color:'#0f172a', marginBottom:8, lineHeight:1.35 }}>{e.verdict.headline}</div>
+          {e.verdict.oneLineWhy && (
+            <div style={{ fontSize:13, color:'#374151', lineHeight:1.6, marginBottom:e.verdict.buriedMatch ? 12 : 0 }}>{e.verdict.oneLineWhy}</div>
+          )}
+          {e.verdict.buriedMatch && (
+            <div style={{ marginTop:10, padding:'12px 14px', background:'#fef3c7', borderRadius:9, border:'1px solid #fcd34d' }}>
+              <div style={{ fontSize:10, fontWeight:800, color:'#92400e', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:4 }}>⚠ Buried match</div>
+              <div style={{ fontSize:12, color:'#374151', lineHeight:1.6 }}>{e.verdict.buriedMatch}</div>
+            </div>
+          )}
+          {e.verdict.interviewOdds && (
+            <div style={{ marginTop:14, display:'grid', gridTemplateColumns:'1fr 1fr', gap:10 }}>
+              <div style={{ padding:'12px 14px', background:'#fee2e2', borderRadius:9, border:'1px solid #fca5a5' }}>
+                <div style={{ fontSize:10, fontWeight:800, color:'#991b1b', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:3 }}>As-is</div>
+                <div style={{ fontSize:18, fontWeight:900, color:'#0f172a' }}>{e.verdict.interviewOdds.asIs}</div>
+              </div>
+              <div style={{ padding:'12px 14px', background:'#dcfce7', borderRadius:9, border:'1px solid #86efac' }}>
+                <div style={{ fontSize:10, fontWeight:800, color:'#15803d', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:3 }}>Tailored</div>
+                <div style={{ fontSize:18, fontWeight:900, color:'#0f172a' }}>{e.verdict.interviewOdds.properlyTailored}</div>
+              </div>
+              {e.verdict.interviewOdds.reasoning && (
+                <div style={{ gridColumn:'1 / -1', fontSize:11, color:'#64748b', lineHeight:1.6, fontStyle:'italic' }}>
+                  {e.verdict.interviewOdds.reasoning}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Top 3 Gaps — most actionable insights */}
+      {(e.topGaps || []).length > 0 && (
+        <div style={{ marginBottom:18 }}>
+          <div style={{ fontSize:11, fontWeight:800, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:10 }}>Top 3 gaps to fix</div>
+          {e.topGaps.slice(0, 3).map((g, i) => {
+            const sevColor = g.severity === 'blocker' ? '#dc2626' : g.severity === 'high' ? '#d97706' : '#6366f1'
+            const sevBg    = g.severity === 'blocker' ? '#fee2e2' : g.severity === 'high' ? '#fef3c7' : '#eef2ff'
+            return (
+              <div key={i} style={{ padding:'14px 16px', marginBottom:8, background:'#fff', borderRadius:11, border:'1px solid #e2e8f0', borderLeft:`4px solid ${sevColor}` }}>
+                <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:6 }}>
+                  <span style={{ fontSize:18, fontWeight:900, color:sevColor, width:24 }}>{i + 1}.</span>
+                  <span style={{ fontSize:9, fontWeight:800, padding:'2px 8px', borderRadius:6, background: sevBg, color: sevColor, textTransform:'uppercase', letterSpacing:'0.08em' }}>{g.severity}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:'#0f172a', flex:1 }}>{g.gap}</span>
+                </div>
+                <div style={{ fontSize:12, color:'#374151', lineHeight:1.65, paddingLeft:34 }}>
+                  <strong style={{ color:'#16a34a' }}>Fix:</strong> {g.fix}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       {/* Block A — Role Summary */}
       <Block title="A · Role Summary" icon="📋" defaultOpen={true}>
         <p style={{ fontSize:13, color:'#374151', lineHeight:1.75, marginBottom:14 }}>{e.blockA_roleSummary?.tldr}</p>
@@ -226,22 +306,32 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, 
             </div>
           ))}
         </div>
+        {e.archetype?.reasoning && (
+          <div style={{ marginTop:12 }}>
+            <span style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em' }}>Archetype rationale</span>
+            <JustifyToggle reasoning={e.archetype.reasoning} label="Why this archetype?" />
+          </div>
+        )}
       </Block>
 
       {/* Block B — CV Match */}
       <Block title="B · CV Match" icon="📊" defaultOpen={true}>
         <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:10 }}>Requirements vs Your CV</div>
-        {(e.blockB_cvMatch?.requirements || []).map((r, i) => (
-          <div key={i} style={{ padding:'10px 12px', marginBottom:6, background: r.status === 'match' ? '#f0fdf4' : r.status === 'partial' ? '#fffbeb' : '#fef2f2', borderRadius:8, borderLeft:`3px solid ${r.status === 'match' ? '#16a34a' : r.status === 'partial' ? '#d97706' : '#dc2626'}` }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
-              <span style={{ fontSize:10, fontWeight:700, padding:'1px 7px', borderRadius:10, background: r.status === 'match' ? '#dcfce7' : r.status === 'partial' ? '#fef3c7' : '#fee2e2', color: r.status === 'match' ? '#15803d' : r.status === 'partial' ? '#92400e' : '#991b1b' }}>
-                {r.status}
-              </span>
-              <span style={{ fontSize:12, fontWeight:700, color:'#0f172a' }}>{r.requirement}</span>
+        {(e.blockB_cvMatch?.requirements || []).map((r, i) => {
+          const statusColor = r.status === 'match' ? '#16a34a' : r.status === 'partial' ? '#d97706' : '#dc2626'
+          return (
+            <div key={i} style={{ padding:'10px 12px', marginBottom:6, background: r.status === 'match' ? '#f0fdf4' : r.status === 'partial' ? '#fffbeb' : '#fef2f2', borderRadius:8, borderLeft:`3px solid ${statusColor}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3, flexWrap:'wrap' }}>
+                <span style={{ fontSize:10, fontWeight:700, padding:'1px 7px', borderRadius:10, background: r.status === 'match' ? '#dcfce7' : r.status === 'partial' ? '#fef3c7' : '#fee2e2', color: r.status === 'match' ? '#15803d' : r.status === 'partial' ? '#92400e' : '#991b1b' }}>
+                  {r.status}
+                </span>
+                <span style={{ fontSize:12, fontWeight:700, color:'#0f172a', flex:1 }}>{r.requirement}</span>
+                <JustifyToggle reasoning={r.reasoning} color={statusColor} label="Why?" />
+              </div>
+              <div style={{ fontSize:11, color:'#64748b', lineHeight:1.55 }}>{r.cvEvidence}</div>
             </div>
-            <div style={{ fontSize:11, color:'#64748b', lineHeight:1.55 }}>{r.cvEvidence}</div>
-          </div>
-        ))}
+          )
+        })}
         {(e.blockB_cvMatch?.gaps || []).length > 0 && (
           <>
             <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginTop:14, marginBottom:10 }}>Gap Mitigation</div>
@@ -302,13 +392,14 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, 
             <div style={{ fontSize:11, color:'#475569', marginTop:5, lineHeight:1.5 }}>{e.blockD_compAndDemand.companyCompReputation}</div>
           )}
         </div>
-        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8 }}>
+        <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:8, alignItems:'center' }}>
           <span style={{ fontSize:11, padding:'4px 10px', borderRadius:20, background:'#eef2ff', color:'#4f46e5', fontWeight:600 }}>
             Demand: {e.blockD_compAndDemand?.roleDemandTrend || 'unknown'}
           </span>
           {(e.blockD_compAndDemand?.sources || []).map((s, i) => (
             <span key={i} style={{ fontSize:11, padding:'4px 10px', borderRadius:20, background:'#f1f5f9', color:'#475569', fontWeight:500 }}>{s}</span>
           ))}
+          <JustifyToggle reasoning={e.blockD_compAndDemand?.reasoning} color="#4f46e5" label="Why this trend?" />
         </div>
       </Block>
 
@@ -767,15 +858,23 @@ export function AutoApplySetup() {
               style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, background: queueFilter === 'all' ? '#0f172a' : '#f1f5f9', color: queueFilter === 'all' ? '#fff' : '#475569', border:'1px solid #e2e8f0', cursor:'pointer' }}>
               All {queue.items.length}
             </button>
+            {/* Filter pills are ALWAYS rendered (even with count 0) so the
+                user can always see and click every filter. Previously these
+                only rendered when count > 0, which made the Queue and
+                Unsupported buttons "disappear" depending on data state. */}
             {[
               ['needs_review',         queue.counts?.needs_review || 0, '#dc2626', '#fee2e2', 'Needs review'],
               ['queued',               queue.counts?.queued       || 0, '#7c3aed', '#f5f3ff', 'Queued'],
               ['submitted',            queue.counts?.submitted    || 0, '#16a34a', '#f0fdf4', 'Submitted'],
               ['failed',               queue.counts?.failed       || 0, '#d97706', '#fffbeb', 'Failed'],
               ['platform_unsupported', queue.counts?.unsupported  || 0, '#64748b', '#f1f5f9', 'Unsupported'],
-            ].map(([k, n, color, bg, label]) => n > 0 && (
+            ].map(([k, n, color, bg, label]) => (
               <button key={k} onClick={() => setQueueFilter(f => f === k ? 'all' : k)}
-                style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20, cursor:'pointer',
+                disabled={n === 0 && queueFilter !== k}
+                title={n === 0 ? `No ${label.toLowerCase()} items in queue` : `Show only ${label.toLowerCase()} (${n})`}
+                style={{ fontSize:11, fontWeight:700, padding:'4px 10px', borderRadius:20,
+                  cursor: n === 0 && queueFilter !== k ? 'not-allowed' : 'pointer',
+                  opacity: n === 0 && queueFilter !== k ? 0.45 : 1,
                   background: queueFilter === k ? color : bg,
                   color: queueFilter === k ? '#fff' : color,
                   border: `1px solid ${color}50` }}>
@@ -950,7 +1049,7 @@ export function AutoApplySetup() {
 }
 
 // ── History card ──────────────────────────────────────────────────────────────
-function EvalCard({ ev, onClick, onDelete, onQueue }) {
+function EvalCard({ ev, onClick, onDelete, onQueue, selected, onToggleSelect }) {
   const gc = gradeColor(ev.grade)
   const initialQueued = ev.apply_mode === 'auto' && ['queued','submitted','needs_review','running'].includes(ev.apply_status || '')
   const [queued, setQueued] = useState(initialQueued)
@@ -965,7 +1064,16 @@ function EvalCard({ ev, onClick, onDelete, onQueue }) {
   }
   return (
     <div className="co-card" onClick={onClick}
-      style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:16, transition:'all 0.15s', marginBottom:10 }}>
+      style={{ background: selected ? '#eef2ff' : '#fff', border:`1px solid ${selected ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:12, padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:14, transition:'all 0.15s', marginBottom:10 }}>
+      {onToggleSelect && (
+        <input
+          type="checkbox"
+          checked={!!selected}
+          onClick={e => e.stopPropagation()}
+          onChange={() => onToggleSelect(ev.id)}
+          style={{ width:18, height:18, cursor:'pointer', accentColor:'#7c3aed', flexShrink:0 }}
+        />
+      )}
       <div style={{ width:48, height:48, borderRadius:'50%', background:gradeBg(ev.grade), border:`2px solid ${gc}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
         <span style={{ fontSize:20, fontWeight:900, color:gc }}>{ev.grade}</span>
       </div>
@@ -1181,12 +1289,16 @@ function BatchEval({ hasResume }) {
   const [results, setResults]   = useState([])
   const [progress, setProgress] = useState(null)
   const [error, setError]       = useState(null)
+  // Multi-select state for "Queue Selected for Auto-Apply" — keys by evalId.
+  const [selected, setSelected] = useState(new Set())
+  const [queueing, setQueueing] = useState(false)
+  const [queueMsg, setQueueMsg] = useState(null)
 
   async function handleBatch() {
     const urls = urlsText.split('\n').map(u=>u.trim()).filter(u=>u.startsWith('http'))
     if (!urls.length) return
     if (urls.length > 10) { setError('Max 10 URLs at a time'); return }
-    setRunning(true); setError(null); setResults([]); setProgress(`Evaluating ${urls.length} jobs…`)
+    setRunning(true); setError(null); setResults([]); setSelected(new Set()); setQueueMsg(null); setProgress(`Evaluating ${urls.length} jobs…`)
     try {
       const r = await api.career.batchEvaluate(urls)
       setResults(r.results || []); setProgress(null)
@@ -1194,7 +1306,36 @@ function BatchEval({ hasResume }) {
     finally { setRunning(false) }
   }
 
+  function toggleSelect(id) {
+    setSelected(s => {
+      const next = new Set(s)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function selectAll() {
+    const ids = results.filter(r => r.status === 'done' && r.evalId).map(r => r.evalId)
+    setSelected(new Set(ids))
+  }
+  function clearSelection() { setSelected(new Set()) }
+
+  async function queueSelected() {
+    if (!selected.size) return
+    setQueueing(true); setQueueMsg(null)
+    try {
+      const ids = [...selected]
+      const res = await api.career.queueByIds(ids)
+      setQueueMsg(`✓ Queued ${res.queued} role${res.queued === 1 ? '' : 's'} for auto-apply`)
+      setSelected(new Set())
+    } catch (err) {
+      setQueueMsg(`⚠ ${err.message}`)
+    } finally {
+      setQueueing(false)
+    }
+  }
+
   const urlCount = urlsText.split('\n').filter(u=>u.trim().startsWith('http')).length
+  const doneCount = results.filter(r => r.status === 'done').length
 
   return (
     <div>
@@ -1229,9 +1370,41 @@ function BatchEval({ hasResume }) {
 
       {results.length > 0 && (
         <div>
-          <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:14 }}>Results — ranked by fit score</div>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:14 }}>
+            <div style={{ fontSize:11, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em' }}>Results — ranked by fit score</div>
+            {doneCount > 0 && (
+              <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                <button onClick={selectAll}
+                  style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer' }}>
+                  Select all ({doneCount})
+                </button>
+                {selected.size > 0 && (
+                  <button onClick={clearSelection}
+                    style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#64748b', border:'1px solid #e2e8f0', borderRadius:7, cursor:'pointer' }}>
+                    Clear
+                  </button>
+                )}
+                <button onClick={queueSelected} disabled={!selected.size || queueing}
+                  style={{ padding:'7px 14px', fontSize:12, fontWeight:700, background: selected.size ? 'linear-gradient(135deg,#7c3aed,#a855f7)' : '#f1f5f9', color: selected.size ? '#fff' : '#94a3b8', border:'none', borderRadius:8, cursor: selected.size ? 'pointer' : 'default', display:'flex', alignItems:'center', gap:6 }}>
+                  {queueing ? <><Spin size={11} color="#fff" /> Queuing…</> : `⚡ Queue ${selected.size || ''} for Auto-Apply`}
+                </button>
+              </div>
+            )}
+          </div>
+          {queueMsg && (
+            <div style={{ padding:'10px 14px', background: queueMsg.startsWith('✓') ? '#dcfce7' : '#fee2e2', color: queueMsg.startsWith('✓') ? '#15803d' : '#991b1b', borderRadius:8, fontSize:12, fontWeight:600, marginBottom:12 }}>
+              {queueMsg}
+            </div>
+          )}
           {results.map((r, i) => r.status === 'done' ? (
-            <div key={i} style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:'14px 18px', marginBottom:10, display:'flex', alignItems:'center', gap:16 }}>
+            <div key={i} style={{ background: selected.has(r.evalId) ? '#eef2ff' : '#fff', border:`1px solid ${selected.has(r.evalId) ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:12, padding:'14px 18px', marginBottom:10, display:'flex', alignItems:'center', gap:14, transition:'background 0.12s' }}>
+              <input
+                type="checkbox"
+                checked={selected.has(r.evalId)}
+                onChange={() => toggleSelect(r.evalId)}
+                disabled={!r.evalId}
+                style={{ width:18, height:18, cursor: r.evalId ? 'pointer' : 'default', accentColor:'#7c3aed', flexShrink:0 }}
+              />
               <span style={{ fontSize:12, fontWeight:700, color:'#94a3b8', width:24, flexShrink:0, textAlign:'center' }}>#{i+1}</span>
               <div style={{ width:46, height:46, borderRadius:'50%', background:gradeBg(r.evaluation?.grade), border:`2px solid ${gradeColor(r.evaluation?.grade)}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
                 <span style={{ fontSize:18, fontWeight:900, color:gradeColor(r.evaluation?.grade) }}>{r.evaluation?.grade}</span>
@@ -1277,6 +1450,10 @@ export default function CareerOps() {
   const [evalError, setEvalError]   = useState(null)
   const [history, setHistory]       = useState([])
   const [histLoading, setHistLoading] = useState(false)
+  // History tab multi-select for batch auto-apply queueing.
+  const [historySelected, setHistorySelected] = useState(new Set())
+  const [historyQueueing, setHistoryQueueing] = useState(false)
+  const [historyQueueMsg, setHistoryQueueMsg] = useState(null)
   const [pdfLoading, setPdfLoading] = useState(false)
   const [pdfReady, setPdfReady]     = useState(false)
   const [applyMode, setApplyMode]   = useState('manual') // per-evaluation: 'manual' | 'auto'
@@ -1303,10 +1480,14 @@ export default function CareerOps() {
     setHistLoading(true)
     try {
       const all = await api.career.evaluations()
+      // Filter out tracked-but-unevaluated rows (no grade — created via Track
+      // or Queue actions on scraped roles that never went through full AI
+      // evaluation). They polluted the History tab with "Score: /100" entries.
+      const evaluated = (all || []).filter(ev => ev.grade && ev.grade !== '-')
       // Dedupe: for the same job_url keep only the most-recent evaluation.
       // (Multiple track actions on the same scraped role create duplicate rows.)
       const seen = new Map()
-      for (const ev of (all || [])) {
+      for (const ev of evaluated) {
         const key = ev.job_url || ev.id
         if (!seen.has(key) || new Date(ev.created_at) > new Date(seen.get(key).created_at)) {
           seen.set(key, ev)
@@ -1652,9 +1833,72 @@ export default function CareerOps() {
                     ))}
                   </div>
                 )}
+                {/* Multi-select header */}
+                {(() => {
+                  const visible = history.filter(ev => roleTypeFilter === 'all' || classifyRoleType(ev.jobTitle) === roleTypeFilter)
+                  const eligibleIds = visible.filter(ev => ev.grade).map(ev => ev.id)
+                  const selectedCount = historySelected.size
+                  return (
+                    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, marginBottom:12, padding:'10px 12px', background: selectedCount ? '#eef2ff' : '#f8fafc', borderRadius:9 }}>
+                      <div style={{ fontSize:11, color:'#64748b', fontWeight:600 }}>
+                        {selectedCount > 0 ? `${selectedCount} selected` : 'Select multiple to queue them all at once'}
+                      </div>
+                      <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                        <button onClick={() => setHistorySelected(new Set(eligibleIds))}
+                          style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer' }}>
+                          Select all evaluated ({eligibleIds.length})
+                        </button>
+                        {selectedCount > 0 && (
+                          <button onClick={() => setHistorySelected(new Set())}
+                            style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#64748b', border:'1px solid #e2e8f0', borderRadius:7, cursor:'pointer' }}>
+                            Clear
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (!historySelected.size) return
+                            setHistoryQueueing(true); setHistoryQueueMsg(null)
+                            try {
+                              const res = await api.career.queueByIds([...historySelected])
+                              setHistoryQueueMsg(`✓ Queued ${res.queued} role${res.queued === 1 ? '' : 's'} for auto-apply`)
+                              setHistorySelected(new Set())
+                              loadHistory()
+                            } catch (err) {
+                              setHistoryQueueMsg(`⚠ ${err.message}`)
+                            } finally {
+                              setHistoryQueueing(false)
+                            }
+                          }}
+                          disabled={!selectedCount || historyQueueing}
+                          style={{ padding:'7px 14px', fontSize:12, fontWeight:700, background: selectedCount ? 'linear-gradient(135deg,#7c3aed,#a855f7)' : '#f1f5f9', color: selectedCount ? '#fff' : '#94a3b8', border:'none', borderRadius:8, cursor: selectedCount ? 'pointer' : 'default', display:'flex', alignItems:'center', gap:6 }}>
+                          {historyQueueing ? <><Spin size={11} color="#fff" /> Queuing…</> : `⚡ Queue ${selectedCount || ''} for Auto-Apply`}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })()}
+                {historyQueueMsg && (
+                  <div style={{ padding:'10px 14px', background: historyQueueMsg.startsWith('✓') ? '#dcfce7' : '#fee2e2', color: historyQueueMsg.startsWith('✓') ? '#15803d' : '#991b1b', borderRadius:8, fontSize:12, fontWeight:600, marginBottom:12 }}>
+                    {historyQueueMsg}
+                  </div>
+                )}
                 {/* Filtered Evaluations */}
                 {history.filter(ev => roleTypeFilter === 'all' || classifyRoleType(ev.jobTitle) === roleTypeFilter).map(ev => (
-                  <EvalCard key={ev.id} ev={ev} onClick={() => loadEvalFromHistory(ev)} onDelete={handleDeleteEval} onQueue={handleQueueFromHistory} />
+                  <EvalCard
+                    key={ev.id}
+                    ev={ev}
+                    onClick={() => loadEvalFromHistory(ev)}
+                    onDelete={handleDeleteEval}
+                    onQueue={handleQueueFromHistory}
+                    selected={historySelected.has(ev.id)}
+                    onToggleSelect={ev.grade ? (id) => {
+                      setHistorySelected(s => {
+                        const next = new Set(s)
+                        next.has(id) ? next.delete(id) : next.add(id)
+                        return next
+                      })
+                    } : null}
+                  />
                 ))}
               </>
             )}
