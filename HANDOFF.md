@@ -487,6 +487,23 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 - **Status:** pushed to `origin/main` through `bc996ce`; local worktree still has unrelated untracked files `PLAN-B.txt`, `supabase/migrations/002_backend_schema.sql`, and `supabase/migrations/003_per_user_isolation.sql`.
 - **Follow-up:** Wait for Vercel deployment, then verify `/outreach` and `/apply/auto-apply` in browser.
 
+### 2026-05-01 — Block G "Why?" justify button
+- **What:** Added collapsible per-signal breakdown to the legitimacy assessment card in CareerOps evaluation reports. Assessment badge (`High Confidence` / `Proceed with Caution` / `Suspicious`) now shows a "▼ Why?" button when signals exist; clicking expands the full signal/finding/weight table inline beneath the badge. Table collapses with "▲ Hide signals". `contextNotes` still shows below in both states.
+- **Files:** [frontend/src/components/CareerOps.jsx:122](frontend/src/components/CareerOps.jsx#L122)
+- **Status:** committed and pushed; Vercel deploying.
+- **Remaining queue:** multi-select roles for auto-apply, show role names in Evaluate tab, Companies 2-section layout (scraped vs yet-to-check), Outreach templates improvement.
+
+### 2026-05-01 — Multi-bug fix pass (7 bugs squashed)
+- **Puppeteer ARM64 fix:** `resumeGenerator.js` now uses `PUPPETEER_EXECUTABLE_PATH` env var when set. On VM: added `PUPPETEER_EXECUTABLE_PATH=/home/ubuntu/.cache/ms-playwright/chromium-1217/chrome-linux/chrome` to `/home/ubuntu/outreach/.env`; pm2 restarted; ARM64 Chromium `147.0.7727.0` confirmed working. PDF generation should no longer throw "Syntax error: redirection unexpected".
+- **Chinese/non-English titles filtered:** `multiSourceScraper.js` adds `isEnglishTitle()` check (CJK/Arabic/Cyrillic detection) before upserting to `scraped_roles`. Stops ai-jobs.net Chinese listings from appearing in the catalog.
+- **Recent Evaluations "Not Found" fixed:** `careerOps.js` `/evaluations/:id/report.html` now returns 200 with a minimal summary page when `report_json` is null (tracked-but-unevaluated rows) instead of 404. Job Dashboard "Recent Evaluations" open button no longer throws "Not Found".
+- **Queue & Status filter pills:** Converted from static `<span>` to clickable `<button>` elements with an "All" pill; toggling a status pill filters the queue list to that status. (`CareerOps.jsx`)
+- **History tab duplicates:** `loadHistory()` now deduplicates by `job_url`, keeping only the most recent evaluation per URL. Eliminates ×3 duplicate rows like "Intern as Software Developer". (`CareerOps.jsx`)
+- **CategoryView filters explicit:** Removed the useless source filter (backend hardcodes `'job'` for all rows); `status` and `sortBy` onChange now call `load()` directly to avoid any stale-closure timing issue.
+- **Manual careers URL input:** New text input + "💾 Set URL" button below scrape buttons in `CompanyDetail` roles tab. Saves to `jobs.url` via new `PUT /api/jobs/:id/url` backend route. Subsequent scrapes use the saved URL. (`CompanyDetail.jsx`, `jobs.js`, `api.js`)
+- **Commits:** `9661482` (7 fixes), `3cbec8e` (manual URL feature), pushed to main + Vercel deployed.
+- **VM:** backend on `3cbec8e` after `git reset --hard origin/main` (divergence from cherry-pick history); PUPPETEER env set; pm2 restarted.
+
 ### 2026-04-25 — Outreach fix committed + Phase C linearized onto main
 - **What:** Committed the Outreach CRM JWT-fetch fix, then replayed local work on top of remote `main` after GitHub advanced to Phase C (`bfcea63`) during the session.
 - **Files:** [frontend/src/components/OutreachPage.jsx:34](frontend/src/components/OutreachPage.jsx#L34), [HANDOFF.md:38](HANDOFF.md#L38)

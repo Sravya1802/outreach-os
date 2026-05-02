@@ -123,6 +123,7 @@ function ResumeUpload({ resumeInfo, onUploaded }) {
 function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, onDownloadPdf, applyMode, applyStatus, onApplyModeChange, onApply, applying, onQueue, queuing }) {
   const gc = gradeColor(e.grade)
   const gb = gradeBg(e.grade)
+  const [showJustify, setShowJustify] = useState(false)
 
   // Legitimacy assessment → color + plain-English meaning.
   // Santifer's G block uses: "High Confidence" / "Proceed with Caution" / "Suspicious".
@@ -132,6 +133,7 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, 
     : legitAssess === 'Suspicious'
     ? { color:'#dc2626', bg:'#fee2e2', hint:'Multiple ghost-job indicators. Investigate (layoffs, posting age, reposts) before applying.' }
     : { color:'#d97706', bg:'#fef3c7', hint:'Mixed signals — consider applying but don\'t over-invest until you confirm the role is live.' }
+  const hasSignals = (e.blockG_legitimacy?.signals || []).length > 0
 
   return (
     <div className="co-fade">
@@ -377,40 +379,58 @@ function EvaluationReport({ evaluation: e, onGeneratePDF, pdfLoading, pdfReady, 
 
       {/* Block G — Legitimacy */}
       <Block title="G · Posting Legitimacy" icon="🔎" defaultOpen={true}>
-        <div style={{ padding:'12px 14px', background: legitMeta.bg, borderRadius:9, marginBottom:12, border:`1px solid ${legitMeta.color}30` }}>
-          <div style={{ fontSize:13, fontWeight:800, color: legitMeta.color, marginBottom:4 }}>{legitAssess}</div>
-          <div style={{ fontSize:11, color:'#374151', lineHeight:1.55 }}>{legitMeta.hint}</div>
+        <div style={{ padding:'12px 14px', background: legitMeta.bg, borderRadius:9, marginBottom: showJustify ? 0 : 12, border:`1px solid ${legitMeta.color}30` }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:8 }}>
+            <div style={{ fontSize:13, fontWeight:800, color: legitMeta.color }}>{legitAssess}</div>
+            {hasSignals && (
+              <button
+                onClick={() => setShowJustify(v => !v)}
+                style={{ padding:'4px 10px', fontSize:10, fontWeight:700, background:'transparent', color: legitMeta.color, border:`1px solid ${legitMeta.color}60`, borderRadius:6, cursor:'pointer', letterSpacing:'0.03em' }}>
+                {showJustify ? '▲ Hide signals' : '▼ Why?'}
+              </button>
+            )}
+          </div>
+          <div style={{ fontSize:11, color:'#374151', lineHeight:1.55, marginTop:4 }}>{legitMeta.hint}</div>
         </div>
-        {(e.blockG_legitimacy?.signals || []).length > 0 && (
-          <table style={{ width:'100%', fontSize:11, borderCollapse:'collapse' }}>
-            <thead>
-              <tr style={{ borderBottom:'1px solid #e2e8f0' }}>
-                <th style={{ textAlign:'left', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10 }}>Signal</th>
-                <th style={{ textAlign:'left', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10 }}>Finding</th>
-                <th style={{ textAlign:'center', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10, width:110 }}>Weight</th>
-              </tr>
-            </thead>
-            <tbody>
-              {e.blockG_legitimacy.signals.map((s, i) => {
-                const wColor = s.weight === 'Positive' ? '#16a34a' : s.weight === 'Concerning' ? '#dc2626' : '#64748b'
-                const wBg    = s.weight === 'Positive' ? '#dcfce7' : s.weight === 'Concerning' ? '#fee2e2' : '#f1f5f9'
-                return (
-                  <tr key={i} style={{ borderBottom:'1px solid #f1f5f9' }}>
-                    <td style={{ padding:'8px', color:'#0f172a', fontWeight:600, verticalAlign:'top' }}>{s.signal}</td>
-                    <td style={{ padding:'8px', color:'#475569', lineHeight:1.55 }}>{s.finding}</td>
-                    <td style={{ padding:'8px', textAlign:'center' }}>
-                      <span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:20, background: wBg, color: wColor }}>
-                        {s.weight}
-                      </span>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+
+        {showJustify && hasSignals && (
+          <div style={{ border:`1px solid ${legitMeta.color}30`, borderTop:'none', borderRadius:'0 0 9px 9px', marginBottom:12, overflow:'hidden' }}>
+            <table style={{ width:'100%', fontSize:11, borderCollapse:'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom:'1px solid #e2e8f0', background:'#fafafa' }}>
+                  <th style={{ textAlign:'left', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10 }}>Signal</th>
+                  <th style={{ textAlign:'left', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10 }}>Finding</th>
+                  <th style={{ textAlign:'center', padding:'6px 8px', color:'#94a3b8', fontWeight:700, textTransform:'uppercase', letterSpacing:'0.06em', fontSize:10, width:110 }}>Weight</th>
+                </tr>
+              </thead>
+              <tbody>
+                {e.blockG_legitimacy.signals.map((s, i) => {
+                  const wColor = s.weight === 'Positive' ? '#16a34a' : s.weight === 'Concerning' ? '#dc2626' : '#64748b'
+                  const wBg    = s.weight === 'Positive' ? '#dcfce7' : s.weight === 'Concerning' ? '#fee2e2' : '#f1f5f9'
+                  return (
+                    <tr key={i} style={{ borderBottom:'1px solid #f1f5f9' }}>
+                      <td style={{ padding:'8px', color:'#0f172a', fontWeight:600, verticalAlign:'top' }}>{s.signal}</td>
+                      <td style={{ padding:'8px', color:'#475569', lineHeight:1.55 }}>{s.finding}</td>
+                      <td style={{ padding:'8px', textAlign:'center' }}>
+                        <span style={{ fontSize:10, fontWeight:700, padding:'2px 8px', borderRadius:20, background: wBg, color: wColor }}>
+                          {s.weight}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {e.blockG_legitimacy?.contextNotes && (
+              <div style={{ padding:'10px 12px', background:'#f8fafc', borderTop:'1px solid #f1f5f9', fontSize:11, color:'#475569', fontStyle:'italic', lineHeight:1.6 }}>
+                {e.blockG_legitimacy.contextNotes}
+              </div>
+            )}
+          </div>
         )}
-        {e.blockG_legitimacy?.contextNotes && (
-          <div style={{ marginTop:12, padding:'10px 12px', background:'#f8fafc', borderRadius:8, fontSize:11, color:'#475569', fontStyle:'italic', lineHeight:1.6 }}>
+
+        {!showJustify && e.blockG_legitimacy?.contextNotes && (
+          <div style={{ marginTop:4, padding:'10px 12px', background:'#f8fafc', borderRadius:8, fontSize:11, color:'#475569', fontStyle:'italic', lineHeight:1.6 }}>
             {e.blockG_legitimacy.contextNotes}
           </div>
         )}
