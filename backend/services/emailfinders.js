@@ -46,6 +46,40 @@ export async function findEmailsByProspeo(domain, limit = 20) {
   }));
 }
 
+// ── Prospeo email-finder (per person) ────────────────────────────────────────
+// Different from domain-search above — this endpoint takes first/last/domain
+// and returns the single most-likely email for that person. 1 Prospeo credit.
+//   POST https://api.prospeo.io/email-finder
+//   Body { first_name, last_name, company: <domain> }
+//   Response { response: { email, email_status } }
+export async function findEmailByProspeo({ firstName, lastName, domain }) {
+  const key = (process.env.PROSPEO_API_KEY || '').trim();
+  if (!key || key === 'your_prospeo_api_key') throw new Error('PROSPEO_API_KEY not configured');
+  if (!firstName || !lastName || !domain) throw new Error('Need firstName, lastName, domain');
+
+  const res = await fetch('https://api.prospeo.io/email-finder', {
+    method:  'POST',
+    headers: { 'X-KEY': key, 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ first_name: firstName, last_name: lastName, company: domain }),
+    signal:  AbortSignal.timeout(15000),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => '');
+    throw new Error(`Prospeo HTTP ${res.status}: ${txt.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  const r = data?.response;
+  if (!r?.email) return null;
+  return {
+    email: r.email,
+    email_status: r.email_status || 'unknown',
+    confidence: r.confidence ?? 80,
+    source: 'prospeo',
+  };
+}
+
 // ── Serper email search ───────────────────────────────────────────────────────
 // Uses Google to find publicly listed email addresses for a domain.
 

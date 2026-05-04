@@ -3,6 +3,7 @@ import { one, all, run, tx } from '../db.js';
 import * as apify from '../services/apify.js';
 import { findEmailsWithFallback, findDomainByCompany, extractDomain, findWorkingDomain, findEmailForPerson } from '../services/hunter.js';
 import * as apollo from '../services/apollo.js';
+import { findEmailByProspeo, findEmailsByWebsiteScrape } from '../services/emailfinders.js';
 import { findEmailsMultiSource } from '../services/emailfinders.js';
 import { generateOutreach } from '../services/ai.js';
 import { scrapeAllSources, scraperHealth } from '../services/scraper.js';
@@ -1444,7 +1445,53 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
       console.warn('[find-email] Hunter failed:', e.message);
     }
 
-    // Source 2 — Apollo enrichPerson by LinkedIn URL (if we have one).
+    // Source 2 — Prospeo per-person email-finder. 1 credit, accurate
+    // first/last/domain → email mapping. Free tier covers 75 lookups/month.
+    if (!foundEmail) {
+      try {
+        const prospeo = await findEmailByProspeo({ firstName, lastName, domain });
+        triedSources.push('prospeo');
+        if (prospeo?.email) {
+          foundEmail = prospeo.email;
+          foundConfidence = prospeo.confidence;
+          foundStatus = prospeo.email_status === 'valid' ? 'valid'
+                      : prospeo.email_status === 'invalid' ? 'invalid'
+                      : (prospeo.confidence >= 80 ? 'valid' : prospeo.confidence >= 50 ? 'risky' : null);
+          foundSource = 'prospeo';
+        }
+      } catch (e) {
+        console.warn('[find-email] Prospeo failed:', e.message);
+      }
+    }
+
+    // Source 3 — Website scrape. Fetches /team /about /contact and regex-
+    // extracts emails matching the domain, then tries to match against the
+    // contact's name from surrounding HTML. Free, but lowest yield.
+    if (!foundEmail) {
+      try {
+        const scraped = await findEmailsByWebsiteScrape(domain);
+        triedSources.push('website-scrape');
+        const wantFull  = contact.name.toLowerCase().trim();
+        const wantFirst = firstName.toLowerCase();
+        const wantLast  = lastName.toLowerCase();
+        // Prefer exact name match, fall back to first+last appearing in name.
+        const match = scraped.find(s => (s.name || '').toLowerCase().trim() === wantFull)
+                   || scraped.find(s => {
+                        const n = (s.name || '').toLowerCase();
+                        return n.includes(wantFirst) && n.includes(wantLast);
+                      });
+        if (match?.email) {
+          foundEmail      = match.email;
+          foundStatus     = match.confidence >= 80 ? 'valid' : match.confidence >= 50 ? 'risky' : null;
+          foundConfidence = match.confidence;
+          foundSource     = 'website';
+        }
+      } catch (e) {
+        console.warn('[find-email] Website scrape failed:', e.message);
+      }
+    }
+
+    // Source 4 — Apollo enrichPerson by LinkedIn URL (if we have one).
     // Apollo's enrichment is more accurate than Hunter for execs who use a
     // non-standard email pattern. Tracks 403 separately so the user sees
     // "Apollo plan doesn't include enrichment" instead of a silent miss.
@@ -1467,7 +1514,7 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
       }
     }
 
-    // Source 3 — Apollo searchPeople by name + company, in case the
+    // Source 5 — Apollo searchPeople by name + company, in case the
     // LinkedIn URL is missing or didn't match. Filter by name match.
     if (!foundEmail) {
       try {
