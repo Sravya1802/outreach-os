@@ -249,14 +249,31 @@ router.put('/profile', async (req, res) => {
     const data = { ...(req.body || {}) };
 
     // ── Demographic consent gate ────────────────────────────────────────────
-    // 1. If the request writes any demographic field, consent must already be
-    //    granted (existing row) OR be granted in this same request.
+    // 1. If the request *meaningfully writes* (non-empty, non-null value) any
+    //    demographic field, consent must already be granted (existing row)
+    //    OR be granted in this same request.
     // 2. If the request *withdraws* consent (consent → 0), force-null all
     //    demographic fields so withdrawal is a real erasure.
-    const writesDemographics = DEMOGRAPHIC_FIELDS.some(k => Object.prototype.hasOwnProperty.call(data, k));
+    //
+    // The "meaningfully writes" check matters because the frontend round-
+    // trips the full loaded profile object on save — null/empty demographic
+    // values are included as keys but should not trigger the gate.
+    const isMeaningfulValue = (v) => v !== null && v !== undefined && v !== '';
+    const writesDemographics = DEMOGRAPHIC_FIELDS.some(k =>
+      Object.prototype.hasOwnProperty.call(data, k) && isMeaningfulValue(data[k])
+    );
     const consentInPatch     = Object.prototype.hasOwnProperty.call(data, 'demographic_consent');
     const consentNowTrue     = consentInPatch && isTruthyConsent(data.demographic_consent);
     const consentBeingWithdrawn = consentInPatch && !isTruthyConsent(data.demographic_consent);
+
+    // Always strip null/empty demographic fields from the body before any
+    // gate check — they're round-tripped from the loaded profile and
+    // shouldn't count as "writing demographic data".
+    for (const k of DEMOGRAPHIC_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(data, k) && !isMeaningfulValue(data[k])) {
+        delete data[k];
+      }
+    }
 
     if (writesDemographics && !consentNowTrue) {
       const existing = await one('SELECT demographic_consent FROM user_profile WHERE user_id = $1', [req.user.id]);
