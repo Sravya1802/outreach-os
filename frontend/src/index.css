@@ -357,9 +357,29 @@ button:focus:not(:focus-visible) { outline: none; }
   [style*="padding: 18px 32px 16px"],
   [style*="padding:18px 32px 16px"],
   [style*="padding: 18px 32px"],
-  [style*="padding:18px 32px"] {
+  [style*="padding:18px 32px"],
+  [style*="padding: 18px 28px 0"],
+  [style*="padding:18px 28px 0"],
+  [style*="padding: 18px 28px"],
+  [style*="padding:18px 28px"],
+  [style*="padding: 16px 28px"],
+  [style*="padding:16px 28px"],
+  [style*="padding: 20px 24px"],
+  [style*="padding:20px 24px"] {
     padding-left: 64px !important;
     padding-right: 16px !important;
+  }
+
+  /* Tab strip padding (e.g. padding:'0 28px') needs the same hamburger
+     offset so the first tab isn't half-eaten by the menu icon. */
+  [style*="padding: 0 28px"],
+  [style*="padding:0 28px"],
+  [style*="padding: 0 32px"],
+  [style*="padding:0 32px"],
+  [style*="padding: 0 40px"],
+  [style*="padding:0 40px"] {
+    padding-left: 56px !important;
+    padding-right: 12px !important;
   }
 
   /* Tab bars and horizontal pill rows that don't fit on phone — let them
@@ -407,15 +427,30 @@ button:focus:not(:focus-visible) { outline: none; }
   [style*="padding: 18px 32px 16px"],
   [style*="padding:18px 32px 16px"],
   [style*="padding: 18px 32px"],
-  [style*="padding:18px 32px"] {
-    padding: 16px 12px 12px 56px !important;
+  [style*="padding:18px 32px"],
+  [style*="padding: 18px 28px 0"],
+  [style*="padding:18px 28px 0"],
+  [style*="padding: 18px 28px"],
+  [style*="padding:18px 28px"] {
+    padding: 14px 10px 10px 56px !important;
   }
   [style*="padding: 16px 32px"],
   [style*="padding:16px 32px"],
   [style*="padding: 12px 32px"],
-  [style*="padding:12px 32px"] {
+  [style*="padding:12px 32px"],
+  [style*="padding: 16px 28px"],
+  [style*="padding:16px 28px"] {
     padding-left: 12px !important;
     padding-right: 12px !important;
+  }
+  [style*="padding: 0 28px"],
+  [style*="padding:0 28px"],
+  [style*="padding: 0 32px"],
+  [style*="padding:0 32px"],
+  [style*="padding: 0 40px"],
+  [style*="padding:0 40px"] {
+    padding-left: 56px !important;
+    padding-right: 8px !important;
   }
 
   /* Force-wrap large dollar values / counts so they don't break grid cards. */
