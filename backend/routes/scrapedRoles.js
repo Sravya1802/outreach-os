@@ -17,6 +17,20 @@ import { scrapeAllSourcesAndPersist } from '../services/multiSourceScraper.js';
 
 const router = Router();
 
+// Defensive filter — historical rows from before the scraper-side
+// isEnglishTitle() check still live in scraped_roles. Drop anything whose
+// title or company name contains CJK / Arabic / Cyrillic / Devanagari /
+// Thai / Hangul characters at response time so the user never sees them.
+const NON_LATIN_RE = /[Ѐ-ԯ؀-ۿऀ-ॿ฀-๿぀-ヿ㐀-䶿一-鿿가-힯]/;
+function isEnglishRow(r) {
+  const t = r.title || '';
+  const c = r.company_name || '';
+  if (!t) return false;
+  if (NON_LATIN_RE.test(t)) return false;
+  if (NON_LATIN_RE.test(c)) return false;
+  return true;
+}
+
 // ── GET /api/scraped-roles ────────────────────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
@@ -45,10 +59,15 @@ router.get('/', async (req, res) => {
       LIMIT $${p++} OFFSET $${p++}
     `;
     params.push(pageSize, page * pageSize);
-    const rows = await all(sql, params);
+    const rawRows = await all(sql, params);
+    const rows = rawRows.filter(isEnglishRow);
+    const droppedNonEnglish = rawRows.length - rows.length;
 
-    // Total count for pagination — same WHERE, no LIMIT
-    const countSql = `SELECT COUNT(*)::int AS n FROM scraped_roles WHERE ${where.join(' AND ')}`;
+    // Total count for pagination — same WHERE, no LIMIT, but also exclude
+    // non-Latin titles (Postgres regex) so the count matches the filtered list.
+    const countSql = `SELECT COUNT(*)::int AS n FROM scraped_roles
+                      WHERE ${where.join(' AND ')}
+                        AND title !~ '[\\u0400-\\u04FF\\u0500-\\u052F\\u0600-\\u06FF\\u0900-\\u097F\\u0E00-\\u0E7F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF]'`;
     const total = (await one(countSql, params.slice(0, p - 3)))?.n || 0;
 
     // Per-user "already tracked" flags so the UI can show the right CTA.
