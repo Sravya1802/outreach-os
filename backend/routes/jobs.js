@@ -1446,7 +1446,9 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
 
     // Source 2 — Apollo enrichPerson by LinkedIn URL (if we have one).
     // Apollo's enrichment is more accurate than Hunter for execs who use a
-    // non-standard email pattern.
+    // non-standard email pattern. Tracks 403 separately so the user sees
+    // "Apollo plan doesn't include enrichment" instead of a silent miss.
+    let apolloPlanError = null;
     if (!foundEmail && contact.linkedin_url) {
       try {
         const enriched = await apollo.enrichPerson(contact.linkedin_url);
@@ -1455,12 +1457,13 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
           foundEmail = enriched.email;
           foundStatus = enriched.email_status === 'verified' ? 'valid'
                       : enriched.email_status === 'likely' ? 'risky'
-                      : enriched.email_status === 'unknown' ? null
                       : null;
           foundSource = 'apollo';
         }
       } catch (e) {
-        console.warn('[find-email] Apollo enrichPerson failed:', e.message);
+        const status = e.response?.status;
+        console.warn('[find-email] Apollo enrichPerson failed:', status || '', e.message);
+        if (status === 403) apolloPlanError = 'Apollo /people/match returned 403 — your Apollo plan does not include people enrichment.';
       }
     }
 
@@ -1480,16 +1483,21 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
           foundSource = 'apollo';
         }
       } catch (e) {
-        console.warn('[find-email] Apollo searchPeople failed:', e.message);
+        const status = e.response?.status;
+        console.warn('[find-email] Apollo searchPeople failed:', status || '', e.message);
+        if (status === 403 && !apolloPlanError) apolloPlanError = 'Apollo /mixed_people/search returned 403 — your Apollo plan does not include people search.';
       }
     }
 
     if (!foundEmail) {
+      const lines = [`No email found. Tried: ${triedSources.join(', ') || 'no providers'}.`];
+      if (apolloPlanError) lines.push(apolloPlanError);
       return res.json({
         email: null,
         domain,
         triedSources,
-        message: `No email found. Tried: ${triedSources.join(', ') || 'no providers configured'}.`,
+        apolloPlanError,
+        message: lines.join(' '),
       });
     }
 
