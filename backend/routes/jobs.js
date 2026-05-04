@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { one, all, run, tx } from '../db.js';
 import * as apify from '../services/apify.js';
 import { findEmailsWithFallback, findDomainByCompany, extractDomain, findWorkingDomain, findEmailForPerson } from '../services/hunter.js';
+import * as apollo from '../services/apollo.js';
 import { findEmailsMultiSource } from '../services/emailfinders.js';
 import { generateOutreach } from '../services/ai.js';
 import { scrapeAllSources, scraperHealth } from '../services/scraper.js';
@@ -1420,23 +1421,93 @@ router.post('/contacts/:contactId/find-email', async (req, res) => {
 
     await run('UPDATE jobs SET domain = $1 WHERE id = $2 AND user_id = $3', [domain, contact.job_id, req.user.id]);
 
-    const found = await findEmailForPerson(domain, firstName, lastName);
-    if (!found?.email) {
-      return res.json({ email: null, domain, message: 'No email found via Hunter email-finder' });
+    // Source 1 — Hunter email-finder (deterministic name+domain → email).
+    const triedSources = [];
+    let foundEmail = null;
+    let foundStatus = null;
+    let foundSource = null;
+    let foundConfidence = null;
+
+    try {
+      const hunter = await findEmailForPerson(domain, firstName, lastName);
+      triedSources.push('hunter');
+      if (hunter?.email) {
+        foundEmail = hunter.email;
+        foundConfidence = hunter.confidence;
+        foundStatus = hunter.verification_status === 'valid' ? 'valid'
+                    : hunter.verification_status === 'invalid' ? 'invalid'
+                    : hunter.confidence >= 80 ? 'valid'
+                    : hunter.confidence >= 50 ? 'risky' : null;
+        foundSource = 'hunter';
+      }
+    } catch (e) {
+      console.warn('[find-email] Hunter failed:', e.message);
     }
 
-    const status = found.verification_status === 'valid' ? 'valid'
-                 : found.verification_status === 'invalid' ? 'invalid'
-                 : found.confidence >= 80 ? 'valid'
-                 : found.confidence >= 50 ? 'risky' : null;
+    // Source 2 — Apollo enrichPerson by LinkedIn URL (if we have one).
+    // Apollo's enrichment is more accurate than Hunter for execs who use a
+    // non-standard email pattern.
+    if (!foundEmail && contact.linkedin_url) {
+      try {
+        const enriched = await apollo.enrichPerson(contact.linkedin_url);
+        triedSources.push('apollo-enrich');
+        if (enriched?.email) {
+          foundEmail = enriched.email;
+          foundStatus = enriched.email_status === 'verified' ? 'valid'
+                      : enriched.email_status === 'likely' ? 'risky'
+                      : enriched.email_status === 'unknown' ? null
+                      : null;
+          foundSource = 'apollo';
+        }
+      } catch (e) {
+        console.warn('[find-email] Apollo enrichPerson failed:', e.message);
+      }
+    }
+
+    // Source 3 — Apollo searchPeople by name + company, in case the
+    // LinkedIn URL is missing or didn't match. Filter by name match.
+    if (!foundEmail) {
+      try {
+        const people = await apollo.searchPeople(contact.company_name, []);
+        triedSources.push('apollo-search');
+        const wantFull = contact.name.toLowerCase().trim();
+        const match = people.find(p => (p.name || '').toLowerCase().trim() === wantFull);
+        if (match?.email) {
+          foundEmail = match.email;
+          foundStatus = match.email_status === 'verified' ? 'valid'
+                      : match.email_status === 'likely' ? 'risky'
+                      : null;
+          foundSource = 'apollo';
+        }
+      } catch (e) {
+        console.warn('[find-email] Apollo searchPeople failed:', e.message);
+      }
+    }
+
+    if (!foundEmail) {
+      return res.json({
+        email: null,
+        domain,
+        triedSources,
+        message: `No email found. Tried: ${triedSources.join(', ') || 'no providers configured'}.`,
+      });
+    }
 
     await run(
       "UPDATE job_contacts SET email = $1, email_status = $2, source = COALESCE(NULLIF(source, ''), $3) WHERE id = $4 AND user_id = $5",
-      [found.email, status, 'hunter', contact.id, req.user.id]
+      [foundEmail, foundStatus, foundSource, contact.id, req.user.id]
     );
 
     const updated = await one('SELECT * FROM job_contacts WHERE id = $1 AND user_id = $2', [contact.id, req.user.id]);
-    res.json({ email: found.email, email_status: status, contact: updated, domain, confidence: found.confidence });
+    res.json({
+      email: foundEmail,
+      email_status: foundStatus,
+      contact: updated,
+      domain,
+      source: foundSource,
+      confidence: foundConfidence,
+      triedSources,
+    });
   } catch (err) {
     console.error('contacts/find-email error:', err.message);
     res.status(500).json({ error: err.message });
