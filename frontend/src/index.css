@@ -340,7 +340,138 @@ button:focus:not(:focus-visible) { outline: none; }
   [style*="grid-template-columns: 1fr 72px 120px 96px"],
   [style*="grid-template-columns:1fr 72px 120px 96px"],
   [style*="grid-template-columns: 1fr 100px 100px 90px"],
-  [style*="grid-template-columns:1fr 100px 100px 90px"] {
+  [style*="grid-template-columns:1fr 100px 100px 90px"],
+  [style*="grid-template-columns: 1fr 60px 130px 90px"],
+  [style*="grid-template-columns:1fr 60px 130px 90px"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Page headers must not sit under the fixed hamburger button (top:12, left:12, 40px wide).
+     Push title rows right by ~56px on the first paint of a page header. */
+  [style*="padding: 32px 40px 24px"],
+  [style*="padding:32px 40px 24px"],
+  [style*="padding: 24px 40px 0"],
+  [style*="padding:24px 40px 0"],
+  [style*="padding: 24px 40px 20px"],
+  [style*="padding:24px 40px 20px"],
+  [style*="padding: 18px 32px 16px"],
+  [style*="padding:18px 32px 16px"],
+  [style*="padding: 18px 32px"],
+  [style*="padding:18px 32px"] {
+    padding-left: 64px !important;
+    padding-right: 16px !important;
+  }
+
+  /* Tab bars and horizontal pill rows that don't fit on phone — let them
+     scroll horizontally rather than wrap raggedly. Targets the common
+     `display:flex` + `gap:` patterns we use for tabs across CareerOps,
+     CompanyDetail, AutoApplyPage. */
+  [style*="display:flex"][style*="gap:0"],
+  [style*="display: flex"][style*="gap: 0"] {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  /* Wide tables / preview rows can't collapse cleanly — let them scroll
+     horizontally inside their parent. */
+  table {
+    display: block;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+  /* Inputs and textareas should fill width; otherwise fixed widths overflow. */
+  input[style*="width:"]:not([style*="width:auto"]):not([style*="width:14px"]):not([style*="width:18px"]),
+  textarea {
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+
+  /* Long URLs / job titles can break out of cards — allow wrapping. */
+  div[style*="overflow:hidden"][style*="whiteSpace:nowrap"],
+  div[style*="overflow: hidden"][style*="white-space: nowrap"] {
+    white-space: normal !important;
+  }
+}
+
+/* ── Phone (≤ 480px) — even tighter constraints ─────────────────────────────── */
+@media (max-width: 480px) {
+  /* Page padding shrinks further so content doesn't suffocate. */
+  [style*="padding: 32px 40px 24px"],
+  [style*="padding:32px 40px 24px"],
+  [style*="padding: 24px 40px 0"],
+  [style*="padding:24px 40px 0"],
+  [style*="padding: 24px 40px 20px"],
+  [style*="padding:24px 40px 20px"],
+  [style*="padding: 18px 32px 16px"],
+  [style*="padding:18px 32px 16px"],
+  [style*="padding: 18px 32px"],
+  [style*="padding:18px 32px"] {
+    padding: 16px 12px 12px 56px !important;
+  }
+  [style*="padding: 16px 32px"],
+  [style*="padding:16px 32px"],
+  [style*="padding: 12px 32px"],
+  [style*="padding:12px 32px"] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  /* Force-wrap large dollar values / counts so they don't break grid cards. */
+  h1 { font-size: 20px !important; line-height: 1.2 !important; }
+  h2 { font-size: 16px !important; line-height: 1.25 !important; }
+  h3 { font-size: 14px !important; }
+
+  /* Stat cards — collapse 5-up / 6-up grids into 2 cols on phone instead of
+     1, otherwise dashboard stat-row becomes 5 huge stacked cards. */
+  [style*="grid-template-columns: repeat(5, 1fr)"],
+  [style*="grid-template-columns:repeat(5, 1fr)"],
+  [style*="grid-template-columns: repeat(6, 1fr)"],
+  [style*="grid-template-columns:repeat(6, 1fr)"],
+  [style*="grid-template-columns: repeat(4, 1fr)"],
+  [style*="grid-template-columns:repeat(4, 1fr)"] {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  /* Buttons in action rows — make them full-width when alone in a row to
+     give touch targets at least 44px tall. */
+  button {
+    min-height: 36px;
+  }
+
+  /* Modal/card padding shrinks on phone */
+  [style*="padding: 22px 24px"],
+  [style*="padding:22px 24px"],
+  [style*="padding: 24px 28px"],
+  [style*="padding:24px 28px"],
+  [style*="padding: 20px 24px"],
+  [style*="padding:20px 24px"] {
+    padding: 14px 12px !important;
+  }
+
+  /* Long single-line layouts in cards (icon + label + value + arrow) wrap
+     to two lines so the value doesn't get cut off. */
+  [style*="flex-wrap:wrap"],
+  [style*="flex-wrap: wrap"] {
+    row-gap: 8px !important;
+  }
+}
+
+/* ── Tablet (481-768px) — 2-column grid sweet spot ──────────────────────────── */
+@media (min-width: 481px) and (max-width: 768px) {
+  [style*="grid-template-columns: repeat(5, 1fr)"],
+  [style*="grid-template-columns:repeat(5, 1fr)"],
+  [style*="grid-template-columns: repeat(6, 1fr)"],
+  [style*="grid-template-columns:repeat(6, 1fr)"],
+  [style*="grid-template-columns: repeat(4, 1fr)"],
+  [style*="grid-template-columns:repeat(4, 1fr)"] {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+  [style*="grid-template-columns: 1fr 340px"],
+  [style*="grid-template-columns:1fr 340px"],
+  [style*="grid-template-columns: 1fr 320px"],
+  [style*="grid-template-columns:1fr 320px"] {
     grid-template-columns: 1fr !important;
   }
 }
