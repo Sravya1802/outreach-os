@@ -244,6 +244,11 @@ function RegularCategoryView({ categoryName }) {
   const [sortBy, setSortBy]       = useState('hiring')
   const [scraping, setScraping]   = useState(null)
   const [scrapeMsg, setScrapeMsg] = useState(null)
+  // Section collapse state — "Yet to check" stays open by default since that's
+  // where the user does work; "Already checked" collapses to reduce noise but
+  // remains one click away.
+  const [showUnchecked, setShowUnchecked] = useState(true)
+  const [showChecked,   setShowChecked]   = useState(false)
   const debounce = useRef(null)
 
   const load = useCallback(async (pg = 0, q = search, src = source, st = status, sb = sortBy) => {
@@ -345,8 +350,8 @@ function RegularCategoryView({ categoryName }) {
             <div style={{ fontSize:16, fontWeight:700, color:'#475569', marginBottom:8 }}>No companies found</div>
             <div style={{ fontSize:13, marginBottom:20 }}>Scrape external sources to find companies in this category</div>
           </div>
-        ) : (
-          [...companies].sort((a, b) => {
+        ) : (() => {
+          const sorted = [...companies].sort((a, b) => {
             if (sortBy === 'az') return (a.name || '').localeCompare(b.name || '')
             if (sortBy === 'za') return (b.name || '').localeCompare(a.name || '')
             if (sortBy === 'contacts') return (b.total_contacts || 0) - (a.total_contacts || 0)
@@ -355,15 +360,23 @@ function RegularCategoryView({ categoryName }) {
               if (ac && bc) return bc.localeCompare(ac)
               return (b.id || 0) - (a.id || 0)
             }
-            // hiring (default/top) — combine is_hiring status + contact count
             if (sortBy === 'hiring') {
               const aHiring = a.is_hiring || 0, bHiring = b.is_hiring || 0
               if (aHiring !== bHiring) return bHiring - aHiring
               return (b.total_contacts || 0) - (a.total_contacts || 0)
             }
             return 0
-          }).map(c => {
-            const stColor = STATUS_COLORS[c.status] || STATUS_COLORS.new
+          })
+
+          // Split: "checked" = user has touched the company (status !== 'new');
+          // "unchecked" = still 'new' or null. This lets the user keep their
+          // un-reviewed pile separate from companies they've already triaged.
+          const isChecked = (c) => c.status && c.status !== 'new'
+          const unchecked = sorted.filter(c => !isChecked(c))
+          const checked   = sorted.filter(c =>  isChecked(c))
+
+          const renderRow = (c) => {
+            const stColor  = STATUS_COLORS[c.status] || STATUS_COLORS.new
             const srcColor = SOURCE_COLORS[c.source?.split(',')[0]] || SOURCE_COLORS.manual_search
             return (
               <div key={c.id} className="cv-company-row"
@@ -388,7 +401,6 @@ function RegularCategoryView({ categoryName }) {
                       {c.source.split(',')[0]}
                     </span>
                   )}
-                  {/* Auto-Apply quick action — queues known scraped roles for the worker */}
                   <button onClick={async (e) => {
                       e.stopPropagation()
                       try {
@@ -401,7 +413,6 @@ function RegularCategoryView({ categoryName }) {
                     style={{ padding:'3px 9px', borderRadius:7, border:'1px solid #c7d2fe', background:'#eef2ff', color:'#4f46e5', fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}>
                     🤖 Apply
                   </button>
-                  {/* Careers page link */}
                   {(c.url || c.domain) && (
                     <a href={c.url || `https://${c.domain}/careers`} target="_blank" rel="noreferrer"
                       onClick={e => e.stopPropagation()}
@@ -419,8 +430,40 @@ function RegularCategoryView({ categoryName }) {
                 </div>
               </div>
             )
-          })
-        )}
+          }
+
+          const sectionHeader = (open, setOpen, icon, label, count, accent) => (
+            <div onClick={() => setOpen(v => !v)}
+              style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, cursor:'pointer', userSelect:'none' }}>
+              <span style={{ fontSize:18 }}>{icon}</span>
+              <span style={{ fontSize:13, fontWeight:800, color:'#0f172a', flex:1 }}>{label}</span>
+              <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:`${accent}15`, color:accent }}>{count}</span>
+              <span style={{ fontSize:11, color:'#94a3b8', display:'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition:'transform 0.18s' }}>▶</span>
+            </div>
+          )
+
+          return (
+            <>
+              {/* Yet to check — primary work pile */}
+              {sectionHeader(showUnchecked, setShowUnchecked, '🔍', 'Yet to check', unchecked.length, '#6366f1')}
+              {showUnchecked && (unchecked.length > 0
+                ? unchecked.map(renderRow)
+                : <div style={{ padding:'18px 16px', marginBottom:12, fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
+                    All companies in this category have been checked. 🎉
+                  </div>
+              )}
+
+              {/* Already checked — collapsed pile */}
+              {sectionHeader(showChecked, setShowChecked, '✓', 'Already checked', checked.length, '#16a34a')}
+              {showChecked && (checked.length > 0
+                ? checked.map(renderRow)
+                : <div style={{ padding:'18px 16px', marginBottom:12, fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
+                    No companies have been triaged yet. Set a status (researching / contacted / skip / etc.) on a row above to move it here.
+                  </div>
+              )}
+            </>
+          )
+        })()}
 
         {companies.length > 0 && companies.length < total && (
           <div style={{ textAlign:'center', padding:'12px 0' }}>
