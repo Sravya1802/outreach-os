@@ -162,30 +162,84 @@ function workdayApiUrl(jobUrl) {
   } catch { return null; }
 }
 
+// Returns { text } on success, or { error: 'message' } when we can confidently
+// describe what went wrong (e.g. the role was closed). null = unknown failure
+// so the caller falls through to plain HTML fetch.
 async function fetchWorkdayJD(jobUrl) {
   const api = workdayApiUrl(jobUrl);
   if (!api) return null;
-  try {
-    const res = await fetch(api, {
+  const u = new URL(jobUrl);
+  const tenant = u.hostname.split('.')[0];
+  const parts  = u.pathname.split('/').filter(Boolean);
+  const startIdx = /^[a-z]{2}-[a-z]{2}$/i.test(parts[0]) ? 1 : 0;
+  const tail = parts.slice(startIdx);
+  const site = tail[0];
+  // Extract the jobReqId from the slug — it's the trailing token after the
+  // last underscore in the URL slug (e.g. "_R-1089"). Used as a fallback
+  // search term when the direct CXS path 404s because the URL location
+  // segment doesn't match Workday's canonical form (e.g. "San-Jose-CA" vs
+  // "San-Jose---California" with triple dashes).
+  const slug = tail[tail.length - 1] || '';
+  const jobReqId = (slug.match(/_([A-Z0-9-]+)$/i) || [])[1] || '';
+
+  // Helper: given a CXS URL, try GET it and parse the description.
+  async function fetchAndParse(apiUrl) {
+    const res = await fetch(apiUrl, {
       headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
       signal:  AbortSignal.timeout(10000),
     });
-    if (!res.ok) return null;
-    const data = await res.json();
+    if (!res.ok) return { status: res.status };
+    const data = await res.json().catch(() => null);
+    if (!data) return { status: 'parse_error' };
     const info = data?.jobPostingInfo || data;
-    const parts = [
+    const partsArr = [
       info?.title,
       info?.jobDescription,
       info?.jobRequisitionLocation?.descriptor,
       info?.timeType,
     ].filter(Boolean);
-    if (!parts.length) return null;
-    // jobDescription is HTML; strip tags inline.
+    if (!partsArr.length) return { status: 'empty' };
     const { load } = await import('cheerio');
-    const html = parts.join('\n\n');
-    const $ = load(`<div>${html}</div>`);
+    const $ = load(`<div>${partsArr.join('\n\n')}</div>`);
     const text = $('div').text().replace(/\s{3,}/g, '\n\n').trim().slice(0, 8000);
-    return text.length > 200 ? text : null;
+    return text.length > 200 ? { text } : { status: 'short' };
+  }
+
+  try {
+    // Path 1: try the direct URL we built from the path.
+    const direct = await fetchAndParse(api);
+    if (direct.text) return direct.text;
+
+    // Path 2: 404 — try Workday's CXS jobs search by jobReqId, then GET the
+    // canonical externalPath. Catches URL-slug mismatches.
+    if (direct.status === 404 && jobReqId && tenant && site) {
+      const searchUrl = `${u.protocol}//${u.hostname}/wday/cxs/${tenant}/${site}/jobs`;
+      const searchRes = await fetch(searchUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
+        body: JSON.stringify({ searchText: jobReqId, limit: 5, offset: 0 }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (searchRes.ok) {
+        const sdata = await searchRes.json().catch(() => null);
+        const total = sdata?.total ?? 0;
+        const match = (sdata?.jobPostings || []).find(p =>
+          (p.bulletFields || []).includes(jobReqId) ||
+          (p.externalPath || '').endsWith(`_${jobReqId}`)
+        );
+        if (match?.externalPath) {
+          const canonical = `${u.protocol}//${u.hostname}/wday/cxs/${tenant}/${site}${match.externalPath}`;
+          const second = await fetchAndParse(canonical);
+          if (second.text) return second.text;
+        }
+        // No match found AND total is 0: posting almost certainly removed.
+        if (total === 0) {
+          return { error: 'This Workday posting appears to be closed or removed (no matching job in their public API). The job page may still load in a browser but the data is gone.' };
+        }
+      }
+    }
+
+    return null;
   } catch { return null; }
 }
 
@@ -282,8 +336,11 @@ export async function fetchJobFromUrl(url) {
   // Try host-specific JSON APIs first — saves us from wasted plain-HTML
   // fetches against React/SPA boards that only return an empty shell.
   if (/myworkdayjobs\.com/i.test(url)) {
-    const t = await fetchWorkdayJD(url);
-    if (t) return { text: t, url, source: 'workday-api' };
+    const wd = await fetchWorkdayJD(url);
+    if (typeof wd === 'string' && wd.length) return { text: wd, url, source: 'workday-api' };
+    if (wd && typeof wd === 'object' && wd.error) {
+      return { text: null, url, error: wd.error };
+    }
   }
   if (/jobs\.ashbyhq\.com/i.test(url)) {
     const t = await fetchAshbyJD(url);
