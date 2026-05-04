@@ -244,11 +244,6 @@ function RegularCategoryView({ categoryName }) {
   const [sortBy, setSortBy]       = useState('hiring')
   const [scraping, setScraping]   = useState(null)
   const [scrapeMsg, setScrapeMsg] = useState(null)
-  // Section collapse state — "Yet to check" stays open by default since that's
-  // where the user does work; "Already checked" collapses to reduce noise but
-  // remains one click away.
-  const [showUnchecked, setShowUnchecked] = useState(true)
-  const [showChecked,   setShowChecked]   = useState(false)
   const debounce = useRef(null)
 
   const load = useCallback(async (pg = 0, q = search, src = source, st = status, sb = sortBy) => {
@@ -432,36 +427,38 @@ function RegularCategoryView({ categoryName }) {
             )
           }
 
-          const sectionHeader = (open, setOpen, icon, label, count, accent) => (
-            <div onClick={() => setOpen(v => !v)}
-              style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 16px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, cursor:'pointer', userSelect:'none' }}>
-              <span style={{ fontSize:18 }}>{icon}</span>
+          const sectionHeader = (icon, label, count, accent) => (
+            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, position:'sticky', top:0, zIndex:1 }}>
+              <span style={{ fontSize:16 }}>{icon}</span>
               <span style={{ fontSize:13, fontWeight:800, color:'#0f172a', flex:1 }}>{label}</span>
               <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:`${accent}15`, color:accent }}>{count}</span>
-              <span style={{ fontSize:11, color:'#94a3b8', display:'inline-block', transform: open ? 'rotate(90deg)' : 'rotate(0deg)', transition:'transform 0.18s' }}>▶</span>
             </div>
           )
 
-          return (
-            <>
-              {/* Yet to check — primary work pile */}
-              {sectionHeader(showUnchecked, setShowUnchecked, '🔍', 'Yet to check', unchecked.length, '#6366f1')}
-              {showUnchecked && (unchecked.length > 0
-                ? unchecked.map(renderRow)
-                : <div style={{ padding:'18px 16px', marginBottom:12, fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
-                    All companies in this category have been checked. 🎉
-                  </div>
-              )}
+          const emptyState = (msg) => (
+            <div style={{ padding:'24px 16px', fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
+              {msg}
+            </div>
+          )
 
-              {/* Already checked — collapsed pile */}
-              {sectionHeader(showChecked, setShowChecked, '✓', 'Already checked', checked.length, '#16a34a')}
-              {showChecked && (checked.length > 0
-                ? checked.map(renderRow)
-                : <div style={{ padding:'18px 16px', marginBottom:12, fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
-                    No companies have been triaged yet. Set a status (researching / contacted / skip / etc.) on a row above to move it here.
-                  </div>
-              )}
-            </>
+          // Two-column grid: "Yet to check" on the left, "Already checked"
+          // on the right. Both visible at once so the user never has to
+          // toggle to see the other pile.
+          return (
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(440px, 1fr))', gap:16, alignItems:'flex-start' }}>
+              <div>
+                {sectionHeader('🔍', 'Yet to check', unchecked.length, '#6366f1')}
+                {unchecked.length > 0
+                  ? unchecked.map(renderRow)
+                  : emptyState('All companies in this category have been checked. 🎉')}
+              </div>
+              <div>
+                {sectionHeader('✓', 'Already checked', checked.length, '#16a34a')}
+                {checked.length > 0
+                  ? checked.map(renderRow)
+                  : emptyState('No companies triaged yet. Set a status (researching / contacted / skip / …) on the left to move it here.')}
+              </div>
+            </div>
           )
         })()}
 
