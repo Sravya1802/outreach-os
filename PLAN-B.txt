@@ -1,0 +1,565 @@
+================================================================================
+OUTREACHOS MIGRATION — PLAN B: GOOGLE CLOUD RUN
+================================================================================
+
+Last updated: April 23, 2026
+Purpose: Fallback plan if Oracle ARM capacity never lands
+Trigger condition: Oracle retry scripts fail to land capacity after 48–72 hours
+Cost: $0/month forever (stays inside always-free tier)
+Mac required after deploy: NO — runs 100% on Google infra
+
+
+================================================================================
+0. TL;DR — DOES MY MAC STAY ON?
+================================================================================
+
+NO.
+
+The Mac is only involved during deployment:
+  1. You run `gcloud run deploy` from your terminal
+  2. Google pulls your source, builds a container in the cloud, deploys it
+  3. Mac can be shut down — backend keeps running on Google's servers
+  4. Only re-open Mac when you want to deploy new code
+
+Once live, auto-apply runs entirely on Google Cloud Run:
+  - User clicks "Apply" on Vercel frontend
+  - Request hits Cloud Run URL → container spins up (if cold)
+  - Playwright launches headless Chromium inside the container
+  - Auto-apply completes, writes result to Supabase, returns response
+  - Mac is not touched at any point
+
+
+================================================================================
+1. FINAL ARCHITECTURE
+================================================================================
+
+    +-----------------------------+       HTTPS       +--------------------------------+
+    | Vercel Free (frontend only) |  <-------------->  | Google Cloud Run (backend)     |
+    | outreach-jt.vercel.app      |                    | Auto-HTTPS URL                 |
+    | React SPA, static assets    |                    | e.g. outreach-backend-xxx.a.run|
+    +-----------------------------+                    | .app                           |
+                                                       |                                |
+                                                       | Container image:               |
+                                                       |  - Node.js 20                  |
+                                                       |  - Express + your routes       |
+                                                       |  - Playwright 1.59 + Chromium  |
+                                                       |  - Puppeteer 24                |
+                                                       |                                |
+                                                       | Spec: 1 vCPU, 1 GB RAM         |
+                                                       | (bump to 2/2 if needed)        |
+                                                       +--------------+-----------------+
+                                                                      |
+                                                                      | Postgres wire (pg)
+                                                                      v
+                                                       +--------------------------------+
+                                                       | Supabase Free                  |
+                                                       |  - Postgres DB (500 MB)        |
+                                                       |  - Storage (1 GB — resumes)    |
+                                                       |  - Auth (unlimited users)      |
+                                                       +--------------------------------+
+                                                                      ^
+                                                                      |
+                                                       +--------------+-----------------+
+                                                       | Google Cloud Scheduler (free)  |
+                                                       | Cron triggers for auto-apply,  |
+                                                       | scraping, daily reports        |
+                                                       +--------------------------------+
+
+
+================================================================================
+2. FREE-TIER BUDGET — PROVING WE FIT
+================================================================================
+
+CLOUD RUN (always-free, no 12-month expiry)
+  - 2,000,000 requests / month
+  - 360,000 vCPU-seconds / month
+  - 180,000 GiB-seconds memory / month
+  - 1 GB network egress / month (North America)
+
+YOUR PROJECTED USAGE
+  Auto-apply: 50 jobs/week × 3 min × 1 vCPU = 9,000 vCPU-sec/week = 36,000/month
+  Scraping:   100 jobs/week × 30 sec × 1 vCPU = 3,000/week = 12,000/month
+  API calls:  ~500 requests/day × 1 sec = 15,000/month
+
+  TOTAL: ~63,000 vCPU-sec/month → 17% of free tier
+
+  Headroom: 5.7x (you would need to quintuple your usage to approach paid)
+
+
+SUPABASE FREE (unchanged from Plan A)
+  - 500 MB DB, 1 GB storage, 5 GB egress/mo — plenty
+
+
+CLOUD SCHEDULER
+  - 3 jobs free per month (enough for daily cron, weekly cleanup, etc.)
+
+
+CLOUD BUILD
+  - 120 build-minutes / day free — you'll use ~2 min per deploy
+
+
+CLOUD LOGGING
+  - 50 GiB / month free — you'll use < 1 GiB
+
+
+TOTAL MONTHLY COST: $0
+(Anthropic/OpenAI API costs unchanged — those are outside GCP)
+
+
+================================================================================
+3. PREREQUISITES — ONE-TIME ACCOUNT SETUP
+================================================================================
+
+3.1 GOOGLE CLOUD ACCOUNT
+  - Sign up at https://console.cloud.google.com
+  - Credit card required (but NEVER charged inside free tier)
+  - You get $300 in free credits at signup (valid 90 days, bonus on top of always-free)
+
+3.2 BILLING ALERT (safety net)
+  - Navigate: Console → Billing → Budgets & alerts → Create budget
+  - Monthly budget: $1
+  - Threshold: 100% of $1
+  - Notification: your email
+  - This emails you the INSTANT any paid usage starts, so you can react
+
+3.3 HARD SPEND CAP (extra paranoia, optional)
+  - Cloud Run lets you set a "Maximum instances" — set to 3
+  - That caps concurrent cost even in worst case
+  - Set per-request CPU/memory explicitly — no surprise upscaling
+
+3.4 INSTALL gcloud CLI ON YOUR MAC
+  - brew install --cask google-cloud-sdk
+  - gcloud init  (walks through login + project selection)
+  - gcloud auth configure-docker  (for container pushes if needed later)
+
+
+================================================================================
+4. PROJECT SETUP — ONE-TIME IN GCP CONSOLE
+================================================================================
+
+4.1 CREATE GCP PROJECT
+  Console → "Select a project" → New Project
+    Name: outreach-os
+    Project ID: outreach-os-<random-suffix> (auto-generated, copy it)
+    Billing account: link your free tier
+
+4.2 ENABLE REQUIRED APIS (one-time)
+  gcloud services enable \
+    run.googleapis.com \
+    cloudbuild.googleapis.com \
+    cloudscheduler.googleapis.com \
+    --project=outreach-os-<your-suffix>
+
+4.3 SET DEFAULT REGION
+  gcloud config set run/region us-central1
+  (us-central1 has the most generous always-free pool)
+
+
+================================================================================
+5. BACKEND CODE CHANGES NEEDED
+================================================================================
+
+5.1 SWAP SQLITE → POSTGRES (Supabase)
+
+  Your backend currently uses better-sqlite3 writing to data/outreach.db.
+  Cloud Run containers are EPHEMERAL — filesystem resets on every cold start,
+  so SQLite cannot persist. Move to Supabase Postgres.
+
+  Steps:
+  (a) Sign up at https://supabase.com (free)
+  (b) Create project "outreach-os"
+  (c) Supabase Dashboard → Database → Connection string → copy "Transaction"
+      connection (pooler, port 6543) — this is for serverless environments like
+      Cloud Run
+  (d) Add `pg` or `postgres` npm package to backend:
+        npm install pg --prefix backend
+  (e) Refactor backend/db.js:
+        - Replace Database(path) → new Pool({ connectionString: DATABASE_URL })
+        - Replace db.prepare().run/get/all → pool.query(sql, params)
+        - Supabase Postgres dialect needs $1, $2 placeholders (not ?)
+  (f) Run backend/db.js schema migrations via Supabase SQL Editor:
+        - Copy CREATE TABLE statements from current db.js
+        - Replace SQLite-specific syntax:
+            INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY
+            datetime('now')                  → NOW()
+            TEXT DEFAULT ...                 → TEXT DEFAULT ...  (same)
+        - Paste into Supabase SQL editor → Run
+
+  Note: This migration is independent of Cloud Run. If you eventually land
+  Oracle capacity, the Postgres migration still applies because Oracle ARM VM
+  would also connect to Supabase Postgres, not SQLite.
+
+5.2 ADD A /healthz ENDPOINT (for Cloud Run health checks)
+
+  In backend/server.js, add:
+    app.get('/healthz', (req, res) => res.status(200).send('ok'));
+
+5.3 LISTEN ON $PORT (Cloud Run injects a PORT env var)
+
+  In backend/server.js, change the final listen():
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, '0.0.0.0', () => console.log(`Listening on ${PORT}`));
+
+  The '0.0.0.0' bind is critical — Cloud Run rejects containers that bind to
+  localhost only.
+
+5.4 MOVE SECRETS OUT OF .env FILES
+
+  Cloud Run reads env vars from deployment config, not from files.
+  Keep using backend/.env for local dev, but deployment passes secrets via
+  `--set-env-vars` at deploy time (covered in §7).
+
+5.5 ENSURE PLAYWRIGHT USES THE CONTAINERIZED CHROMIUM
+
+  Playwright must be installed with browsers INSIDE the container build.
+  The Dockerfile (§6) handles this — no code change needed if you use
+  playwright.chromium.launch() without a hardcoded executablePath.
+
+
+================================================================================
+6. DOCKERFILE — BUILDS YOUR BACKEND INTO A CONTAINER
+================================================================================
+
+Create `/backend/Dockerfile` with these contents:
+
+  # Multi-stage build: Playwright base image has Chromium + all deps baked in
+  FROM mcr.microsoft.com/playwright:v1.59.1-jammy AS runtime
+
+  WORKDIR /app
+
+  # Copy package manifests first for better Docker layer caching
+  COPY package.local.json ./package.json
+  COPY package-lock.local.json ./package-lock.json
+
+  # Install only production deps
+  RUN npm ci --only=production
+
+  # Copy the rest of the backend source
+  COPY . .
+
+  # Cloud Run injects $PORT
+  ENV PORT=8080
+  EXPOSE 8080
+
+  # Playwright browsers are already installed in the base image, but confirm:
+  RUN npx playwright install chromium --with-deps
+
+  # Non-root user for security (optional but recommended)
+  USER pwuser
+
+  CMD ["node", "server.js"]
+
+
+Create `/backend/.dockerignore` with:
+
+  node_modules
+  npm-debug.log
+  .env
+  .env.*
+  data/
+  *.db
+  *.sqlite
+  output/
+  logs/
+  .git
+  .DS_Store
+
+
+Why this base image:
+  - mcr.microsoft.com/playwright:v1.59.1-jammy = Ubuntu 22.04 + Node 20
+    + Playwright 1.59 + full Chromium with all fonts/libs pre-installed
+  - Saves ~4 minutes of build time per deploy (no apt-get install)
+  - Matches your backend's playwright version exactly
+  - Works on Cloud Run's Linux AMD64 runtime out of the box
+
+
+================================================================================
+7. DEPLOYMENT — STEPS TO GO LIVE
+================================================================================
+
+First-time deploy (from your Mac, inside the backend/ directory):
+
+  cd "/Users/lakshmisravyarachakonda/VS CODE/email tracker/backend"
+
+  gcloud run deploy outreach-backend \
+    --source . \
+    --region us-central1 \
+    --platform managed \
+    --allow-unauthenticated \
+    --memory 2Gi \
+    --cpu 1 \
+    --timeout 3600 \
+    --max-instances 3 \
+    --min-instances 0 \
+    --concurrency 10 \
+    --set-env-vars "NODE_ENV=production,DATABASE_URL=<supabase-connection-string>,ANTHROPIC_API_KEY=...,OPENAI_API_KEY=...,GEMINI_API_KEY=...,APIFY_TOKEN=..." \
+    --project outreach-os-<suffix>
+
+
+What each flag does:
+  --source .              Builds from current directory using Cloud Build
+  --allow-unauthenticated Public endpoint (your frontend calls it directly)
+  --memory 2Gi            2 GB RAM per instance (Playwright needs this)
+  --cpu 1                 1 vCPU — you can bump to 2 if needed
+  --timeout 3600          60-min per-request timeout (max allowed)
+  --max-instances 3       Hard cap: no more than 3 concurrent containers
+  --min-instances 0       Scales to zero when idle (= $0 at idle)
+  --concurrency 10        Each container handles up to 10 concurrent requests
+  --set-env-vars ...      All secrets passed at deploy time (safer than .env)
+
+
+Output shows your Cloud Run URL, e.g.:
+  https://outreach-backend-abc123-uc.a.run.app
+
+
+Test it:
+  curl https://outreach-backend-abc123-uc.a.run.app/healthz
+  → should return "ok"
+
+
+Subsequent deploys (after code changes):
+  gcloud run deploy outreach-backend --source . --region us-central1
+  (env vars persist from previous deploy unless you re-set them)
+
+
+================================================================================
+8. FRONTEND UPDATE (Vercel)
+================================================================================
+
+Your frontend currently calls /api/* (Vercel serverless). Update to point at
+Cloud Run backend instead.
+
+8.1 ENV VAR IN VERCEL
+  Vercel Dashboard → your project → Settings → Environment Variables
+  Add:
+    VITE_API_BASE_URL = https://outreach-backend-abc123-uc.a.run.app
+
+8.2 UPDATE frontend/src/api.js
+  const BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+  (replaces hardcoded '/api')
+
+8.3 REDEPLOY VERCEL
+  git push main — Vercel auto-deploys
+
+8.4 CORS ON BACKEND
+  In backend/server.js, ensure CORS allows your Vercel origin:
+    import cors from 'cors';
+    app.use(cors({
+      origin: [
+        'https://outreach-jt.vercel.app',
+        'http://localhost:5173',  // local dev
+      ],
+      credentials: true,
+    }));
+
+
+================================================================================
+9. SCHEDULED JOBS — CLOUD SCHEDULER (replaces node-cron)
+================================================================================
+
+Your backend uses node-cron. On Cloud Run, the container scales to zero when
+idle, so in-process cron does NOT work. Use Cloud Scheduler to trigger
+endpoints on a schedule.
+
+Example: run auto-apply daily at 9 AM:
+
+  gcloud scheduler jobs create http daily-autoapply \
+    --location us-central1 \
+    --schedule "0 9 * * *" \
+    --time-zone "America/Chicago" \
+    --uri "https://outreach-backend-abc123-uc.a.run.app/career/auto-apply/run" \
+    --http-method POST \
+    --body '{"mode":"auto","limit":10}' \
+    --headers "Content-Type=application/json" \
+    --project outreach-os-<suffix>
+
+
+Repeat for any other cron-triggered routes (scraping, cleanup, etc.).
+Free tier = 3 jobs. Combine cron triggers into one endpoint if you need more.
+
+
+================================================================================
+10. LOGS AND DEBUGGING
+================================================================================
+
+10.1 LIVE LOGS
+  gcloud run logs tail outreach-backend --region us-central1
+
+10.2 CONSOLE UI
+  Cloud Run → outreach-backend → Logs tab
+
+10.3 ERROR ALERTS
+  Cloud Run → outreach-backend → Metrics → Create alert on 5xx error rate
+
+
+================================================================================
+11. MIGRATION CHECKLIST (PLAN B → PRODUCTION)
+================================================================================
+
+Pre-flight (do NOW while Oracle scripts run):
+  [ ] Create GCP account
+  [ ] Set billing alert at $1
+  [ ] Install gcloud CLI on Mac
+  [ ] Create outreach-os GCP project
+  [ ] Enable Cloud Run, Cloud Build, Cloud Scheduler APIs
+
+Backend prep:
+  [ ] Create Supabase project
+  [ ] Migrate schema from db.js → Supabase SQL Editor
+  [ ] Refactor backend/db.js: better-sqlite3 → pg (Postgres)
+  [ ] Add /healthz endpoint in server.js
+  [ ] Bind server to process.env.PORT on '0.0.0.0'
+  [ ] Create backend/Dockerfile + .dockerignore
+  [ ] Test container locally: docker build . && docker run -p 8080:8080
+  [ ] Verify Playwright works in container: test a scrape locally
+
+Deploy:
+  [ ] First deploy: gcloud run deploy ...
+  [ ] Verify /healthz responds on the Cloud Run URL
+  [ ] Add env vars via --set-env-vars
+  [ ] Test one end-to-end scrape via the new URL
+
+Frontend swap:
+  [ ] Add VITE_API_BASE_URL env var in Vercel
+  [ ] Update api.js to use the env var
+  [ ] Deploy Vercel
+  [ ] Test full flow: login → search → apply
+
+Scheduling:
+  [ ] Create Cloud Scheduler job for daily auto-apply
+  [ ] Test manual trigger: gcloud scheduler jobs run daily-autoapply
+
+Cleanup:
+  [ ] Kill Oracle retry scripts: kill 40112 (Chicago) and kill 63935 (Mumbai)
+  [ ] Remove caffeinate process
+  [ ] Disable Vercel serverless backend routes (if any remain)
+
+Post-launch:
+  [ ] Monitor first 24 hours of logs
+  [ ] Check billing shows $0 at end of first week
+  [ ] Set up weekly "free tier usage" review reminder
+
+
+================================================================================
+12. COMMON PITFALLS AND FIXES
+================================================================================
+
+P1. "Container failed to start" on first deploy
+   Cause: binding to 127.0.0.1 instead of 0.0.0.0
+   Fix: ensure app.listen(PORT, '0.0.0.0', ...)
+
+P2. Playwright error: "browserType.launch: Executable doesn't exist"
+   Cause: Playwright browsers not installed in container
+   Fix: ensure Dockerfile has RUN npx playwright install chromium --with-deps
+        (or use the mcr.microsoft.com/playwright base image as in §6)
+
+P3. "Memory limit exceeded"
+   Cause: Chromium + your app exceeded 1 GB
+   Fix: --memory 2Gi on deploy (still free-tier)
+
+P4. Slow first request after idle (~3–5s cold start)
+   Cause: Cloud Run scales to zero, new container takes time to boot
+   Fix (if needed): --min-instances 1
+     WARNING: This keeps one instance always running = uses continuous GB-sec
+     and will push you into paid territory. Only use if UX requires it.
+
+P5. "Could not connect to Supabase"
+   Cause: Cloud Run cannot reach Supabase direct connection (port 5432)
+   Fix: use Supabase's POOLER connection on port 6543 (transaction mode)
+
+P6. Deploy hangs at "Building using Dockerfile..."
+   Cause: .dockerignore missing, Cloud Build uploads 500 MB node_modules
+   Fix: verify .dockerignore excludes node_modules and data
+
+P7. 404 on API calls from frontend
+   Cause: VITE_API_BASE_URL not set or frontend not redeployed
+   Fix: redeploy Vercel after setting the env var, confirm in browser devtools
+
+P8. Scheduled job never fires
+   Cause: Cloud Scheduler wrong region, wrong URL, or auth missing
+   Fix: run `gcloud scheduler jobs run <name>` manually to see the error
+
+
+================================================================================
+13. HYBRID STRATEGY — IF ORACLE LANDS LATER
+================================================================================
+
+If your Oracle retry script eventually lands a VM AFTER you've already
+deployed to Cloud Run:
+
+Option A: Keep Cloud Run, ignore Oracle
+  - You're already running $0 on Cloud Run with less maintenance
+  - Terminate the Oracle VM to free Always-Free quota for future use
+
+Option B: Migrate to Oracle for more RAM / persistent compute
+  - Set up Oracle VM per original PLAN.txt Phase 2
+  - Point Vercel VITE_API_BASE_URL at Oracle IP instead of Cloud Run
+  - Decommission Cloud Run: gcloud run services delete outreach-backend
+  - Advantage: no cold starts, persistent filesystem
+  - Disadvantage: you manage OS patches, SSL renewal, nginx config
+
+Decision rule:
+  - Low traffic (where you are now): Cloud Run wins on simplicity
+  - High traffic or need persistent compute: Oracle VM wins on capacity
+
+
+================================================================================
+14. EXIT CRITERIA — WHEN TO ABANDON PLAN B
+================================================================================
+
+Stop and pivot if ANY of these happen:
+
+  - Monthly bill exceeds $5 unexpectedly
+    Likely cause: min-instances set > 0, or a runaway loop in your code
+    Action: set --min-instances 0, investigate logs for infinite loops
+
+  - Cold starts unacceptable for UX (reports from users)
+    Action: increase --min-instances to 1 (accept small monthly cost ~$3)
+            OR pivot to Oracle VM if capacity has landed by then
+
+  - Feature you need is not supported
+    Unlikely — Cloud Run is a full Linux container, supports almost everything
+
+  - Supabase free tier exceeded (500 MB DB)
+    Action: upgrade Supabase to Pro ($25/mo) OR migrate DB to a cheaper
+            provider (Neon free, PlanetScale, self-hosted on Oracle VM
+            if available)
+
+
+================================================================================
+15. QUICK COMMAND REFERENCE
+================================================================================
+
+# Deploy new version
+gcloud run deploy outreach-backend --source . --region us-central1
+
+# Tail logs
+gcloud run logs tail outreach-backend --region us-central1
+
+# List services
+gcloud run services list
+
+# Delete service (decommission)
+gcloud run services delete outreach-backend --region us-central1
+
+# List scheduled jobs
+gcloud scheduler jobs list --location us-central1
+
+# Manually trigger a scheduled job
+gcloud scheduler jobs run daily-autoapply --location us-central1
+
+# Check costs
+# Console → Billing → Reports → filter by project
+
+# Check free-tier usage
+# Console → Billing → Cost breakdown → look for "SKU: Cloud Run..."
+
+
+================================================================================
+END OF PLAN B
+================================================================================
+
+Next step when ready: work through §11 checklist top to bottom. Expect
+4–6 hours of total effort spread across 2 sessions:
+  Session 1 (2–3 hrs): GCP setup + Supabase migration + Dockerfile
+  Session 2 (2–3 hrs): Deploy, frontend swap, scheduler, end-to-end test

@@ -306,6 +306,8 @@ export const api = {
     autoApplyQueue:   () => apiCall('/career/auto-apply-queue'),
     nightlySettings:  () => apiCall('/career/nightly-settings'),
     saveNightlySettings: (body) => apiCall('/career/nightly-settings', { method: 'PUT', body }),
+    autoQueueSettings:    () => apiCall('/career/auto-queue-settings'),
+    saveAutoQueueSettings: (body) => apiCall('/career/auto-queue-settings', { method: 'PUT', body }),
     runNightlyPipeline:  (overrides = {}) => apiCall('/career/nightly-pipeline', { method: 'POST', body: overrides }),
     nightlyLastRun:      () => apiCall('/career/nightly-pipeline/last-run'),
 

@@ -176,7 +176,16 @@ router.post('/evaluate', async (req, res) => {
       console.error('[careerOps] report save failed:', err.message);
     }
 
-    res.json({ ok: true, evalId, evaluation });
+    // Auto-queue if grade meets threshold + consent given. Silent on failure
+    // so a bad setting never blocks the evaluation result.
+    let autoQueued = false;
+    try {
+      autoQueued = await maybeAutoQueue(req.user.id, evalId, evaluation.grade);
+    } catch (err) {
+      console.error('[careerOps] auto-queue failed:', err.message);
+    }
+
+    res.json({ ok: true, evalId, evaluation, autoQueued });
   } catch (err) {
     console.error('[careerOps] evaluate error:', err.message);
     res.status(500).json({ error: err.message });
@@ -547,6 +556,68 @@ router.post('/bulk-queue', async (req, res) => {
 
 async function getAutoApplyProfile(userId) {
   return (await one('SELECT * FROM user_profile WHERE user_id = $1', [userId])) || {};
+}
+
+// ── Auto-queue settings ──────────────────────────────────────────────────────
+// "After every evaluation, if the grade is good enough, automatically flip
+// apply_mode='auto' + apply_status='queued' so the worker picks it up on its
+// next run." Stored in meta as JSON under key 'auto_queue_settings'.
+//
+// minGrade values: '' (off) | 'A' | 'B' | 'C' | 'D' | 'F'.
+//   '' = disabled, do not auto-queue anything
+//   'A' = only auto-queue grade A
+//   'B' = auto-queue A or B (default when enabled)
+//   etc.
+const GRADE_RANK = { A: 1, B: 2, C: 3, D: 4, F: 5 };
+
+async function getAutoQueueSettings(userId) {
+  const row = await one("SELECT value FROM meta WHERE user_id = $1 AND key = 'auto_queue_settings'", [userId]);
+  if (!row?.value) return { minGrade: '' };
+  try { return { minGrade: '', ...(JSON.parse(row.value) || {}) }; }
+  catch { return { minGrade: '' }; }
+}
+
+router.get('/auto-queue-settings', async (req, res) => {
+  try {
+    const settings = await getAutoQueueSettings(req.user.id);
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/auto-queue-settings', async (req, res) => {
+  try {
+    const minGrade = ['', 'A', 'B', 'C', 'D', 'F'].includes(req.body?.minGrade) ? req.body.minGrade : '';
+    await run(`
+      INSERT INTO meta (user_id, key, value)
+      VALUES ($1, 'auto_queue_settings', $2)
+      ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
+    `, [req.user.id, JSON.stringify({ minGrade })]);
+    res.json({ minGrade });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Internal: should this evaluation get auto-queued given user settings?
+// Caller should also confirm auto_apply_consent before flipping the flag.
+async function maybeAutoQueue(userId, evalId, grade) {
+  if (!grade) return false;
+  const [{ minGrade }, profile] = await Promise.all([
+    getAutoQueueSettings(userId),
+    getAutoApplyProfile(userId),
+  ]);
+  if (!minGrade) return false;
+  if (!profile?.auto_apply_consent) return false;
+  const evalRank   = GRADE_RANK[grade] || 99;
+  const thresholdRank = GRADE_RANK[minGrade] || 99;
+  if (evalRank > thresholdRank) return false;
+  await run(
+    "UPDATE evaluations SET apply_mode = 'auto', apply_status = 'queued' WHERE id = $1 AND user_id = $2",
+    [evalId, userId]
+  );
+  return true;
 }
 
 // ── Queue specific evaluation IDs for auto-apply ─────────────────────────────
@@ -1187,7 +1258,12 @@ router.post('/batch-evaluate', async (req, res) => {
         RETURNING id
       `, [req.user.id, url, evaluation.jobTitle, evaluation.companyName, fetched.text.slice(0, 5000), evaluation.grade, evaluation.overallScore, JSON.stringify(evaluation)]);
 
-      return { url, evalId: r.insertId, evaluation, status: 'done' };
+      // Auto-queue this batch result too if grade clears the user threshold.
+      let autoQueued = false;
+      try { autoQueued = await maybeAutoQueue(req.user.id, r.insertId, evaluation.grade); }
+      catch (e) { console.error('[batch-evaluate] auto-queue failed:', e.message); }
+
+      return { url, evalId: r.insertId, evaluation, status: 'done', autoQueued };
     }));
 
     for (let j = 0; j < settled.length; j++) {
