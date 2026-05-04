@@ -129,19 +129,19 @@ export async function scanResumesFromStorage(userId) {
 
 /**
  * Given a job title / description, pick the best resume for it.
- * Returns the resume record (or null if resumeDir is empty).
+ * Returns the resume record (or null if no acceptable match).
  *
  * Matching logic:
  *   1. Match by keyword against ARCHETYPE_FOLDERS keywords
  *   2. Find the resume for that archetype
- *   3. If no match, return the "startup" / wellfound resume as generic fallback
- *   4. If no startup resume either, return the first available resume
+ *   3. If `strict=true` and no keyword match → return null (caller should
+ *      mark the eval needs_review). If `strict=false` → fall back to
+ *      'startup' / wellfound, then the first resume.
  */
-export function pickResumeForRole(resumes, { jobTitle = '', jobDescription = '', archetypeHint = '' } = {}) {
+export function pickResumeForRole(resumes, { jobTitle = '', jobDescription = '', archetypeHint = '', strict = false } = {}) {
   if (!resumes || resumes.length === 0) return null;
   const haystack = `${jobTitle} ${jobDescription} ${archetypeHint}`.toLowerCase();
 
-  // Try each archetype's keywords, in priority order.
   for (const a of ARCHETYPE_FOLDERS) {
     if (a.keywords.some(kw => haystack.includes(kw))) {
       const r = resumes.find(x => x.archetype === a.archetype);
@@ -149,7 +149,7 @@ export function pickResumeForRole(resumes, { jobTitle = '', jobDescription = '',
     }
   }
 
-  // Fallback: startup/wellfound, then the first resume.
+  if (strict) return null;
   return resumes.find(r => r.archetype === 'startup') || resumes[0];
 }
 

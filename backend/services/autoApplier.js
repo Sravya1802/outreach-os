@@ -23,8 +23,7 @@
 import path from 'path';
 import fs from 'fs';
 import db, { one, all, run } from '../db.js';
-import { scanResumes, scanResumesFromStorage, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
-import { tailorResume, generateResumePDF } from './resumeGenerator.js';
+import { scanResumesFromStorage, pickResumeForRole, detectPlatform } from './resumeRegistry.js';
 import { validateProfileForApply } from './applyValidation.js';
 
 // Status values we write back to evaluations.apply_status during processing.
@@ -269,71 +268,31 @@ export async function processOneEvaluation(userId, evalId, { headless = true, dr
     return { ok: false, error: profileCheck.reason, needsReview: true };
   }
 
-  // Resume selection.
-  // - useLibraryResume=true (nightly mode): skip tailored generation entirely,
-  //   pick the closest archetype match from the user's resume library. Faster
-  //   and avoids hitting the AI/PDF pipeline for every queued role.
-  // - useLibraryResume=false (default): prefer tailored PDF; generate one if
-  //   the evaluation has a JD; fall back to library only as last resort.
-  let resume = null;
-
-  if (useLibraryResume) {
-    // Prefer Supabase Storage (the bucket the CareerOps Library UI writes to —
-    // this is what's actually fresh for non-founder users). Fall back to the
-    // local FS layout only if storage is empty or not configured.
-    const storageResumes = await scanResumesFromStorage(userId);
-    let resumes = storageResumes;
-    if (!resumes.length) resumes = scanResumes(profile.resume_dir);
-    resume = pickResumeForRole(resumes, {
-      jobTitle:       row.job_title,
-      jobDescription: row.job_description || '',
-      archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
+  // Resume selection — Resume Library only.
+  // The user wants a single source of truth: the per-archetype PDFs they
+  // uploaded in Auto-Apply Setup → Resume Library (AIML / DS / SWE / DEVOPS /
+  // FULLSTACK / STARTUP / MISC). We deliberately do NOT consult:
+  //   - per-evaluation tailored PDFs (row.pdf_path)
+  //   - on-the-fly AI-tailored generation (tailorResume + generateResumePDF)
+  //   - filesystem default in profile.resume_dir
+  // pickResumeForRole maps the role's archetype hint (or JD/title keywords)
+  // to the closest library entry; if no match it falls back to 'startup',
+  // then the first available library resume.
+  const libraryResumes = await scanResumesFromStorage(userId);
+  const resume = pickResumeForRole(libraryResumes, {
+    jobTitle:       row.job_title,
+    jobDescription: row.job_description || '',
+    archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
+    strict:         true, // user opted into strict matching — no fuzzy fallback
+  });
+  if (resume) {
+    console.log(`[autoApply] library resume "${resume.filename}" (archetype=${resume.archetype}) for eval ${evalId}`);
+  } else {
+    await setStatus(userId, evalId, STATUS.needs_review, {
+      error: 'No archetype-matching resume in your Resume Library — submission paused. Upload the matching archetype PDF in Auto-Apply Setup → Resume Library, then re-queue this role.',
+      platform,
     });
-    if (resume) console.log(`[autoApply] nightly mode — library resume "${resume.filename}" (${resume.source || 'fs'}) for eval ${evalId}`);
-  } else if (row.pdf_path && fs.existsSync(row.pdf_path)) {
-    resume = { filename: path.basename(row.pdf_path), absPath: row.pdf_path, source: 'tailored' };
-    console.log(`[autoApply] using tailored resume for eval ${evalId}: ${resume.filename}`);
-  } else if (row.job_description) {
-    // No tailored PDF yet — generate one on the fly so auto-apply always submits
-    // a role-personalized CV instead of a generic one.
-    try {
-      const resumeRow = await one(
-        "SELECT value FROM meta WHERE key = 'user_resume_text' AND user_id = $1",
-        [userId]
-      );
-      const resumeText = resumeRow?.value;
-      if (resumeText) {
-        console.log(`[autoApply] generating tailored resume for eval ${evalId}…`);
-        const tailored = await tailorResume(resumeText, row.job_description, row.job_title, row.company_name);
-        const candidateName = [profile?.first_name, profile?.last_name].filter(Boolean).join(' ').trim() || 'Candidate';
-        const { pdfPath } = await generateResumePDF(tailored, row.company_name, row.job_title, candidateName);
-        await run(
-          'UPDATE evaluations SET pdf_path = $1 WHERE id = $2 AND user_id = $3',
-          [pdfPath, evalId, userId]
-        );
-        resume = { filename: path.basename(pdfPath), absPath: pdfPath, source: 'tailored-justnow' };
-      }
-    } catch (err) {
-      console.warn(`[autoApply] tailored generation failed (${err.message}) — falling back to common resume`);
-    }
-  }
-
-  if (!resume) {
-    // Same precedence as the nightly path — storage first, FS second.
-    const storageResumes = await scanResumesFromStorage(userId);
-    let resumes = storageResumes;
-    if (!resumes.length) resumes = scanResumes(profile.resume_dir);
-    resume = pickResumeForRole(resumes, {
-      jobTitle:       row.job_title,
-      jobDescription: row.job_description || '',
-      archetypeHint:  (row.report_json ? JSON.parse(row.report_json)?.archetype?.primary : '') || '',
-    });
-    if (resume) console.log(`[autoApply] fallback to common resume "${resume.filename}" (${resume.source || 'fs'}) for eval ${evalId}`);
-  }
-
-  if (!resume) {
-    await setStatus(userId, evalId, STATUS.failed, { error: `No resume available (no tailored PDF and nothing in ${profile.resume_dir})`, platform, incrementAttempts: true });
-    return { ok: false, error: 'No resume found' };
+    return { ok: false, error: 'No matching library resume', needsReview: true };
   }
 
   const supported = ['greenhouse', 'lever', 'ashby'];
