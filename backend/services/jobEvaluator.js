@@ -189,12 +189,113 @@ async function fetchWorkdayJD(jobUrl) {
   } catch { return null; }
 }
 
+// Ashby pages are React SPAs — plain fetch returns ~46 chars of HTML shell.
+// Ashby's public job-board API returns descriptionPlain for every listed job.
+//   URL: https://jobs.ashbyhq.com/<org>/<jobId>[/application]?...
+//   API: https://api.ashbyhq.com/posting-api/job-board/<org>?includeCompensation=true
+// We pull the whole board (small JSON, single request) and filter by jobId.
+async function fetchAshbyJD(jobUrl) {
+  try {
+    const u = new URL(jobUrl);
+    if (!/jobs\.ashbyhq\.com$/i.test(u.hostname)) return null;
+    const parts = u.pathname.split('/').filter(Boolean);
+    const org = parts[0];
+    const jobId = parts[1];
+    if (!org || !jobId) return null;
+    const res = await fetch(`https://api.ashbyhq.com/posting-api/job-board/${encodeURIComponent(org)}?includeCompensation=true`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
+      signal:  AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const job = (data?.jobs || []).find(j => j.id === jobId);
+    if (!job) return null;
+    const text = [
+      job.title,
+      job.location,
+      job.employmentType,
+      job.descriptionPlain,
+    ].filter(Boolean).join('\n\n').replace(/\s{3,}/g, '\n\n').trim().slice(0, 8000);
+    return text.length > 200 ? text : null;
+  } catch { return null; }
+}
+
+// Greenhouse boards expose every posting via a public JSON API.
+//   URL: https://boards.greenhouse.io/<board>/jobs/<id>
+//        https://job-boards.greenhouse.io/<board>/jobs/<id>
+//   API: https://boards-api.greenhouse.io/v1/boards/<board>/jobs/<id>?content=true
+async function fetchGreenhouseJD(jobUrl) {
+  try {
+    const u = new URL(jobUrl);
+    if (!/^(boards|job-boards)\.greenhouse\.io$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^\/([^/]+)\/jobs\/(\d+)/);
+    if (!m) return null;
+    const [, board, id] = m;
+    const res = await fetch(`https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs/${id}?content=true`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
+      signal:  AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const { load } = await import('cheerio');
+    const $ = load(`<div>${data?.content || ''}</div>`);
+    const text = [
+      data?.title,
+      data?.location?.name,
+      $('div').text().replace(/&nbsp;/g, ' '),
+    ].filter(Boolean).join('\n\n').replace(/\s{3,}/g, '\n\n').trim().slice(0, 8000);
+    return text.length > 200 ? text : null;
+  } catch { return null; }
+}
+
+// Lever postings expose a public JSON API.
+//   URL: https://jobs.lever.co/<org>/<id>[/apply]
+//   API: https://api.lever.co/v0/postings/<org>/<id>?mode=json
+async function fetchLeverJD(jobUrl) {
+  try {
+    const u = new URL(jobUrl);
+    if (!/jobs\.lever\.co$/i.test(u.hostname)) return null;
+    const m = u.pathname.match(/^\/([^/]+)\/([^/]+)/);
+    if (!m) return null;
+    const [, org, id] = m;
+    const res = await fetch(`https://api.lever.co/v0/postings/${encodeURIComponent(org)}/${encodeURIComponent(id)}?mode=json`, {
+      headers: { Accept: 'application/json', 'User-Agent': 'Mozilla/5.0 OutreachOS/1.0' },
+      signal:  AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const { load } = await import('cheerio');
+    const lists = (data?.lists || []).map(l => `${l.text || ''}\n${(l.content || '').replace(/<[^>]+>/g, '')}`).join('\n\n');
+    const $ = load(`<div>${data?.descriptionPlain || data?.description || ''}</div>`);
+    const text = [
+      data?.text,
+      data?.categories?.location,
+      data?.categories?.commitment,
+      $('div').text(),
+      lists,
+    ].filter(Boolean).join('\n\n').replace(/\s{3,}/g, '\n\n').trim().slice(0, 8000);
+    return text.length > 200 ? text : null;
+  } catch { return null; }
+}
+
 export async function fetchJobFromUrl(url) {
-  // Try Workday's JSON API first if the URL pattern matches — saves us from
-  // a wasted plain-HTML fetch that would only return an empty SPA shell.
+  // Try host-specific JSON APIs first — saves us from wasted plain-HTML
+  // fetches against React/SPA boards that only return an empty shell.
   if (/myworkdayjobs\.com/i.test(url)) {
-    const wdText = await fetchWorkdayJD(url);
-    if (wdText) return { text: wdText, url, source: 'workday-api' };
+    const t = await fetchWorkdayJD(url);
+    if (t) return { text: t, url, source: 'workday-api' };
+  }
+  if (/jobs\.ashbyhq\.com/i.test(url)) {
+    const t = await fetchAshbyJD(url);
+    if (t) return { text: t, url, source: 'ashby-api' };
+  }
+  if (/(boards|job-boards)\.greenhouse\.io/i.test(url)) {
+    const t = await fetchGreenhouseJD(url);
+    if (t) return { text: t, url, source: 'greenhouse-api' };
+  }
+  if (/jobs\.lever\.co/i.test(url)) {
+    const t = await fetchLeverJD(url);
+    if (t) return { text: t, url, source: 'lever-api' };
   }
 
   try {
