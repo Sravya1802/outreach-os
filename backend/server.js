@@ -50,6 +50,12 @@ const CORS_ORIGINS = [...new Set([
   ...envOrigins,
   ...(FRONTEND_ORIGIN ? [FRONTEND_ORIGIN] : []),
 ])];
+// Behind nginx — trust the X-Forwarded-For header so express-rate-limit can
+// identify clients by their real IP and Express returns the right req.ip /
+// req.protocol. Without this, rate-limit throws ERR_ERL_UNEXPECTED_X_FORWARDED_FOR
+// every minute and may misclassify all clients as the proxy.
+app.set('trust proxy', 1);
+
 app.use(cors({ origin: CORS_ORIGINS, credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 

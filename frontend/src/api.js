@@ -65,10 +65,26 @@ async function apiCall(url, options = {}) {
   if (options.body !== undefined) {
     init.body = isFormData(options.body) ? options.body : JSON.stringify(options.body)
   }
-  const res = await fetch(apiUrl(url), init)
+  // Distinguish three failure modes: network-level (fetch threw), HTTP error
+  // with JSON body, HTTP error with non-JSON body. The bare "Failed to fetch"
+  // browser default is unhelpful — surface a more actionable hint instead.
+  let res
+  try {
+    res = await fetch(apiUrl(url), init)
+  } catch (err) {
+    const isFetchFail = /Failed to fetch|NetworkError|TypeError/i.test(err?.message || '')
+    if (isFetchFail) {
+      const isAuthRefresh = !auth.Authorization
+      const hint = isAuthRefresh
+        ? "Couldn't reach the backend — check that you're signed in (session may have expired)."
+        : "Couldn't reach the backend at " + apiUrl(url) + ". Check connection / VPN / backend status, then retry."
+      throw new Error(hint)
+    }
+    throw err
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || 'Request failed')
+    throw new Error(err.error || `Request failed (HTTP ${res.status})`)
   }
   return res.json()
 }
