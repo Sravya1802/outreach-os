@@ -34,58 +34,62 @@ const SHARED_MD = loadMode('_shared');
 
 // ── AI call ───────────────────────────────────────────────────────────────────
 //
-// Claude Sonnet 4.6 with prompt caching is preferred — the SYSTEM CONTEXT and
-// OFERTA MODE markdown together are ~12K tokens of static rubric that gets
-// reused on every evaluation. Caching them as a system message drops cost ~90%
-// after the first call and keeps quality on par with what users get from
-// pasting the same JD/resume into Claude.ai.
+// Provider preference for evaluation quality (when Anthropic is unavailable):
+//   1. OpenAI gpt-4o — strong reasoning, JSON mode, ~$0.05 per eval
+//   2. Gemini 2.5 Pro — comparable reasoning, ~$0.04 per eval
+//   3. Anthropic Sonnet 4.6 with prompt caching — only if user provides key
 //
-// Falls back to Gemini, then OpenAI if Anthropic is unavailable.
+// We prefer the FULL gpt-4o (not -mini) here because the verdict / top-3 gaps /
+// calibrated probability schema needs real reasoning depth — mini is too
+// shallow and produces hedged, generic output. Same reason 2.5 Pro over Flash.
 
 async function callAI({ system, user }) {
   const errors = [];
 
-  // Anthropic — primary path (best quality + caching)
-  if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'optional_fallback') {
-    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  // OpenAI gpt-4o — primary when no Anthropic key
+  if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'optional_fallback') {
+    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     for (let i = 0; i < 2; i++) {
       try {
         const msg = await Promise.race([
-          client.messages.create({
-            model: 'claude-sonnet-4-6',
+          client.chat.completions.create({
+            model: 'gpt-4o',
             max_tokens: 8192,
             temperature: 0.3,
-            system: [
-              {
-                type: 'text',
-                text: system,
-                cache_control: { type: 'ephemeral' },
-              },
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: user },
             ],
-            messages: [{ role: 'user', content: user }],
           }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('Claude timeout')), 90000)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('OpenAI timeout')), 90000)),
         ]);
-        return msg.content[0].text;
+        return msg.choices[0].message.content;
       } catch (err) {
-        errors.push(`Claude: ${err.message?.slice(0, 80)}`);
-        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed|529|overloaded/i.test(err.message)) continue;
+        errors.push(`OpenAI: ${err.message?.slice(0, 80)}`);
+        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed|429|529/i.test(err.message)) continue;
         break;
       }
     }
   }
 
-  // Gemini fallback — concatenate system + user (Gemini's free tier is
-  // best-effort, so accept lower quality here).
+  // Gemini 2.5 Pro fallback — also strong reasoning
   if (process.env.GEMINI_API_KEY) {
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    const combined = `${system}\n\n${user}`;
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      systemInstruction: system,
+      generationConfig: {
+        temperature: 0.3,
+        maxOutputTokens: 8192,
+        responseMimeType: 'application/json',
+      },
+    });
     for (let i = 0; i < 2; i++) {
       try {
         const result = await Promise.race([
-          model.generateContent(combined),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('Gemini timeout')), 25000)),
+          model.generateContent(user),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Gemini timeout')), 60000)),
         ]);
         return result.response.text();
       } catch (err) {
@@ -100,27 +104,25 @@ async function callAI({ system, user }) {
     }
   }
 
-  // OpenAI fallback — uses system role natively
-  if (process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY !== 'optional_fallback') {
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  // Anthropic — only if user opts in by setting ANTHROPIC_API_KEY
+  if (process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'optional_fallback') {
+    const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     for (let i = 0; i < 2; i++) {
       try {
         const msg = await Promise.race([
-          client.chat.completions.create({
-            model: 'gpt-4o-mini',
-            max_tokens: 4096,
+          client.messages.create({
+            model: 'claude-sonnet-4-6',
+            max_tokens: 8192,
             temperature: 0.3,
-            messages: [
-              { role: 'system', content: system },
-              { role: 'user', content: user },
-            ],
+            system: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }],
+            messages: [{ role: 'user', content: user }],
           }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('OpenAI timeout')), 60000)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('Claude timeout')), 90000)),
         ]);
-        return msg.choices[0].message.content;
+        return msg.content[0].text;
       } catch (err) {
-        errors.push(`OpenAI: ${err.message?.slice(0, 80)}`);
-        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message)) continue;
+        errors.push(`Claude: ${err.message?.slice(0, 80)}`);
+        if (i === 0 && /timeout|ECONNRESET|ETIMEDOUT|fetch failed|529|overloaded/i.test(err.message)) continue;
         break;
       }
     }
