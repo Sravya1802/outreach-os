@@ -314,16 +314,69 @@ function ResumeFolderTab() {
   )
 }
 
+// Real attempts only — the worker actually tried to submit. These are
+// "past runs" in the meaningful sense.
+const RUN_STATUSES = new Set(['submitted', 'failed', 'submit_failed', 'needs_review', 'captcha_needed'])
+// Skipped / pending — never actually ran. We surface a small note about
+// these but don't pretend they're runs.
+const SKIPPED_STATUSES = new Set(['platform_unsupported', 'queued', 'opened'])
+
+const STATUS_STYLE = {
+  submitted:            { bg:'#dcfce7', color:'#15803d', label:'submitted' },
+  failed:               { bg:'#fee2e2', color:'#991b1b', label:'failed' },
+  submit_failed:        { bg:'#fee2e2', color:'#991b1b', label:'failed' },
+  needs_review:         { bg:'#fef3c7', color:'#92400e', label:'needs review' },
+  captcha_needed:       { bg:'#fef3c7', color:'#92400e', label:'captcha' },
+  platform_unsupported: { bg:'#f1f5f9', color:'#64748b', label:'unsupported ATS' },
+  queued:               { bg:'#eef2ff', color:'#4f46e5', label:'queued' },
+  opened:               { bg:'#f1f5f9', color:'#64748b', label:'opened' },
+}
+
 function HistoryTab() {
   const [rows, setRows] = useState([])
+  const [skippedCount, setSkippedCount] = useState(0)
+  const [showSkipped, setShowSkipped] = useState(false)
+  const [skippedRows, setSkippedRows] = useState([])
   const [loading, setLoading] = useState(true)
+
   useEffect(() => {
     api.career.evaluations()
       .then(d => {
         const arr = Array.isArray(d) ? d : (d?.evaluations || [])
-        const applied = arr.filter(e => e.apply_status && e.apply_status !== 'not_started')
-        applied.sort((a, b) => (b.applied_at || '').localeCompare(a.applied_at || ''))
-        setRows(applied)
+        // Dedupe by job_url — repeated queueing of the same role created
+        // ×3 entries like "Staff AI Engineer - Notebooks" at Datadog.
+        const seen = new Map()
+        for (const ev of arr) {
+          if (!ev.apply_status || ev.apply_status === 'not_started') continue
+          const key = ev.job_url || `id:${ev.id}`
+          const prev = seen.get(key)
+          // Keep the row whose status is most informative (a real run beats
+          // a skip), then by most recent applied_at/updated_at/created_at.
+          const score = (e) => {
+            if (RUN_STATUSES.has(e.apply_status)) return 2
+            if (SKIPPED_STATUSES.has(e.apply_status)) return 1
+            return 0
+          }
+          if (!prev) {
+            seen.set(key, ev)
+          } else {
+            const s1 = score(ev), s2 = score(prev)
+            if (s1 > s2) seen.set(key, ev)
+            else if (s1 === s2) {
+              const t1 = ev.applied_at || ev.updated_at || ev.created_at || ''
+              const t2 = prev.applied_at || prev.updated_at || prev.created_at || ''
+              if (t1 > t2) seen.set(key, ev)
+            }
+          }
+        }
+        const deduped = [...seen.values()]
+        const runs    = deduped.filter(e => RUN_STATUSES.has(e.apply_status))
+        const skipped = deduped.filter(e => SKIPPED_STATUSES.has(e.apply_status))
+        runs.sort((a, b) => (b.applied_at || b.updated_at || '').localeCompare(a.applied_at || a.updated_at || ''))
+        skipped.sort((a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''))
+        setRows(runs)
+        setSkippedRows(skipped)
+        setSkippedCount(skipped.length)
       })
       .catch(() => setRows([]))
       .finally(() => setLoading(false))
@@ -331,31 +384,59 @@ function HistoryTab() {
 
   if (loading) return <div style={{ padding:'40px 0', textAlign:'center', color:'#94a3b8' }}>Loading…</div>
 
+  const renderRow = (r) => {
+    const style = STATUS_STYLE[r.apply_status] || { bg:'#eef2ff', color:'#4f46e5', label: r.apply_status }
+    return (
+      <div key={r.id} style={{ padding:'12px 16px', border:'1px solid #e2e8f0', borderRadius:10, display:'grid', gridTemplateColumns:'1fr 60px 130px 90px', gap:14, alignItems:'center', fontSize:13 }}>
+        <div>
+          <div style={{ fontWeight:700, color:'#0f172a' }}>{r.job_title}</div>
+          <div style={{ fontSize:11, color:'#94a3b8' }}>{r.company_name}</div>
+        </div>
+        <div style={{ fontWeight:700, color:'#4f46e5' }}>{r.grade || '—'}</div>
+        <div style={{ fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:5, background:style.bg, color:style.color, textAlign:'center' }}>
+          {style.label}
+        </div>
+        <div style={{ fontSize:11, color:'#94a3b8', textAlign:'right' }}>
+          {(r.applied_at || r.updated_at) ? new Date(r.applied_at || r.updated_at).toLocaleDateString() : '—'}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:14, padding:'24px 28px' }}>
-      <h2 style={{ fontSize:15, fontWeight:700, color:'#0f172a', margin:'0 0 18px' }}>Past Auto-Apply Runs · {rows.length}</h2>
+      <h2 style={{ fontSize:15, fontWeight:700, color:'#0f172a', margin:'0 0 4px' }}>Past Auto-Apply Runs · {rows.length}</h2>
+      <p style={{ fontSize:11, color:'#94a3b8', margin:'0 0 18px' }}>
+        Only roles the worker actually tried to submit. Skipped/queued entries are kept out of this list.
+      </p>
 
-      {rows.length === 0 && (
+      {rows.length === 0 ? (
         <div style={{ padding:'40px 0', textAlign:'center', color:'#94a3b8' }}>
           <div style={{ fontSize:36, marginBottom:8 }}>📜</div>
           <div style={{ fontSize:13, fontWeight:600 }}>No applications submitted yet</div>
           <div style={{ fontSize:11, marginTop:4 }}>Mark evaluations as auto + queued, then run the queue.</div>
         </div>
+      ) : (
+        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+          {rows.map(renderRow)}
+        </div>
       )}
 
-      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-        {rows.map(r => (
-          <div key={r.id} style={{ padding:'12px 16px', border:'1px solid #e2e8f0', borderRadius:10, display:'grid', gridTemplateColumns:'1fr 100px 100px 90px', gap:14, alignItems:'center', fontSize:13 }}>
-            <div>
-              <div style={{ fontWeight:700, color:'#0f172a' }}>{r.job_title}</div>
-              <div style={{ fontSize:11, color:'#94a3b8' }}>{r.company_name}</div>
+      {skippedCount > 0 && (
+        <div style={{ marginTop:24, paddingTop:18, borderTop:'1px solid #f1f5f9' }}>
+          <button onClick={() => setShowSkipped(v => !v)}
+            style={{ display:'flex', alignItems:'center', gap:8, padding:'8px 12px', background:'#f8fafc', border:'1px solid #e2e8f0', borderRadius:8, fontSize:12, fontWeight:600, color:'#64748b', cursor:'pointer' }}>
+            <span style={{ display:'inline-block', transform: showSkipped ? 'rotate(90deg)' : 'rotate(0)', transition:'transform 0.18s' }}>▶</span>
+            Skipped / pending · {skippedCount}
+            <span style={{ fontSize:10, color:'#94a3b8', fontWeight:500 }}>(unsupported ATS / still queued)</span>
+          </button>
+          {showSkipped && (
+            <div style={{ display:'flex', flexDirection:'column', gap:8, marginTop:10 }}>
+              {skippedRows.map(renderRow)}
             </div>
-            <div style={{ fontWeight:700, color:'#4f46e5' }}>{r.grade || '—'}</div>
-            <div style={{ fontSize:11, fontWeight:600, padding:'3px 8px', borderRadius:5, background:'#eef2ff', color:'#4f46e5', textAlign:'center' }}>{r.apply_status}</div>
-            <div style={{ fontSize:11, color:'#94a3b8', textAlign:'right' }}>{r.applied_at ? new Date(r.applied_at).toLocaleDateString() : '—'}</div>
-          </div>
-        ))}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
