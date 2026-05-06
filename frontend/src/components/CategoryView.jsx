@@ -429,25 +429,6 @@ function RegularCategoryView({ categoryName }) {
                         {c.source.split(',')[0]}
                       </span>
                     )}
-                    {/* Status pill — colored by status, opens themed menu
-                        on click. Sits inline as metadata next to the
-                        company name; out of the action row. */}
-                    <div onClick={e => e.stopPropagation()}>
-                      <Dropdown
-                        compact
-                        colorMap={STATUS_COLORS}
-                        ariaLabel={`Status for ${c.name}`}
-                        value={c.status || 'new'}
-                        onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
-                        options={[
-                          { value:'new',         label:'new' },
-                          { value:'researching', label:'researching' },
-                          { value:'contacted',   label:'contacted' },
-                          { value:'responded',   label:'responded' },
-                          { value:'skip',        label:'skip' },
-                        ]}
-                      />
-                    </div>
                   </div>
                   <div style={{ fontSize:11, color:'#64748b' }}>
                     {(c.roles && c.roles !== 'job') || c.role_title} {c.location ? `· ${c.location}` : ''}
@@ -455,6 +436,25 @@ function RegularCategoryView({ categoryName }) {
                   </div>
                 </div>
                 <div style={{ display:'flex', alignItems:'center', gap:6, flexShrink:0, flexWrap:'wrap' }}>
+                  {/* Status pill — sits at the right of the row, before
+                      the action buttons. Click opens a themed menu to
+                      change status. */}
+                  <div onClick={e => e.stopPropagation()}>
+                    <Dropdown
+                      compact
+                      colorMap={STATUS_COLORS}
+                      ariaLabel={`Status for ${c.name}`}
+                      value={c.status || 'new'}
+                      onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
+                      options={[
+                        { value:'new',         label:'new' },
+                        { value:'researching', label:'researching' },
+                        { value:'contacted',   label:'contacted' },
+                        { value:'responded',   label:'responded' },
+                        { value:'skip',        label:'skip' },
+                      ]}
+                    />
+                  </div>
                   <button onClick={async (e) => {
                       e.stopPropagation()
                       try {
