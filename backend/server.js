@@ -142,54 +142,53 @@ app.get('/api/jobs/last-refresh', async (req, res) => {
 // ── Stats endpoint ────────────────────────────────────────────────────────────
 app.get('/api/stats', async (req, res) => {
   try {
-    const [
-      c1, c2, c3, c4, c5, c6, c7, c8,
-    ] = await Promise.all([
-      one("SELECT COUNT(*)::int AS n FROM jobs WHERE user_id = $1", [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE user_id = $1", [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE email IS NOT NULL AND email != '' AND user_id = $1", [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM job_contacts WHERE linkedin_url IS NOT NULL AND linkedin_url != '' AND user_id = $1", [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'sent' AND user_id = $1", [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM outreach WHERE status = 'replied' AND user_id = $1", [req.user.id]),
-      one(`
-        SELECT COUNT(DISTINCT trim(src))::int AS n
-        FROM jobs
-        CROSS JOIN LATERAL unnest(string_to_array(source, ',')) AS s(src)
-        WHERE source IS NOT NULL AND source != '' AND trim(s.src) != '' AND user_id = $1
-      `, [req.user.id]),
-      one("SELECT COUNT(*)::int AS n FROM jobs WHERE yc_batch IS NOT NULL AND yc_batch != '' AND user_id = $1", [req.user.id]),
+    // Was 10 sequential one-counter-per-query SELECTs (~10 round-trips
+    // worth of latency, each scanning the same tables independently).
+    // Collapsed to 6 queries running in parallel: each table scanned at
+    // most once with COUNT(*) FILTER clauses doing the per-status math
+    // in-aggregate.
+    const [jobsAgg, jcAgg, outreachAgg, srcAgg, appsRow, metaRow] = await Promise.all([
+      one(`SELECT
+             COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE yc_batch IS NOT NULL AND yc_batch != '')::int AS yc_imported
+           FROM jobs WHERE user_id = $1`, [req.user.id]),
+      one(`SELECT
+             COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE email IS NOT NULL AND email != '')::int AS with_email,
+             COUNT(*) FILTER (WHERE linkedin_url IS NOT NULL AND linkedin_url != '')::int AS with_linkedin
+           FROM job_contacts WHERE user_id = $1`, [req.user.id]),
+      one(`SELECT
+             COUNT(*) FILTER (WHERE status = 'sent')::int    AS sent,
+             COUNT(*) FILTER (WHERE status = 'replied')::int AS replied
+           FROM outreach WHERE user_id = $1`, [req.user.id]),
+      // Source-distinct count needs LATERAL unnest — keep separate but
+      // still parallel.
+      one(`SELECT COUNT(DISTINCT trim(src))::int AS n
+           FROM jobs
+           CROSS JOIN LATERAL unnest(string_to_array(source, ',')) AS s(src)
+           WHERE source IS NOT NULL AND source != '' AND trim(s.src) != '' AND user_id = $1`, [req.user.id]),
+      one(`SELECT COUNT(*)::int AS n FROM company_applications
+             WHERE status != 'interested' AND user_id = $1`, [req.user.id]).catch(() => null),
+      one("SELECT value FROM meta WHERE user_id = $1 AND key = 'last_scrape_summary'", [req.user.id]).catch(() => null),
     ]);
-    let totalApplications = 0;
-    try {
-      const r = await one(
-        "SELECT COUNT(*)::int AS n FROM company_applications WHERE status != 'interested' AND user_id = $1",
-        [req.user.id]
-      );
-      totalApplications = r?.n || 0;
-    } catch (_) {}
-    const totalSent = c5?.n || 0;
-    const totalReplied = c6?.n || 0;
 
-    // Last scrape summary — written by /jobs/scrape; rendered on Dashboard
+    const totalSent    = outreachAgg?.sent    || 0;
+    const totalReplied = outreachAgg?.replied || 0;
     let lastScrape = null;
-    try {
-      const row = await one(
-        "SELECT value FROM meta WHERE user_id = $1 AND key = 'last_scrape_summary'",
-        [req.user.id]
-      );
-      if (row?.value) lastScrape = JSON.parse(row.value);
-    } catch (_) {}
+    if (metaRow?.value) {
+      try { lastScrape = JSON.parse(metaRow.value); } catch (_) {}
+    }
 
     res.json({
-      totalCompanies: c1?.n || 0,
-      totalContacts: c2?.n || 0,
-      contactsWithEmail: c3?.n || 0,
-      totalLinkedInContacts: c4?.n || 0,
+      totalCompanies:        jobsAgg?.total       || 0,
+      totalContacts:         jcAgg?.total         || 0,
+      contactsWithEmail:     jcAgg?.with_email    || 0,
+      totalLinkedInContacts: jcAgg?.with_linkedin || 0,
       totalSent,
       responseRate: totalSent > 0 ? Math.round((totalReplied / totalSent) * 100) : 0,
-      activeSources: c7?.n || 0,
-      ycImported: c8?.n || 0,
-      totalApplications,
+      activeSources:    srcAgg?.n              || 0,
+      ycImported:       jobsAgg?.yc_imported    || 0,
+      totalApplications: appsRow?.n             || 0,
       lastScrape,
     });
   } catch (err) {
