@@ -1911,11 +1911,73 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
               </div>
             </div>
 
+            {/* Verdict — Claude.ai-style decisive headline + buried-match
+                + calibrated interview odds. Surfaces the most useful parts
+                of the new evaluation prompt before the user has to dig
+                into individual blocks. Renders only when the evaluation
+                JSON has a verdict (older evals from before the prompt
+                upgrade fall through gracefully). */}
+            {evaluation.verdict && (
+              <div style={{ background:'linear-gradient(135deg,#fafafa,#f8fafc)', border:'2px solid #1e293b', borderRadius:14, padding:'16px 18px', marginBottom:16 }}>
+                <div style={{ fontSize:10, fontWeight:800, color:'#475569', textTransform:'uppercase', letterSpacing:'0.12em', marginBottom:6 }}>Verdict</div>
+                <div style={{ fontSize:17, fontWeight:800, color:'#0f172a', marginBottom:6, lineHeight:1.35 }}>{evaluation.verdict.headline}</div>
+                {evaluation.verdict.oneLineWhy && (
+                  <div style={{ fontSize:12, color:'#374151', lineHeight:1.6, marginBottom: evaluation.verdict.buriedMatch ? 10 : 0 }}>{evaluation.verdict.oneLineWhy}</div>
+                )}
+                {evaluation.verdict.buriedMatch && (
+                  <div style={{ marginTop:8, padding:'10px 12px', background:'#fef3c7', borderRadius:8, border:'1px solid #fcd34d' }}>
+                    <div style={{ fontSize:10, fontWeight:800, color:'#92400e', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:4 }}>⚠ Buried match</div>
+                    <div style={{ fontSize:11, color:'#374151', lineHeight:1.6 }}>{evaluation.verdict.buriedMatch}</div>
+                  </div>
+                )}
+                {evaluation.verdict.interviewOdds && (
+                  <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+                    <div style={{ padding:'10px 12px', background:'#fee2e2', borderRadius:8, border:'1px solid #fca5a5' }}>
+                      <div style={{ fontSize:9, fontWeight:800, color:'#991b1b', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:2 }}>As-is</div>
+                      <div style={{ fontSize:16, fontWeight:900, color:'#0f172a' }}>{evaluation.verdict.interviewOdds.asIs}</div>
+                    </div>
+                    <div style={{ padding:'10px 12px', background:'#dcfce7', borderRadius:8, border:'1px solid #86efac' }}>
+                      <div style={{ fontSize:9, fontWeight:800, color:'#15803d', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:2 }}>Tailored</div>
+                      <div style={{ fontSize:16, fontWeight:900, color:'#0f172a' }}>{evaluation.verdict.interviewOdds.properlyTailored}</div>
+                    </div>
+                    {evaluation.verdict.interviewOdds.reasoning && (
+                      <div style={{ gridColumn:'1 / -1', fontSize:11, color:'#64748b', lineHeight:1.55, fontStyle:'italic' }}>
+                        {evaluation.verdict.interviewOdds.reasoning}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Top 3 Gaps — most actionable insights from the new schema */}
+            {(evaluation.topGaps || []).length > 0 && (
+              <div style={{ marginBottom:16 }}>
+                <div style={{ fontSize:11, fontWeight:800, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:8 }}>Top 3 gaps to fix</div>
+                {evaluation.topGaps.slice(0, 3).map((g, i) => {
+                  const sevColor = g.severity === 'blocker' ? '#dc2626' : g.severity === 'high' ? '#d97706' : '#6366f1'
+                  const sevBg    = g.severity === 'blocker' ? '#fee2e2' : g.severity === 'high' ? '#fef3c7' : '#eef2ff'
+                  return (
+                    <div key={i} style={{ padding:'12px 14px', marginBottom:6, background:'#fff', borderRadius:10, border:'1px solid #e2e8f0', borderLeft:`4px solid ${sevColor}` }}>
+                      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6, flexWrap:'wrap' }}>
+                        <span style={{ fontSize:15, fontWeight:900, color:sevColor, width:20 }}>{i + 1}.</span>
+                        <span style={{ fontSize:9, fontWeight:800, padding:'2px 7px', borderRadius:5, background: sevBg, color: sevColor, textTransform:'uppercase', letterSpacing:'0.08em' }}>{g.severity}</span>
+                        <span style={{ fontSize:12, fontWeight:700, color:'#0f172a', flex:'1 1 200px' }}>{g.gap}</span>
+                      </div>
+                      <div style={{ fontSize:11, color:'#374151', lineHeight:1.6, paddingLeft:28 }}>
+                        <strong style={{ color:'#16a34a' }}>Fix:</strong> {g.fix}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
             {/* Tab nav */}
-            <div style={{ display:'flex', gap:2, marginBottom:20, background:'#f8fafc', borderRadius:10, padding:4 }}>
+            <div style={{ display:'flex', gap:2, marginBottom:20, background:'#f8fafc', borderRadius:10, padding:4, overflowX:'auto' }}>
               {BLOCKS.map(b => (
                 <button key={b.id} onClick={() => setActiveBlock(b.id)}
-                  style={{ flex:1, padding:'7px 4px', borderRadius:7, border:'none', fontSize:11, fontWeight:700, cursor:'pointer', transition:'all 0.15s', textAlign:'center',
+                  style={{ flex:'1 0 auto', padding:'7px 8px', borderRadius:7, border:'none', fontSize:11, fontWeight:700, cursor:'pointer', transition:'all 0.15s', textAlign:'center', whiteSpace:'nowrap',
                     background: activeBlock===b.id ? '#fff' : 'transparent',
                     color: activeBlock===b.id ? '#6366f1' : '#94a3b8',
                     boxShadow: activeBlock===b.id ? '0 1px 4px rgba(0,0,0,0.08)' : 'none' }}>

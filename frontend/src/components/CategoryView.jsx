@@ -464,18 +464,21 @@ function RegularCategoryView({ categoryName }) {
             </div>
           )
 
-          // Two-column grid: "Yet to check" on the left, "Already checked"
-          // on the right. Both visible at once so the user never has to
-          // toggle to see the other pile.
+          // Two-column grid on desktop, single column on phones / narrow
+          // tablets. The min track of 280px lets each section shrink
+          // gracefully on small viewports without forcing horizontal
+          // overflow (the previous 440px min was wider than a phone).
+          // minWidth:0 on each section so child rows can flex below the
+          // grid's intrinsic min-content width.
           return (
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(440px, 1fr))', gap:16, alignItems:'flex-start' }}>
-              <div>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:16, alignItems:'flex-start' }}>
+              <div style={{ minWidth:0 }}>
                 {sectionHeader('🔍', 'Yet to check', unchecked.length, '#6366f1')}
                 {unchecked.length > 0
                   ? unchecked.map(renderRow)
                   : emptyState('All companies in this category have been checked. 🎉')}
               </div>
-              <div>
+              <div style={{ minWidth:0 }}>
                 {sectionHeader('✓', 'Already checked', checked.length, '#16a34a')}
                 {checked.length > 0
                   ? checked.map(renderRow)
