@@ -233,17 +233,70 @@ app.get('/api/dashboard/job-metrics', async (req, res) => {
       // unrelated filters).
       one("SELECT COUNT(*)::int AS total FROM jobs WHERE user_id = $1", [uid]),
       all("SELECT grade, COUNT(*)::int AS n FROM evaluations WHERE grade IS NOT NULL AND user_id = $1 GROUP BY grade", [uid]),
+      // "Where your outreach effort went" — UNIONs activity from THREE
+      // sources so a company appearing in any of them shows up:
+      //   1. jobs + job_contacts → contacts found / outreach sent / replies
+      //   2. evaluations.company_name → CareerOps work (URL-evaluated roles
+      //      whose company doesn't have a matching jobs row)
+      //   3. company_applications → explicitly-tracked applications
+      // Companies are matched case-insensitively across sources, then ranked
+      // by total activity (sent + replied weighted heaviest, then evals,
+      // then contacts).
       all(`
-        SELECT j.name, j.category,
-               COUNT(jc.id)::int AS contact_count,
-               SUM(CASE WHEN jc.email IS NOT NULL AND jc.email != '' THEN 1 ELSE 0 END)::int AS email_count,
-               SUM(CASE WHEN jc.status IN ('sent','dm_sent','email_sent') THEN 1 ELSE 0 END)::int AS sent_count,
-               SUM(CASE WHEN jc.status = 'replied' THEN 1 ELSE 0 END)::int AS replied_count
-        FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id AND jc.user_id = $1
-        WHERE j.user_id = $1
-        GROUP BY j.id, j.name, j.category
-        HAVING COUNT(jc.id) > 0
-        ORDER BY contact_count DESC LIMIT 10
+        WITH activity AS (
+          SELECT
+            LOWER(TRIM(j.name)) AS k,
+            j.name AS name, j.category AS category,
+            COUNT(jc.id)::int AS contact_count,
+            SUM(CASE WHEN jc.email IS NOT NULL AND jc.email != '' THEN 1 ELSE 0 END)::int AS email_count,
+            SUM(CASE WHEN jc.status IN ('sent','dm_sent','email_sent') THEN 1 ELSE 0 END)::int AS sent_count,
+            SUM(CASE WHEN jc.status = 'replied' THEN 1 ELSE 0 END)::int AS replied_count,
+            0::int AS eval_count,
+            0::int AS app_count
+          FROM jobs j LEFT JOIN job_contacts jc ON jc.job_id = j.id AND jc.user_id = $1
+          WHERE j.user_id = $1
+          GROUP BY j.id, j.name, j.category
+
+          UNION ALL
+
+          SELECT
+            LOWER(TRIM(e.company_name)) AS k,
+            MAX(e.company_name) AS name, NULL AS category,
+            0, 0, 0, 0,
+            COUNT(*)::int AS eval_count,
+            0
+          FROM evaluations e
+          WHERE e.user_id = $1 AND e.company_name IS NOT NULL AND e.company_name != ''
+          GROUP BY LOWER(TRIM(e.company_name))
+
+          UNION ALL
+
+          SELECT
+            LOWER(TRIM(j.name)) AS k,
+            j.name AS name, j.category AS category,
+            0, 0, 0, 0, 0,
+            COUNT(ca.id)::int AS app_count
+          FROM company_applications ca JOIN jobs j ON j.id = ca.company_id AND j.user_id = $1
+          WHERE ca.user_id = $1
+          GROUP BY j.id, j.name, j.category
+        )
+        SELECT
+          MAX(name) AS name,
+          MAX(category) AS category,
+          SUM(contact_count)::int  AS contact_count,
+          SUM(email_count)::int    AS email_count,
+          SUM(sent_count)::int     AS sent_count,
+          SUM(replied_count)::int  AS replied_count,
+          SUM(eval_count)::int     AS eval_count,
+          SUM(app_count)::int      AS app_count
+        FROM activity
+        WHERE k IS NOT NULL AND k <> ''
+        GROUP BY k
+        HAVING SUM(contact_count) + SUM(eval_count) + SUM(app_count) > 0
+        ORDER BY
+          (SUM(replied_count)*20 + SUM(sent_count)*10 + SUM(app_count)*5 + SUM(eval_count)*3 + SUM(contact_count)) DESC,
+          MAX(name)
+        LIMIT 15
       `, [uid]),
       all(`
         -- DISTINCT ON (job_url) keeps only the most recent evaluation per

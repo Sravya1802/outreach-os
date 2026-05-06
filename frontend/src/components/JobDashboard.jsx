@@ -149,16 +149,19 @@ export default function JobDashboard() {
           </div>
         </div>
 
-        {/* Top outreach companies */}
+        {/* Top outreach companies — pulls from three sources: contacts found,
+            CareerOps evaluations, and tracked applications. Showing a column
+            per source so the user sees which surface a company came from. */}
         <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20 }}>
-          <h2 style={{ fontSize:14, fontWeight:800, color:'#0f172a', margin:'0 0 14px' }}>Where your outreach effort went</h2>
+          <h2 style={{ fontSize:14, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Where your outreach effort went</h2>
+          <p style={{ fontSize:11, color:'#94a3b8', margin:'0 0 14px' }}>Top companies across contacts, evaluations, and tracked applications.</p>
           {topOutreachCompanies.length === 0 ? (
-            <div style={{ fontSize:13, color:'#94a3b8', padding:'14px 0' }}>No outreach yet — find contacts on a company to start.</div>
+            <div style={{ fontSize:13, color:'#94a3b8', padding:'14px 0' }}>No activity yet — find contacts, evaluate a role, or track an application to start.</div>
           ) : (
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:13 }}>
               <thead>
                 <tr style={{ background:'#f8fafc' }}>
-                  {['Company','Contacts','Emails','Sent','Replied'].map(h => (
+                  {['Company','Contacts','Emails','Sent','Replied','Evals','Tracked'].map(h => (
                     <th key={h} style={{ padding:'8px 12px', textAlign:h === 'Company' ? 'left' : 'right', fontWeight:700, color:'#475569', fontSize:11, textTransform:'uppercase', letterSpacing:'0.06em' }}>{h}</th>
                   ))}
                 </tr>
@@ -170,10 +173,12 @@ export default function JobDashboard() {
                       {c.name}
                       {c.category && <div style={{ fontSize:11, color:'#94a3b8', fontWeight:400 }}>{c.category}</div>}
                     </td>
-                    <td style={{ padding:'10px 12px', textAlign:'right', color:'#475569', fontWeight:600 }}>{c.contact_count}</td>
-                    <td style={{ padding:'10px 12px', textAlign:'right', color:'#16a34a', fontWeight:600 }}>{c.email_count}</td>
-                    <td style={{ padding:'10px 12px', textAlign:'right', color:'#0891b2', fontWeight:600 }}>{c.sent_count}</td>
-                    <td style={{ padding:'10px 12px', textAlign:'right', color:'#dc2626', fontWeight:600 }}>{c.replied_count}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.contact_count ? '#475569' : '#cbd5e1', fontWeight:600 }}>{c.contact_count || '—'}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.email_count ? '#16a34a' : '#cbd5e1', fontWeight:600 }}>{c.email_count || '—'}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.sent_count ? '#0891b2' : '#cbd5e1', fontWeight:600 }}>{c.sent_count || '—'}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.replied_count ? '#dc2626' : '#cbd5e1', fontWeight:600 }}>{c.replied_count || '—'}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.eval_count ? '#7c3aed' : '#cbd5e1', fontWeight:600 }}>{c.eval_count || '—'}</td>
+                    <td style={{ padding:'10px 12px', textAlign:'right', color: c.app_count ? '#d97706' : '#cbd5e1', fontWeight:600 }}>{c.app_count || '—'}</td>
                   </tr>
                 ))}
               </tbody>
