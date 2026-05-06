@@ -814,24 +814,17 @@ function JobScraperTab({ company, onTabSwitch }) {
               </button>
             ))}
           </div>
-          <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
-            {[
-              { value:'newest', label:'Newest' },
-              { value:'oldest', label:'Oldest' },
-              { value:'az',     label:'A → Z' },
-            ].map(opt => (
-              <button key={opt.value} onClick={() => setSortOrder(opt.value)}
-                style={{
-                  padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:700,
-                  cursor:'pointer', transition:'all 0.15s', whiteSpace:'nowrap',
-                  border:'1px solid',
-                  borderColor: sortOrder === opt.value ? '#6366f1' : '#e2e8f0',
-                  background:  sortOrder === opt.value ? '#6366f1' : '#fff',
-                  color:       sortOrder === opt.value ? '#fff'    : '#64748b',
-                }}>
-                {opt.label}
-              </button>
-            ))}
+          <div style={{ minWidth:140 }}>
+            <Dropdown
+              ariaLabel="Sort roles"
+              value={sortOrder}
+              onChange={setSortOrder}
+              options={[
+                { value:'newest', label:'Newest first' },
+                { value:'oldest', label:'Oldest first' },
+                { value:'az',     label:'A → Z' },
+              ]}
+            />
           </div>
         </div>
       )}
