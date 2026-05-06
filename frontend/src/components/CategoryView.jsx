@@ -394,20 +394,22 @@ function RegularCategoryView({ categoryName }) {
           const unchecked = sorted.filter(c => !isChecked(c))
           const checked   = sorted.filter(c =>  isChecked(c))
 
-          // Unified button styles so every action chip on a company row
-          // looks like part of the same family. Three tiers:
+          // Unified button family — same pill shape (radius 20), same
+          // height (padding 5×14), same font (11/700). Difference is
+          // only fill vs outline so the hierarchy is fill-strength only:
           //   primary  → indigo filled (the main action — Apply)
           //   ghost    → indigo-outlined (secondary — Careers)
-          //   chip     → grey-outlined (Status, source pill)
-          const btnPrimary = { padding:'6px 12px', borderRadius:8, border:'none',
-            background:'#4f46e5', color:'#fff', fontSize:11, fontWeight:700,
+          // Reads as one consistent set of action chips next to the
+          // status pill instead of three competing button shapes.
+          const btnBase = {
+            padding:'5px 14px', borderRadius:20, fontSize:11, fontWeight:700,
             cursor:'pointer', whiteSpace:'nowrap', display:'inline-flex',
-            alignItems:'center', gap:5, transition:'all 0.12s' }
-          const btnGhost   = { padding:'6px 12px', borderRadius:8,
-            border:'1px solid #c7d2fe', background:'#fff', color:'#4f46e5',
-            fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap',
-            textDecoration:'none', display:'inline-flex', alignItems:'center',
-            gap:5, transition:'all 0.12s' }
+            alignItems:'center', gap:5, transition:'all 0.12s', lineHeight:1.5,
+          }
+          const btnPrimary = { ...btnBase, border:'1px solid #4f46e5',
+            background:'#4f46e5', color:'#fff' }
+          const btnGhost   = { ...btnBase, border:'1px solid #c7d2fe',
+            background:'#fff', color:'#4f46e5', textDecoration:'none' }
 
           const renderRow = (c) => {
             const srcColor = SOURCE_COLORS[c.source?.split(',')[0]] || SOURCE_COLORS.manual_search
@@ -463,7 +465,7 @@ function RegularCategoryView({ categoryName }) {
                     }}
                     title="Queue all known scraped intern roles for auto-apply"
                     style={btnPrimary}>
-                    🤖 Apply
+                    Apply
                   </button>
                   {(c.url || c.domain) && (
                     <a href={c.url || `https://${c.domain}/careers`} target="_blank" rel="noreferrer"
