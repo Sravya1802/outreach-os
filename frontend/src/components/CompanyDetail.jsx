@@ -1333,6 +1333,10 @@ const PIPELINE_STATUSES = [
 const SCORE_COLOR = s => s >= 4.2 ? '#16a34a' : s >= 3.8 ? '#ca8a04' : s >= 3 ? '#475569' : '#dc2626'
 
 function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
+  // Narrow viewport (phone OR tablet ≤900px): sidebar stacks above the
+  // eval panel instead of sitting side by side. The 280px sidebar can't
+  // fit alongside a meaningful eval panel below ~900px.
+  const isCareerOpsNarrow = useMediaQuery('(max-width: 900px)')
   const [app, setApp]                     = useState(null)
   const [saving, setSaving]               = useState(false)
   const [saved, setSaved]                 = useState(false)
@@ -1547,10 +1551,22 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
   ]
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'280px 1fr', gap:0, minHeight:600, background:'#f8fafc' }}>
+    <div style={{
+      display:'grid',
+      // Desktop: 280px sidebar + main panel side by side. Tablet/phone:
+      // single column, sidebar stacks above the eval panel.
+      gridTemplateColumns: isCareerOpsNarrow ? '1fr' : '280px 1fr',
+      gap:0, minHeight:600, background:'#f8fafc',
+    }}>
 
       {/* ── LEFT SIDEBAR ───────────────────────────────────────────────── */}
-      <div style={{ borderRight:'1px solid #e2e8f0', background:'#fff', padding:'20px 16px', display:'flex', flexDirection:'column', gap:16, overflowY:'auto' }}>
+      <div style={{
+        borderRight: isCareerOpsNarrow ? 'none' : '1px solid #e2e8f0',
+        borderBottom: isCareerOpsNarrow ? '1px solid #e2e8f0' : 'none',
+        background:'#fff',
+        padding: isCareerOpsNarrow ? '14px 14px' : '20px 16px',
+        display:'flex', flexDirection:'column', gap:14, overflowY:'auto',
+      }}>
 
         {/* ── Score ring ── */}
         <div style={{ display:'flex', alignItems:'center', gap:14, padding:'14px 16px', background: score ? (score>=4.2?'#f0fdf4':score>=3.8?'#fefce8':'#fef2f2') : '#f8fafc', borderRadius:12, border:`1.5px solid ${score ? SCORE_COLOR(score)+'40' : '#e2e8f0'}` }}>
@@ -1760,27 +1776,34 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
       {/* ── RIGHT: evaluation report / tracker / reports ─────────────── */}
       <div style={{ overflowY:'auto' }}>
 
-        {/* Panel switcher */}
-        <div style={{ display:'flex', gap:0, borderBottom:'1px solid #e2e8f0', background:'#fff', position:'sticky', top:0, zIndex:10 }}>
-          {[['eval','📋 Evaluation'],['tracker','📊 Tracker'],['reports','📁 Reports']].map(([id, label]) => (
-            <button key={id} onClick={async () => {
-              setRightPanel(id)
-              if (id === 'tracker' && !trackerRows) {
-                setTrackerLoad(true)
-                try { const r = await api.career.tracker(); setTrackerRows(r.rows) } catch (_) {}
-                setTrackerLoad(false)
-              }
-              if (id === 'reports' && !reportFiles) {
-                // Load DB evaluations (each has a styled HTML report) instead of disk .md files
-                try { const rows = await api.career.evaluations(); setReportFiles(rows) } catch (_) {}
-              }
-            }}
-              style={{ flex:1, padding:'10px 8px', border:'none', borderBottom: rightPanel===id ? '2px solid #6366f1' : '2px solid transparent',
-                background:'transparent', fontSize:12, fontWeight:700, cursor:'pointer',
-                color: rightPanel===id ? '#6366f1' : '#94a3b8' }}>
-              {label}
-            </button>
-          ))}
+        {/* Panel switcher — segmented pill row inside a tinted track,
+            matching the rest of the app's tab UI instead of underline tabs. */}
+        <div style={{ padding:'12px 14px 10px', background:'#fff', position:'sticky', top:0, zIndex:10, borderBottom:'1px solid #f1f5f9' }}>
+          <div style={{ display:'flex', gap:4, padding:4, background:'#f1f5f9', borderRadius:10 }}>
+            {[['eval','📋 Evaluation'],['tracker','📊 Tracker'],['reports','📁 Reports']].map(([id, label]) => (
+              <button key={id} onClick={async () => {
+                setRightPanel(id)
+                if (id === 'tracker' && !trackerRows) {
+                  setTrackerLoad(true)
+                  try { const r = await api.career.tracker(); setTrackerRows(r.rows) } catch (_) {}
+                  setTrackerLoad(false)
+                }
+                if (id === 'reports' && !reportFiles) {
+                  try { const rows = await api.career.evaluations(); setReportFiles(rows) } catch (_) {}
+                }
+              }}
+                style={{
+                  flex:1, padding:'8px 10px', borderRadius:7, border:'none',
+                  fontSize:12, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap',
+                  background: rightPanel===id ? '#fff' : 'transparent',
+                  color:      rightPanel===id ? '#4f46e5' : '#64748b',
+                  boxShadow:  rightPanel===id ? '0 1px 3px rgba(15,23,42,0.08)' : 'none',
+                  transition:'all 0.15s',
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* ── Tracker panel ── */}
