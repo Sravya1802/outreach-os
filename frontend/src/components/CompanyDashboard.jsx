@@ -324,48 +324,80 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
           </div>
         </div>
 
-        <div style={{ display:'grid', gridTemplateColumns: isPhone ? '1fr' : 'repeat(auto-fit, minmax(260px, 1fr))', gap: isPhone ? 10 : 16 }}>
-          {/* YC Startups special card */}
-          <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
-            style={{ background:'#fff', border:'1px solid rgba(242,102,37,0.3)', borderLeft:'4px solid #F26625', borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
-              <div style={{ width:38, height:38, borderRadius:8, background:'rgba(242,102,37,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, fontWeight:800, color:'#F26625', flexShrink:0 }}>
+        <div style={{ display:'grid', gridTemplateColumns: isPhone ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(260px, 1fr))', gap: isPhone ? 10 : 16 }}>
+          {/* YC Startups special card — compact tile on phone matches the
+              other cards in the 2-up grid; original 'featured' look on desktop. */}
+          {isPhone ? (
+            <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
+              style={{ background:'#fff', border:'1px solid rgba(242,102,37,0.3)', borderLeft:'4px solid #F26625', borderRadius:12, padding:'14px 14px 12px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)', display:'flex', flexDirection:'column', gap:8, minHeight:130 }}>
+              <div style={{ width:42, height:42, borderRadius:10, background:'rgba(242,102,37,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#F26625' }}>
                 YC
               </div>
-              <div>
-                <div style={{ fontSize:13, fontWeight:800, color:'#0f172a' }}>YC Startups</div>
-                <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:'rgba(242,102,37,0.1)', color:'#F26625', border:'1px solid rgba(242,102,37,0.25)' }}>
-                  In your DB
-                </span>
+              <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.25, flex:1 }}>YC Startups</div>
+              <div style={{ fontSize:22, fontWeight:800, color:'#F26625', lineHeight:1 }}>
+                {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : ' '}
+              </div>
+              <div style={{ height:3, background:'#f1f5f9', borderRadius:2 }}>
+                <div style={{ height:'100%', background:'#F26625', borderRadius:2, width:'100%' }} />
               </div>
             </div>
-            <div style={{ fontSize:24, fontWeight:800, color:'#F26625', marginBottom:4 }}>
-              {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : ' '}
+          ) : (
+            <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
+              style={{ background:'#fff', border:'1px solid rgba(242,102,37,0.3)', borderLeft:'4px solid #F26625', borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
+                <div style={{ width:38, height:38, borderRadius:8, background:'rgba(242,102,37,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, fontWeight:800, color:'#F26625', flexShrink:0 }}>
+                  YC
+                </div>
+                <div>
+                  <div style={{ fontSize:13, fontWeight:800, color:'#0f172a' }}>YC Startups</div>
+                  <span style={{ fontSize:9, fontWeight:700, padding:'2px 7px', borderRadius:20, background:'rgba(242,102,37,0.1)', color:'#F26625', border:'1px solid rgba(242,102,37,0.25)' }}>
+                    In your DB
+                  </span>
+                </div>
+              </div>
+              <div style={{ fontSize:24, fontWeight:800, color:'#F26625', marginBottom:4 }}>
+                {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : ' '}
+              </div>
+              <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4 }}>
+                YC-backed companies you've imported
+                {ycCount != null && <> · <span style={{ color:'#94a3b8' }}>{ycCount.toLocaleString()} available on YC</span></>}
+              </div>
+              <div style={{ height:4, background:'#f1f5f9', borderRadius:2 }}>
+                <div style={{ height:'100%', background:'#F26625', borderRadius:2, width:'100%' }} />
+              </div>
             </div>
-            <div style={{ fontSize:11, color:'#64748b', marginBottom:12, lineHeight:1.4 }}>
-              YC-backed companies you've imported
-              {ycCount != null && <> · <span style={{ color:'#94a3b8' }}>{ycCount.toLocaleString()} available on YC</span></>}
-            </div>
-            <div style={{ height:4, background:'#f1f5f9', borderRadius:2 }}>
-              <div style={{ height:'100%', background:'#F26625', borderRadius:2, width:'100%' }} />
-            </div>
-          </div>
+          )}
 
           {/* Regular categories */}
           {sortedCats.map(cat => {
             const barW = Math.max(cat.count > 0 ? 3 : 0, Math.round((cat.count / maxCount) * 100))
+            // Phone: compact square-ish tile. Larger abbreviation badge,
+            // smaller label, count below. No long description (would
+            // wrap awkwardly in a 2-up grid).
+            // Desktop: original layout — abbr + label inline, big count,
+            // wrapped description, progress bar.
+            if (isPhone) {
+              return (
+                <div key={cat.id} className="dash-cat-card"
+                  onClick={() => goToCategory(cat.label)}
+                  style={{ background:'#fff', border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`, borderRadius:12, padding:'14px 14px 12px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1, display:'flex', flexDirection:'column', gap:8, minHeight:130 }}>
+                  <div style={{ width:42, height:42, borderRadius:10, background:cat.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:cat.tint }}>
+                    {cat.abbr}
+                  </div>
+                  <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.25, flex:1 }}>{cat.label}</div>
+                  <div style={{ fontSize:22, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, lineHeight:1 }}>
+                    {!catCountsLoaded ? ' ' : cat.count.toLocaleString()}
+                  </div>
+                  <div style={{ height:3, background:'#f1f5f9', borderRadius:2 }}>
+                    <div style={{ height:'100%', background: cat.count === 0 ? '#e2e8f0' : cat.tint, borderRadius:2, width:`${barW}%`, transition:'width 0.5s' }} />
+                  </div>
+                </div>
+              )
+            }
             return (
               <div key={cat.id} className="dash-cat-card"
                 onClick={() => goToCategory(cat.label)}
-                style={{
-                  background:'#fff',
-                  border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`,
-                  // Phone only: thick left accent in the category tint to
-                  // match the YC Startups featured-card treatment. Desktop
-                  // keeps the cleaner all-around border.
-                  borderLeft: isPhone ? `4px solid ${cat.count === 0 ? '#e2e8f0' : cat.tint}` : `1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`,
-                  borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1,
-                }}>
+                style={{ background:'#fff', border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`, borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1 }}>
                 <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
                   <div style={{ width:38, height:38, borderRadius:8, background:cat.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:cat.tint, flexShrink:0 }}>
                     {cat.abbr}
