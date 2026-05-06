@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import { useMediaQuery } from '../hooks'
 
 const GRADE_COLOR = { A:'#16a34a', B:'#0d9488', C:'#d97706', D:'#ea580c', F:'#dc2626' }
 
@@ -8,15 +9,15 @@ function Spin({ color = '#6366f1', size = 18 }) {
   return <span style={{ display:'inline-block', width:size, height:size, border:`2px solid ${color}30`, borderTopColor:color, borderRadius:'50%', animation:'spin 0.7s linear infinite' }} />
 }
 
-function KPICard({ label, value, sub, tint, onClick }) {
+function KPICard({ label, value, sub, tint, onClick, compact = false }) {
   return (
     <div onClick={onClick}
-      style={{ padding:'18px 20px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, cursor: onClick ? 'pointer' : 'default', transition:'all 0.15s' }}
+      style={{ padding: compact ? '14px 14px' : '18px 20px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, cursor: onClick ? 'pointer' : 'default', transition:'all 0.15s' }}
       onMouseEnter={e => { if (onClick) { e.currentTarget.style.borderColor = tint; e.currentTarget.style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)' } }}
       onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.boxShadow = 'none' }}>
-      <div style={{ fontSize:24, fontWeight:800, color: tint }}>{value}</div>
-      <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', marginTop:3 }}>{label}</div>
-      {sub && <div style={{ fontSize:11, color:'#94a3b8', marginTop:2 }}>{sub}</div>}
+      <div style={{ fontSize: compact ? 20 : 24, fontWeight:800, color: tint, lineHeight:1.1 }}>{value}</div>
+      <div style={{ fontSize: compact ? 11 : 12, fontWeight:700, color:'#0f172a', marginTop:3 }}>{label}</div>
+      {sub && <div style={{ fontSize:10, color:'#94a3b8', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>}
     </div>
   )
 }
@@ -68,6 +69,7 @@ export default function JobDashboard() {
   const [m, setM]             = useState(cached)
   const [loading, setLoading] = useState(!cached)
   const [refreshing, setRefreshing] = useState(false)
+  const isPhone = useMediaQuery('(max-width: 480px)')
 
   const load = useCallback(async () => {
     if (m) setRefreshing(true); else setLoading(true)
@@ -94,30 +96,32 @@ export default function JobDashboard() {
 
   return (
     <div style={{ flex:1, overflowY:'auto', background:'#f8fafc' }}>
-      {/* Header */}
-      <div style={{ padding:'24px 40px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', flexWrap:'wrap', gap:12 }}>
-          <div>
-            <h1 style={{ fontSize:22, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Job Dashboard</h1>
-            <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Every company, contact, and application — tracked end-to-end</p>
+      {/* Header — tighter padding + hidden subtitle on phone for breathing room. */}
+      <div style={{ padding: isPhone ? '14px 14px' : '24px 40px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', flexWrap:'wrap', gap:10 }}>
+          <div style={{ flex:'1 1 200px', minWidth:0 }}>
+            <h1 style={{ fontSize: isPhone ? 18 : 22, fontWeight:800, color:'#0f172a', margin: isPhone ? 0 : '0 0 4px' }}>Job Dashboard</h1>
+            {!isPhone && (
+              <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Every company, contact, and application — tracked end-to-end</p>
+            )}
           </div>
           <button onClick={load}
-            style={{ padding:'8px 16px', fontSize:12, fontWeight:700, background:'#fff', color:'#475569', border:'1px solid #e2e8f0', borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', gap:8 }}>
+            style={{ padding:'8px 14px', fontSize:12, fontWeight:700, background:'#fff', color:'#475569', border:'1px solid #e2e8f0', borderRadius:8, cursor:'pointer', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap', flexShrink:0 }}>
             {refreshing ? <Spin size={12} color="#475569" /> : '↻'} Refresh
           </button>
         </div>
       </div>
 
-      <div style={{ padding:'24px 40px', display:'flex', flexDirection:'column', gap:24 }}>
+      <div style={{ padding: isPhone ? '14px 12px' : '24px 40px', display:'flex', flexDirection:'column', gap: isPhone ? 14 : 24 }}>
 
-        {/* Top-level KPIs */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:12 }}>
-          <KPICard label="Companies" value={summary.totalCompanies.toLocaleString()} sub="in database" tint="#6366f1" onClick={() => navigate('/companies')} />
-          <KPICard label="Evaluations" value={summary.totalEvaluations} sub="roles scored A–F" tint="#7c3aed" onClick={() => navigate('/career-ops-workflow')} />
-          <KPICard label="Applied" value={applyFunnel.applied} sub={`${applyModes.manual} manual · ${applyModes.auto} auto`} tint="#0891b2" onClick={() => navigate('/pipeline')} />
-          <KPICard label="Contacts" value={summary.totalContacts} sub={`${summary.contactsWithEmail} emails · ${summary.contactsWithLinkedIn} LinkedIn`} tint="#059669" onClick={() => navigate('/outreach')} />
-          <KPICard label="Outreach Sent" value={summary.outreachSent} sub={`${summary.outreachGenerated} drafted`} tint="#d97706" />
-          <KPICard label="Response Rate" value={`${summary.responseRate}%`} sub={`${summary.outreachReplied} / ${summary.outreachSent}`} tint="#dc2626" />
+        {/* Top-level KPIs — tighter cards on phone so 2 fit per row legibly */}
+        <div style={{ display:'grid', gridTemplateColumns: isPhone ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(150px, 1fr))', gap: isPhone ? 8 : 12 }}>
+          <KPICard label="Companies" value={summary.totalCompanies.toLocaleString()} sub="in database" tint="#6366f1" compact={isPhone} onClick={() => navigate('/companies')} />
+          <KPICard label="Evaluations" value={summary.totalEvaluations} sub="A–F scored" tint="#7c3aed" compact={isPhone} onClick={() => navigate('/career-ops-workflow')} />
+          <KPICard label="Applied" value={applyFunnel.applied} sub={`${applyModes.manual} manual · ${applyModes.auto} auto`} tint="#0891b2" compact={isPhone} onClick={() => navigate('/pipeline')} />
+          <KPICard label="Contacts" value={summary.totalContacts} sub={`${summary.contactsWithEmail} emails`} tint="#059669" compact={isPhone} onClick={() => navigate('/outreach')} />
+          <KPICard label="Outreach Sent" value={summary.outreachSent} sub={`${summary.outreachGenerated} drafted`} tint="#d97706" compact={isPhone} />
+          <KPICard label="Response Rate" value={`${summary.responseRate}%`} sub={`${summary.outreachReplied}/${summary.outreachSent} replied`} tint="#dc2626" compact={isPhone} />
         </div>
 
         {/* Two-column section */}

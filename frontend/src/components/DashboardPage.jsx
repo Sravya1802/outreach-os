@@ -210,7 +210,7 @@ export default function DashboardPage({ onStatsChange }) {
       {/* Header */}
       <div style={{ padding:'32px 40px 24px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
         <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Dashboard</h1>
-        <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Your internship search at a glance</p>
+        <p style={{ fontSize:13, color:'#64748b', margin:0 }}>Job search glance</p>
 
         {/* Stats row */}
         {stats ? (
