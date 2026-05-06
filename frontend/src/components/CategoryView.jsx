@@ -321,37 +321,54 @@ function RegularCategoryView({ categoryName }) {
           </div>
         </div>
 
-        {/* Filters + Sort — themed Dropdown so the OS picker doesn't appear
-            on mobile and the look stays consistent with the rest of the app. */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:8, alignItems:'center' }}>
-          <input value={search} onChange={onSearch} placeholder="Filter by name…"
-            style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', outline:'none', boxSizing:'border-box', width:'100%' }} />
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-            <Dropdown
-              ariaLabel="Filter by status"
-              value={status}
-              onChange={(v) => { setStatus(v); setPage(0); load(0, search, source, v, sortBy) }}
-              options={[
-                { value:'',           label:'All Statuses' },
-                { value:'new',        label:'New' },
-                { value:'researching',label:'Researching' },
-                { value:'contacted',  label:'Contacted' },
-                { value:'responded',  label:'Responded' },
-                { value:'skip',       label:'Skip' },
-              ]}
-            />
-            <Dropdown
-              ariaLabel="Sort by"
-              value={sortBy}
-              onChange={(v) => { setSortBy(v); setPage(0); load(0, search, source, status, v) }}
-              options={[
-                { value:'hiring',   label:'⭐ Top Companies' },
-                { value:'contacts', label:'👥 Most Contacts' },
-                { value:'recent',   label:'📅 Recent First' },
-                { value:'az',       label:'A → Z' },
-                { value:'za',       label:'Z → A' },
-              ]}
-            />
+        {/* Filters + Sort — segmented pill rows. Wrap to multiple lines
+            naturally on narrow screens. Active pill is filled indigo to
+            match the rest of the action UI. */}
+        <input value={search} onChange={onSearch} placeholder="Filter by name…"
+          style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', outline:'none', boxSizing:'border-box', width:'100%', marginBottom:10 }} />
+
+        <div style={{ marginBottom:8 }}>
+          <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:6 }}>Status</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+            {[
+              { value:'',           label:'All' },
+              { value:'new',        label:'New' },
+              { value:'researching',label:'Researching' },
+              { value:'contacted',  label:'Contacted' },
+              { value:'responded',  label:'Responded' },
+              { value:'skip',       label:'Skip' },
+            ].map(opt => {
+              const active = status === opt.value
+              return (
+                <button key={opt.value || 'all'} type="button"
+                  onClick={() => { setStatus(opt.value); setPage(0); load(0, search, source, opt.value, sortBy) }}
+                  style={{ padding:'6px 12px', fontSize:12, fontWeight:700, border:'1px solid', borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#6366f1' : '#fff', color: active ? '#fff' : '#475569', borderRadius:20, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.12s' }}>
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+
+        <div>
+          <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:6 }}>Sort by</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+            {[
+              { value:'hiring',   label:'⭐ Top' },
+              { value:'contacts', label:'👥 Contacts' },
+              { value:'recent',   label:'📅 Recent' },
+              { value:'az',       label:'A → Z' },
+              { value:'za',       label:'Z → A' },
+            ].map(opt => {
+              const active = sortBy === opt.value
+              return (
+                <button key={opt.value} type="button"
+                  onClick={() => { setSortBy(opt.value); setPage(0); load(0, search, source, status, opt.value) }}
+                  style={{ padding:'6px 12px', fontSize:12, fontWeight:700, border:'1px solid', borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#6366f1' : '#fff', color: active ? '#fff' : '#475569', borderRadius:20, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.12s' }}>
+                  {opt.label}
+                </button>
+              )
+            })}
           </div>
         </div>
       </div>
