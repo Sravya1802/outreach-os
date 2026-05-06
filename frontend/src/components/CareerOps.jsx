@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../api'
 import { useMediaQuery } from '../hooks'
+import TabPicker from './TabPicker'
 
 // ── Inject styles ─────────────────────────────────────────────────────────────
 function injectStyles() {
@@ -1715,13 +1716,8 @@ export default function CareerOps() {
               without clipping. Hover/active states show the full label.
             • Desktop (>900px): full label strip (existing). */}
         {isPhone ? (
-          <div style={{ padding:'10px 16px 12px', borderTop:'1px solid #f1f5f9' }}>
-            <select value={tab} onChange={e => setTab(e.target.value)}
-              style={{ width:'100%', padding:'10px 12px', fontSize:14, fontWeight:700, color:'#4f46e5', background:'#eef2ff', border:'1px solid #c7d2fe', borderRadius:9, cursor:'pointer' }}>
-              {TABS.map(t => (
-                <option key={t.k} value={t.k}>{t.icon}  {t.full}</option>
-              ))}
-            </select>
+          <div style={{ padding:'10px 16px 14px', borderTop:'1px solid #f1f5f9' }}>
+            <TabPicker tabs={TABS} value={tab} onChange={setTab} />
           </div>
         ) : (
           <div style={{ display:'flex', padding:'0 28px', overflowX:'auto' }}>

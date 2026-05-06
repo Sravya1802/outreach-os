@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { api } from '../api'
 import { AutoApplySetup } from './CareerOps'
 import { useMediaQuery } from '../hooks'
+import TabPicker from './TabPicker'
 
 const TABS = [
   { id: 'setup',          icon: '⚙',  short: 'Setup',     full: 'Setup',          desc: 'Profile + resume library used to fill applications' },
@@ -29,12 +30,7 @@ export default function AutoApplyPage() {
             tablet, full-label strip on desktop. */}
         {isPhone ? (
           <div style={{ paddingBottom:14 }}>
-            <select value={tab} onChange={e => setTab(e.target.value)}
-              style={{ width:'100%', padding:'10px 12px', fontSize:14, fontWeight:700, color:'#4f46e5', background:'#eef2ff', border:'1px solid #c7d2fe', borderRadius:9, cursor:'pointer' }}>
-              {TABS.map(t => (
-                <option key={t.id} value={t.id}>{t.icon}  {t.full}</option>
-              ))}
-            </select>
+            <TabPicker tabs={TABS} value={tab} onChange={setTab} />
           </div>
         ) : (
           <div style={{ display:'flex', gap:0 }}>
