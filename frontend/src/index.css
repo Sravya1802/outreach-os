@@ -404,15 +404,35 @@ button:focus:not(:focus-visible) { outline: none; }
     padding-right: 16px !important;
   }
 
-  /* Tab bars and horizontal pill rows that don't fit on phone — let them
-     scroll horizontally rather than wrap raggedly. Targets the common
-     `display:flex` + `gap:` patterns we use for tabs across CareerOps,
-     CompanyDetail, AutoApplyPage. */
-  [style*="display:flex"][style*="gap:0"],
-  [style*="display: flex"][style*="gap: 0"] {
-    overflow-x: auto;
+  /* Page H1 shrinks on small screens — desktop 22px is too imposing
+     and steals vertical space. Leaves H2 alone so card titles stay legible. */
+  h1 { font-size: 18px !important; line-height: 1.2 !important; }
+
+  /* Hide the decorative subtitle <p> after a page H1 (e.g.
+     "Evaluate roles · Tailor your resume · Discover opportunities") on a
+     narrow screen — it just eats vertical space and tells the user nothing
+     they don't already know from the nav. */
+  h1 + p[style*="color:#94a3b8"],
+  h1 + p[style*="color: #94a3b8"],
+  h1 + p[style*="color:#64748b"],
+  h1 + p[style*="color: #64748b"] {
+    display: none !important;
+  }
+
+  /* Tab strips: tighter padding + smaller font so more tabs fit at once.
+     Targets explicit overflowX:auto containers (the page-tab convention
+     used by CareerOps / AutoApply / CompanyDetail). */
+  [style*="overflowX:'auto'"],
+  [style*="overflow-x: auto"] {
+    overflow-y: hidden !important;
     -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
+  }
+  [style*="overflowX:'auto'"] > button,
+  [style*="overflow-x: auto"] > button {
+    flex-shrink: 0;
+    padding: 10px 12px !important;
+    font-size: 12px !important;
+    white-space: nowrap;
   }
 
   /* Wide tables / preview rows can't collapse cleanly — let them scroll
