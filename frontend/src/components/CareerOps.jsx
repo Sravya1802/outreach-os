@@ -19,6 +19,60 @@ function injectStyles() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function gradeColor(g) { return { A:'#16a34a', B:'#0d9488', C:'#d97706', D:'#ea580c', F:'#dc2626' }[g] || '#94a3b8' }
+
+// Best-effort client-side extraction of role title + company from a job URL.
+// Used by the Evaluate loading panel so the user sees *what's* being
+// evaluated during the AI call, instead of a generic spinner.
+//
+// Handles the four ATS we deeply support — Workday, Ashby, Greenhouse, Lever
+// — by parsing the URL slug. Falls back to null when the slug is opaque
+// (LinkedIn job IDs, generic boards). The backend still does the canonical
+// extraction; this is just a fast preview.
+function extractJobMetaFromUrl(url) {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    const host = u.hostname.toLowerCase()
+    const parts = u.pathname.split('/').filter(Boolean)
+
+    // Slug → human title: split on dashes/underscores, strip trailing
+    // jobReqId tokens (R-1089, J123, etc.), title-case the rest.
+    const slugToTitle = (slug) => {
+      if (!slug) return null
+      // Drop trailing _R-1089 / _J123 / _0123 jobReqId-style suffixes
+      const trimmed = slug.replace(/[_-](?:R[-_]?\d+|J\d+|\d{4,})$/i, '')
+      const words = trimmed.split(/[-_]+/).filter(Boolean)
+      if (!words.length) return null
+      return words.map(w => w.length <= 2 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+    }
+
+    // Workday — myworkdayjobs.com tenant. Path: [/locale]/<site>/job/<location>/<slug>
+    if (/myworkdayjobs\.com$/.test(host)) {
+      const tenant = host.split('.')[0]
+      const startIdx = /^[a-z]{2}-[a-z]{2}$/i.test(parts[0]) ? 1 : 0
+      const tail = parts.slice(startIdx)
+      const slug = tail[tail.length - 1]
+      const title = slugToTitle(slug)
+      if (title) return { title, company: tenant.charAt(0).toUpperCase() + tenant.slice(1) }
+    }
+    // Greenhouse boards — boards.greenhouse.io/<board>/jobs/<id>
+    if (/^(boards|job-boards)\.greenhouse\.io$/.test(host)) {
+      const board = parts[0]
+      if (board) return { title: null, company: board.charAt(0).toUpperCase() + board.slice(1) }
+    }
+    // Lever — jobs.lever.co/<org>/<id>. id is a UUID, no title in URL.
+    if (host === 'jobs.lever.co') {
+      const org = parts[0]
+      if (org) return { title: null, company: org.charAt(0).toUpperCase() + org.slice(1) }
+    }
+    // Ashby — jobs.ashbyhq.com/<org>/<jobId>. jobId is UUID, no title.
+    if (host === 'jobs.ashbyhq.com') {
+      const org = parts[0]
+      if (org) return { title: null, company: org }
+    }
+    return null
+  } catch { return null }
+}
 function gradeBg(g)    { return { A:'#dcfce7', B:'#ccfbf1', C:'#fef3c7', D:'#ffedd5', F:'#fee2e2' }[g] || '#f8fafc' }
 
 function Spin({ size=16, color='#6366f1' }) {
@@ -1445,6 +1499,11 @@ export default function CareerOps() {
   const [resumeUploadedName, setResumeUploadedName] = useState('')
   const [parsing, setParsing] = useState(false)
   const [evaluating, setEvaluating] = useState(false)
+  // Metadata for the evaluating-loading panel — populated synchronously from
+  // the URL slug at click time so the user sees *what* is being evaluated
+  // during the 10-30s AI call instead of a generic spinner. null when we
+  // can't extract anything useful (e.g. LinkedIn job IDs).
+  const [evaluatingMeta, setEvaluatingMeta] = useState(null)
   const [evaluation, setEvaluation] = useState(null)
   const [evalId, setEvalId]         = useState(null)
   const [evalError, setEvalError]   = useState(null)
@@ -1516,15 +1575,19 @@ export default function CareerOps() {
     if (resumeMode === 'saved' && !resumeInfo?.hasResume) { setEvalError('No saved resume — pick Upload or Paste, or upload a default in Auto-Apply Setup'); return }
     setEvaluating(true); setEvalError(null); setEvaluation(null); setPdfReady(false)
     setApplyMode('manual'); setApplyStatus('not_started')
+    // Best-effort client-side extraction of role title + company from the URL
+    // so the loading panel shows the user *what* is being evaluated. Falls
+    // back to the URL itself when the slug is opaque (LinkedIn, etc.).
+    const isUrl = input.trim().startsWith('http')
+    setEvaluatingMeta(isUrl ? extractJobMetaFromUrl(input.trim()) : null)
     try {
-      const isUrl = input.trim().startsWith('http')
       const baseBody = isUrl ? { jobUrl: input.trim() } : { jobDescription: input.trim() }
       const overrideText = pickResumeTextForEval()
       const body = overrideText ? { ...baseBody, resumeText: overrideText } : baseBody
       const r = await api.career.evaluate(body)
       setEvaluation(r.evaluation); setEvalId(r.evalId)
     } catch (err) { setEvalError(err.message) }
-    finally { setEvaluating(false) }
+    finally { setEvaluating(false); setEvaluatingMeta(null) }
   }
 
   async function handleResumeUpload(file) {
@@ -1765,10 +1828,25 @@ export default function CareerOps() {
             )}
 
             {evaluating && (
-              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', padding:'56px 0', gap:14 }}>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', padding:'56px 16px', gap:14 }}>
                 <Spin size={36} />
-                <div style={{ fontSize:15, color:'#6366f1', fontWeight:700 }}>Analyzing role against your resume…</div>
-                <div style={{ fontSize:12, color:'#94a3b8' }}>Generating 6 analysis blocks — typically 10–30 seconds</div>
+                {evaluatingMeta?.title || evaluatingMeta?.company ? (
+                  <div style={{ textAlign:'center', maxWidth:480 }}>
+                    <div style={{ fontSize:15, color:'#0f172a', fontWeight:800, marginBottom:4 }}>
+                      {evaluatingMeta.title || 'Role'}
+                      {evaluatingMeta.company && (
+                        <span style={{ fontWeight:500, color:'#64748b' }}> · {evaluatingMeta.company}</span>
+                      )}
+                    </div>
+                    <div style={{ fontSize:13, color:'#6366f1', fontWeight:600 }}>Analyzing against your resume…</div>
+                    <div style={{ fontSize:11, color:'#94a3b8', marginTop:4 }}>Generating verdict + Top 3 gaps + A–G blocks · typically 10–30 seconds</div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize:15, color:'#6366f1', fontWeight:700 }}>Analyzing role against your resume…</div>
+                    <div style={{ fontSize:12, color:'#94a3b8' }}>Generating verdict + Top 3 gaps + A–G blocks — typically 10–30 seconds</div>
+                  </>
+                )}
               </div>
             )}
 
