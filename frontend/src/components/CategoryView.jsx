@@ -427,6 +427,25 @@ function RegularCategoryView({ categoryName }) {
                         {c.source.split(',')[0]}
                       </span>
                     )}
+                    {/* Status pill — colored by status, opens themed menu
+                        on click. Sits inline as metadata next to the
+                        company name; out of the action row. */}
+                    <div onClick={e => e.stopPropagation()}>
+                      <Dropdown
+                        compact
+                        colorMap={STATUS_COLORS}
+                        ariaLabel={`Status for ${c.name}`}
+                        value={c.status || 'new'}
+                        onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
+                        options={[
+                          { value:'new',         label:'new' },
+                          { value:'researching', label:'researching' },
+                          { value:'contacted',   label:'contacted' },
+                          { value:'responded',   label:'responded' },
+                          { value:'skip',        label:'skip' },
+                        ]}
+                      />
+                    </div>
                   </div>
                   <div style={{ fontSize:11, color:'#64748b' }}>
                     {(c.roles && c.roles !== 'job') || c.role_title} {c.location ? `· ${c.location}` : ''}
@@ -454,20 +473,6 @@ function RegularCategoryView({ categoryName }) {
                       Careers ↗
                     </a>
                   )}
-                  <div onClick={e => e.stopPropagation()} style={{ minWidth:118 }}>
-                    <Dropdown
-                      ariaLabel={`Status for ${c.name}`}
-                      value={c.status || 'new'}
-                      onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
-                      options={[
-                        { value:'new',         label:'New' },
-                        { value:'researching', label:'Researching' },
-                        { value:'contacted',   label:'Contacted' },
-                        { value:'responded',   label:'Responded' },
-                        { value:'skip',        label:'Skip' },
-                      ]}
-                    />
-                  </div>
                 </div>
               </div>
             )

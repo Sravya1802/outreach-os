@@ -22,6 +22,11 @@ export default function Dropdown({
   ariaLabel,
   variant = 'outline',
   disabled = false,
+  compact = false,
+  // When compact + colorMap is provided, the trigger pill takes the
+  // active option's color instead of the default theme. Pass a map like
+  // { new: { bg:'#eff6ff', color:'#2563eb', border:'#bfdbfe' } }.
+  colorMap = null,
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef(null)
@@ -40,30 +45,39 @@ export default function Dropdown({
 
   const active = options.find(o => o.value === value)
 
-  const triggerStyle = variant === 'filled'
+  const colorTheme = compact && colorMap ? colorMap[value] : null
+  const triggerStyle = colorTheme
+    ? { color: colorTheme.color, background: colorTheme.bg, border: `1px solid ${colorTheme.border}` }
+    : variant === 'filled'
     ? { color:'#4f46e5', background:'#eef2ff', border:'1px solid #c7d2fe' }
     : { color:'#0f172a', background:'#fff',    border:'1px solid #e2e8f0' }
 
+  // compact = pill-style trigger for inline/metadata use (status badge,
+  // category tag, etc.). Full-width otherwise so it slots into form layouts.
   return (
-    <div ref={ref} style={{ position:'relative', width:'100%' }}>
-      <button type="button" onClick={() => !disabled && setOpen(v => !v)}
+    <div ref={ref} style={{ position:'relative', width: compact ? 'auto' : '100%', display: compact ? 'inline-block' : 'block' }}>
+      <button type="button" onClick={(e) => { e.stopPropagation(); !disabled && setOpen(v => !v) }}
         aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel}
         disabled={disabled}
         style={{
           ...triggerStyle,
-          width:'100%', padding:'9px 12px',
-          fontSize:13, fontWeight:600,
-          borderRadius:9,
+          width: compact ? 'auto' : '100%',
+          padding: compact ? '2px 8px' : '9px 12px',
+          fontSize: compact ? 10 : 13,
+          fontWeight: compact ? 700 : 600,
+          borderRadius: compact ? 20 : 9,
           cursor: disabled ? 'not-allowed' : 'pointer',
           opacity: disabled ? 0.6 : 1,
-          display:'flex', alignItems:'center', gap:8, justifyContent:'space-between',
+          display:'inline-flex', alignItems:'center', gap: compact ? 4 : 8, justifyContent:'space-between',
           textAlign:'left',
+          textTransform: compact ? 'lowercase' : 'none',
+          letterSpacing: compact ? '0.02em' : 'normal',
           transition:'all 0.12s',
         }}>
         <span style={{ minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
           {active?.label ?? placeholder}
         </span>
-        <span aria-hidden="true" style={{ fontSize:11, transition:'transform 0.18s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)', flexShrink:0 }}>▼</span>
+        <span aria-hidden="true" style={{ fontSize: compact ? 8 : 11, transition:'transform 0.18s', transform: open ? 'rotate(180deg)' : 'rotate(0deg)', flexShrink:0 }}>▼</span>
       </button>
 
       {open && (
