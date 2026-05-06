@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api, rawApiFetch } from '../api'
 import { AutoApplySetup } from './CareerOps'
+import { useMediaQuery } from '../hooks'
+import TabPicker from './TabPicker'
 
 const CD_CSS = `
   .cd-tab { cursor:pointer; padding:10px 20px; font-size:13px; font-weight:700; border:none; background:transparent; color:#64748b; border-bottom:3px solid transparent; transition:all 0.15s; white-space:nowrap; }
@@ -2065,6 +2067,7 @@ export default function CompanyDetail() {
   const [tab, setTab]           = useState('job-scraper')
   const [status, setStatus]     = useState('new')
   const [autoAnalyze, setAutoAnalyze] = useState(false)
+  const isPhone = useMediaQuery('(max-width: 480px)')
 
   useEffect(() => {
     const el = document.createElement('style')
@@ -2185,14 +2188,29 @@ export default function CompanyDetail() {
           </div>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display:'flex', borderTop:'1px solid #f1f5f9', marginTop:12, paddingLeft:16 }}>
-          {[['job-scraper','Job Scraper'],['career-ops','Career Ops'],['outreach','Outreach'],['job-automation','Job Automation']].map(([t, l]) => (
-            <button key={t} className={`cd-tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
-              {l}
-            </button>
-          ))}
-        </div>
+        {/* Tabs — TabPicker dropdown on phone, horizontal strip on desktop. */}
+        {isPhone ? (
+          <div style={{ borderTop:'1px solid #f1f5f9', marginTop:12, padding:'12px 16px 14px' }}>
+            <TabPicker
+              tabs={[
+                { id:'job-scraper',    icon:'🔍', full:'Job Scraper' },
+                { id:'career-ops',     icon:'🧠', full:'Career Ops' },
+                { id:'outreach',       icon:'✉',  full:'Outreach' },
+                { id:'job-automation', icon:'🤖', full:'Job Automation' },
+              ]}
+              value={tab}
+              onChange={setTab}
+            />
+          </div>
+        ) : (
+          <div style={{ display:'flex', borderTop:'1px solid #f1f5f9', marginTop:12, paddingLeft:16 }}>
+            {[['job-scraper','Job Scraper'],['career-ops','Career Ops'],['outreach','Outreach'],['job-automation','Job Automation']].map(([t, l]) => (
+              <button key={t} className={`cd-tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Tab content */}

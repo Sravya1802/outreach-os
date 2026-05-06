@@ -214,19 +214,19 @@ export default function CareerOpsPage() {
                     <div style={{ display:'flex', gap:8, marginTop:8 }}>
                       {app.company_id ? (
                         <button onClick={() => navigate(`/company/${app.company_id}`)}
-                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
+                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}>
                           View →
                         </button>
                       ) : app.job_url ? (
                         <a href={app.job_url} target="_blank" rel="noreferrer"
-                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', textDecoration:'none' }}>
-                          Open Posting ↗
+                          style={{ padding:'6px 16px', background:'#6366f1', color:'#fff', border:'none', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', textDecoration:'none', whiteSpace:'nowrap' }}>
+                          Open ↗
                         </a>
                       ) : null}
                       {app.source === 'evaluation' && app.evaluation_id && (
                         <button onClick={() => navigate(`/career?evalId=${app.evaluation_id}`)}
-                          style={{ padding:'6px 16px', background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer' }}>
-                          See evaluation →
+                          style={{ padding:'6px 16px', background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}>
+                          Evaluation →
                         </button>
                       )}
                     </div>

@@ -727,13 +727,13 @@ export function AutoApplySetup() {
     <div>
       {/* Profile card */}
       <div style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:12, padding:20, marginBottom:16 }}>
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
-          <div>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14, gap:12, flexWrap:'wrap' }}>
+          <div style={{ flex:'1 1 200px', minWidth:0 }}>
             <h2 style={{ fontSize:16, fontWeight:800, color:'#0f172a', margin:0 }}>Profile</h2>
             <p style={{ fontSize:12, color:'#64748b', margin:'2px 0 0' }}>Used by the auto-apply worker to fill application forms</p>
           </div>
           <button onClick={saveProfile} disabled={saving}
-            style={{ padding:'9px 18px', fontSize:12, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:9, cursor: saving ? 'default':'pointer', display:'flex', alignItems:'center', gap:7 }}>
+            style={{ padding:'9px 18px', fontSize:12, fontWeight:700, background:'linear-gradient(135deg,#6366f1,#7c3aed)', color:'#fff', border:'none', borderRadius:9, cursor: saving ? 'default':'pointer', display:'flex', alignItems:'center', gap:7, whiteSpace:'nowrap', flexShrink:0 }}>
             {saving ? <><Spin size={13} color="#fff" /> Saving…</> : 'Save Profile'}
           </button>
         </div>
@@ -1120,7 +1120,7 @@ function EvalCard({ ev, onClick, onDelete, onQueue, selected, onToggleSelect }) 
   }
   return (
     <div className="co-card" onClick={onClick}
-      style={{ background: selected ? '#eef2ff' : '#fff', border:`1px solid ${selected ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:12, padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:14, transition:'all 0.15s', marginBottom:10 }}>
+      style={{ background: selected ? '#eef2ff' : '#fff', border:`1px solid ${selected ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:12, padding:'14px 18px', cursor:'pointer', display:'flex', alignItems:'center', gap:12, transition:'all 0.15s', marginBottom:10, flexWrap:'wrap', rowGap:10 }}>
       {onToggleSelect && (
         <input
           type="checkbox"
@@ -1133,28 +1133,30 @@ function EvalCard({ ev, onClick, onDelete, onQueue, selected, onToggleSelect }) 
       <div style={{ width:48, height:48, borderRadius:'50%', background:gradeBg(ev.grade), border:`2px solid ${gc}`, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
         <span style={{ fontSize:20, fontWeight:900, color:gc }}>{ev.grade}</span>
       </div>
-      <div style={{ flex:1, minWidth:0 }}>
+      <div style={{ flex:'1 1 180px', minWidth:0 }}>
         <div style={{ fontSize:14, fontWeight:700, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ev.job_title || 'Unknown Role'}</div>
-        <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{ev.company_name} · Score: {ev.score}/100</div>
+        <div style={{ fontSize:12, color:'#64748b', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{ev.company_name} · Score: {ev.score}/100</div>
         <div style={{ fontSize:11, color:'#94a3b8', marginTop:3 }}>{new Date(ev.created_at).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })}</div>
       </div>
-      <button onClick={handleQueueClick} disabled={queued || queuing} title={queued ? 'Already queued for auto-apply' : 'Add to auto-apply queue'}
-        style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background: queued ? '#dcfce7' : '#fef3c7', color: queued ? '#15803d' : '#b45309', border:`1px solid ${queued ? '#86efac' : '#fcd34d'}`, borderRadius:7, cursor: queued || queuing ? 'default' : 'pointer', flexShrink:0, display:'flex', alignItems:'center', gap:4 }}>
-        {queuing ? <Spin size={11} /> : queued ? '✓ Queued' : '+ Auto-Apply'}
-      </button>
-      <button onClick={async e => {
-          e.stopPropagation()
-          try { await api.career.openReportTab(ev.id) }
-          catch (err) { alert('Could not open report: ' + err.message) }
-        }}
-        style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background:'#eef2ff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer', flexShrink:0 }}>
-        HTML ↗
-      </button>
-      {ev.pdf_path && <span title="PDF generated" style={{ fontSize:18 }}>📄</span>}
-      <button onClick={e => { e.stopPropagation(); onDelete(ev.id) }}
-        style={{ padding:'5px 10px', fontSize:11, background:'none', border:'1px solid #fecaca', color:'#dc2626', borderRadius:7, cursor:'pointer', flexShrink:0 }}>
-        ✕
-      </button>
+      <div style={{ display:'flex', gap:6, alignItems:'center', flexWrap:'wrap', justifyContent:'flex-end' }}>
+        <button onClick={handleQueueClick} disabled={queued || queuing} title={queued ? 'Already queued for auto-apply' : 'Add to auto-apply queue'}
+          style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background: queued ? '#dcfce7' : '#fef3c7', color: queued ? '#15803d' : '#b45309', border:`1px solid ${queued ? '#86efac' : '#fcd34d'}`, borderRadius:7, cursor: queued || queuing ? 'default' : 'pointer', flexShrink:0, display:'flex', alignItems:'center', gap:4, whiteSpace:'nowrap' }}>
+          {queuing ? <Spin size={11} /> : queued ? '✓ Queued' : '+ Auto-Apply'}
+        </button>
+        <button onClick={async e => {
+            e.stopPropagation()
+            try { await api.career.openReportTab(ev.id) }
+            catch (err) { alert('Could not open report: ' + err.message) }
+          }}
+          style={{ padding:'6px 12px', fontSize:11, fontWeight:700, background:'#eef2ff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer', flexShrink:0, whiteSpace:'nowrap' }}>
+          HTML ↗
+        </button>
+        {ev.pdf_path && <span title="PDF generated" style={{ fontSize:18 }}>📄</span>}
+        <button onClick={e => { e.stopPropagation(); onDelete(ev.id) }}
+          style={{ padding:'5px 10px', fontSize:11, background:'none', border:'1px solid #fecaca', color:'#dc2626', borderRadius:7, cursor:'pointer', flexShrink:0 }}>
+          ✕
+        </button>
+      </div>
     </div>
   )
 }

@@ -376,12 +376,12 @@ function RegularCategoryView({ categoryName }) {
             return (
               <div key={c.id} className="cv-company-row"
                 onClick={() => navigate(`/company/${c.id}`)}
-                style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'14px 18px', marginBottom:8, display:'flex', alignItems:'center', gap:16 }}>
+                style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'14px 18px', marginBottom:8, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', rowGap:10 }}>
                 <div style={{ width:38, height:38, borderRadius:8, background:'#eff6ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#4f46e5', flexShrink:0 }}>
                   {(c.name || '?')[0].toUpperCase()}
                 </div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3 }}>
+                <div style={{ flex:'1 1 200px', minWidth:0 }}>
+                  <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3, flexWrap:'wrap' }}>
                     <span style={{ fontWeight:700, fontSize:14, color:'#0f172a' }}>{c.name}</span>
                     {c.yc_batch && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:4, background:'rgba(242,102,37,0.1)', color:'#F26625', fontWeight:700 }}>{c.yc_batch}</span>}
                   </div>
@@ -390,7 +390,7 @@ function RegularCategoryView({ categoryName }) {
                     {c.created_at && <span style={{ marginLeft:8, color:'#94a3b8' }}>{timeAgo(c.created_at)}</span>}
                   </div>
                 </div>
-                <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+                <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0, flexWrap:'wrap' }}>
                   {c.source && c.source.split(',')[0] !== 'job' && (
                     <span className="cv-source-pill" style={{ background:srcColor.bg, color:srcColor.color, border:`1px solid ${srcColor.border}` }}>
                       {c.source.split(',')[0]}
