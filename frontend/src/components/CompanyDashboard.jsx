@@ -209,24 +209,35 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
           )}
         </div>
 
-        {/* Stats row — compact cards on phone (12px padding, 18px value)
-            so 5 cards in a 2-up grid don't dominate the viewport. */}
+        {/* Stats row — phone: compact cards in a single horizontally-scrolling
+            row so all 5 stay one line. Desktop: original 5-column equal grid. */}
         {stats && (
-          <div style={{ display:'grid', gridTemplateColumns: isPhone ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)', gap: isPhone ? 8 : 12, marginTop: isPhone ? 12 : 20 }}>
+          <div style={{
+            display: isPhone ? 'flex' : 'grid',
+            gridTemplateColumns: isPhone ? undefined : 'repeat(5, 1fr)',
+            gap: isPhone ? 8 : 12,
+            marginTop: isPhone ? 10 : 20,
+            overflowX: isPhone ? 'auto' : 'visible',
+            scrollSnapType: isPhone ? 'x mandatory' : undefined,
+            paddingBottom: isPhone ? 4 : 0, // room for scrollbar without clipping shadow
+          }}>
             {[
-              { label:'Companies', value: stats.totalCompanies?.toLocaleString() ?? '—', sub:'in database' },
-              { label:'Contacts',  value: stats.totalContacts?.toLocaleString() ?? '—', sub:[
-                stats.contactsWithEmail != null ? `${stats.contactsWithEmail.toLocaleString()} emails` : null,
-                stats.totalLinkedInContacts != null ? `${stats.totalLinkedInContacts.toLocaleString()} LinkedIn` : null,
-              ].filter(Boolean).join(' · ') || 'people found' },
-              { label:'Outreach Sent', value: stats.totalSent?.toLocaleString() ?? '—', sub:'messages sent' },
-              { label:'Response Rate', value: stats.responseRate != null ? `${stats.responseRate}%` : '—', sub:'reply rate' },
-              { label:'Sources', value: stats.activeSources?.toLocaleString() ?? '—', sub:'active feeds' },
+              { label:'Companies', value: stats.totalCompanies?.toLocaleString() ?? '—' },
+              { label:'Contacts',  value: stats.totalContacts?.toLocaleString() ?? '—' },
+              { label:'Sent',      value: stats.totalSent?.toLocaleString() ?? '—' },
+              { label:'Reply',     value: stats.responseRate != null ? `${stats.responseRate}%` : '—' },
+              { label:'Sources',   value: stats.activeSources?.toLocaleString() ?? '—' },
             ].map(s => (
-              <div key={s.label} className="dash-stat-card" style={{ padding: isPhone ? '12px 14px' : '14px 16px', background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0' }}>
-                <div style={{ fontSize: isPhone ? 18 : 20, fontWeight:800, color:'#0f172a', lineHeight:1.1 }}>{s.value}</div>
-                <div style={{ fontSize:11, color:'#94a3b8', marginTop:3, fontWeight:600 }}>{s.label}</div>
-                <div style={{ fontSize:10, color:'#94a3b8', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.sub}</div>
+              <div key={s.label} className="dash-stat-card"
+                style={{
+                  padding: isPhone ? '8px 12px' : '14px 16px',
+                  background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0',
+                  flex: isPhone ? '0 0 auto' : undefined,
+                  minWidth: isPhone ? 88 : undefined,
+                  scrollSnapAlign: isPhone ? 'start' : undefined,
+                }}>
+                <div style={{ fontSize: isPhone ? 16 : 20, fontWeight:800, color:'#0f172a', lineHeight:1.1 }}>{s.value}</div>
+                <div style={{ fontSize: isPhone ? 10 : 11, color:'#94a3b8', marginTop:2, fontWeight:600, whiteSpace:'nowrap' }}>{s.label}</div>
               </div>
             ))}
           </div>
