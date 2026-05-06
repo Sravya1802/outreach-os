@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api'
+import { useMediaQuery } from '../hooks'
 
 // Column order and color palette for the job-search Kanban.
 const COLUMN_ORDER = ['evaluated', 'applied', 'responded', 'interview', 'offer', 'rejected']
@@ -64,6 +65,11 @@ function Card({ item, onMove, onOpenReport }) {
 export default function ApplicationPipeline() {
   const [data, setData]     = useState(null)
   const [loading, setLoading] = useState(true)
+  // On phone, the 6-column Kanban can't fit; pick one column to show at a
+  // time using the stat pills as a tab selector. Default to whichever
+  // column has the most items, so the user lands on the meaningful one.
+  const isPhone = useMediaQuery('(max-width: 640px)')
+  const [activeCol, setActiveCol] = useState('evaluated')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -103,25 +109,39 @@ export default function ApplicationPipeline() {
           </button>
         </div>
 
-        {/* Stat pills */}
+        {/* Stat pills — clickable on phone (column selector), display-only
+            on desktop (the Kanban is visible all at once). */}
         {data && (
           <div style={{ display:'flex', gap:8, marginTop:14, flexWrap:'wrap' }}>
             {COLUMN_ORDER.map(k => {
               const meta = COL_STYLE[k]
               const n = data.totals?.[k] || 0
+              const isActive = isPhone && activeCol === k
+              const Tag = isPhone ? 'button' : 'div'
               return (
-                <div key={k} style={{ padding:'6px 14px', borderRadius:20, background: meta.bg, border:`1px solid ${meta.border}`, display:'flex', alignItems:'center', gap:7 }}>
-                  <span style={{ fontSize:13, fontWeight:800, color: meta.tint }}>{n}</span>
-                  <span style={{ fontSize:11, fontWeight:700, color: meta.tint, textTransform:'capitalize' }}>{data.columns[k].label}</span>
-                </div>
+                <Tag key={k}
+                  {...(isPhone ? { onClick: () => setActiveCol(k), type:'button' } : {})}
+                  style={{
+                    padding:'6px 14px', borderRadius:20,
+                    background: isActive ? meta.tint : meta.bg,
+                    border:`1px solid ${isActive ? meta.tint : meta.border}`,
+                    display:'flex', alignItems:'center', gap:7,
+                    cursor: isPhone ? 'pointer' : 'default',
+                    fontFamily:'inherit',
+                    transition:'all 0.12s',
+                  }}>
+                  <span style={{ fontSize:13, fontWeight:800, color: isActive ? '#fff' : meta.tint }}>{n}</span>
+                  <span style={{ fontSize:11, fontWeight:700, color: isActive ? '#fff' : meta.tint, textTransform:'capitalize' }}>{data.columns[k].label}</span>
+                </Tag>
               )
             })}
           </div>
         )}
       </div>
 
-      {/* Kanban */}
-      <div style={{ flex:1, overflowX:'auto', overflowY:'hidden', padding:'20px 32px' }}>
+      {/* Kanban — desktop: 6 columns side-by-side with horizontal scroll.
+          Phone: a single column matching activeCol, full-width. */}
+      <div style={{ flex:1, overflowX: isPhone ? 'hidden' : 'auto', overflowY: isPhone ? 'auto' : 'hidden', padding: isPhone ? '14px 12px' : '20px 32px' }}>
         {loading && !data ? (
           <div style={{ display:'flex', justifyContent:'center', paddingTop:60 }}><Spin size={28} /></div>
         ) : !data || data.total === 0 ? (
@@ -131,12 +151,20 @@ export default function ApplicationPipeline() {
             <div style={{ fontSize:12 }}>Evaluate a job in Career Ops — it'll appear here automatically.</div>
           </div>
         ) : (
-          <div style={{ display:'flex', gap:16, height:'100%', minHeight:400 }}>
-            {COLUMN_ORDER.map(k => {
+          <div style={{ display:'flex', gap:16, height: isPhone ? 'auto' : '100%', minHeight: isPhone ? 0 : 400 }}>
+            {(isPhone ? [activeCol] : COLUMN_ORDER).map(k => {
               const col = data.columns[k]
               const meta = COL_STYLE[k]
               return (
-                <div key={k} style={{ width:280, flexShrink:0, display:'flex', flexDirection:'column', background: meta.bg, border:`1px solid ${meta.border}`, borderRadius:12, padding:12, height:'100%', overflow:'hidden' }}>
+                <div key={k} style={{
+                  width: isPhone ? '100%' : 280,
+                  flexShrink: isPhone ? 1 : 0,
+                  display:'flex', flexDirection:'column',
+                  background: meta.bg, border:`1px solid ${meta.border}`,
+                  borderRadius:12, padding:12,
+                  height: isPhone ? 'auto' : '100%',
+                  overflow: isPhone ? 'visible' : 'hidden',
+                }}>
                   <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:10, paddingLeft:4 }}>
                     <div>
                       <div style={{ fontSize:12, fontWeight:800, color: meta.tint, textTransform:'uppercase', letterSpacing:'0.06em' }}>{col.label}</div>
@@ -146,7 +174,7 @@ export default function ApplicationPipeline() {
                       {col.items.length}
                     </div>
                   </div>
-                  <div style={{ flex:1, overflowY:'auto', paddingRight:2 }}>
+                  <div style={{ flex:1, overflowY: isPhone ? 'visible' : 'auto', paddingRight:2 }}>
                     {col.items.length === 0 ? (
                       <div style={{ fontSize:11, color: meta.tint, opacity:0.5, textAlign:'center', padding:'24px 8px' }}>—</div>
                     ) : (

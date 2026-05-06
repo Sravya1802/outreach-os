@@ -108,15 +108,15 @@ export default function ScraperPage() {
         <h1 style={{ fontSize:22, fontWeight:800, color:'#0f172a', margin:'0 0 4px' }}>Job Scraper</h1>
         <p style={{ fontSize:13, color:'#64748b', margin:'0 0 16px' }}>Bulk scrape intern roles across all job sources</p>
 
-        <div style={{ display:'flex', gap:10, alignItems:'center' }}>
+        <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
           <select value={category} onChange={e => setCategory(e.target.value)}
-            style={{ padding:'8px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', background:'#f8fafc', outline:'none' }}>
+            style={{ flex:'1 1 160px', minWidth:0, padding:'8px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', background:'#f8fafc', outline:'none' }}>
             <option value="">All Categories</option>
             {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <button onClick={() => scrape('all')} disabled={!!scraping}
-            style={{ padding:'9px 20px', background: scraping ? '#f1f5f9' : 'linear-gradient(135deg,#6366f1,#7c3aed)', color: scraping ? '#64748b' : '#fff', border:'none', borderRadius:9, fontSize:13, fontWeight:700, cursor: scraping ? 'default':'pointer', display:'flex', alignItems:'center', gap:7 }}>
-            {scraping === 'all' ? <><Spin color="#64748b" /> Scraping all…</> : '↺ Scrape All Sources'}
+            style={{ padding:'9px 18px', background: scraping ? '#f1f5f9' : 'linear-gradient(135deg,#6366f1,#7c3aed)', color: scraping ? '#64748b' : '#fff', border:'none', borderRadius:9, fontSize:13, fontWeight:700, cursor: scraping ? 'default':'pointer', display:'flex', alignItems:'center', gap:7, whiteSpace:'nowrap', flexShrink:0 }}>
+            {scraping === 'all' ? <><Spin color="#64748b" /> Scraping…</> : '↺ Scrape All'}
           </button>
         </div>
       </div>
