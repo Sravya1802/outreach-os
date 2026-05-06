@@ -335,22 +335,27 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
           </div>
         </div>
 
-        <div style={{ display:'grid', gridTemplateColumns: isPhone ? 'repeat(2, 1fr)' : 'repeat(auto-fit, minmax(260px, 1fr))', gap: isPhone ? 10 : 16 }}>
-          {/* YC Startups special card — compact tile on phone matches the
-              other cards in the 2-up grid; original 'featured' look on desktop. */}
+        <div style={{
+          display: isPhone ? 'flex' : 'grid',
+          flexDirection: isPhone ? 'column' : undefined,
+          gridTemplateColumns: isPhone ? undefined : 'repeat(auto-fit, minmax(260px, 1fr))',
+          gap: isPhone ? 0 : 16,
+          background: isPhone ? '#fff' : 'transparent',
+          border: isPhone ? '1px solid #e2e8f0' : undefined,
+          borderRadius: isPhone ? 12 : undefined,
+          overflow: isPhone ? 'hidden' : undefined,
+        }}>
+          {/* YC Startups — phone: settings-list row (colored dot, label,
+              count, chevron). Desktop keeps the original 'featured' card. */}
           {isPhone ? (
-            <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
-              style={{ background:'#fff', border:'1px solid rgba(242,102,37,0.3)', borderLeft:'4px solid #F26625', borderRadius:12, padding:'14px 14px 12px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)', display:'flex', flexDirection:'column', gap:8, minHeight:130 }}>
-              <div style={{ width:42, height:42, borderRadius:10, background:'rgba(242,102,37,0.1)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#F26625' }}>
-                YC
-              </div>
-              <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.25, flex:1 }}>YC Startups</div>
-              <div style={{ fontSize:22, fontWeight:800, color:'#F26625', lineHeight:1 }}>
-                {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : ' '}
-              </div>
-              <div style={{ height:3, background:'#f1f5f9', borderRadius:2 }}>
-                <div style={{ height:'100%', background:'#F26625', borderRadius:2, width:'100%' }} />
-              </div>
+            <div className="dash-cat-row" onClick={() => goToCategory('YC Startups')}
+              style={{ display:'flex', alignItems:'center', gap:12, padding:'14px 14px', borderBottom:'1px solid #f1f5f9', cursor:'pointer', background:'#fff' }}>
+              <span style={{ width:10, height:10, borderRadius:'50%', background:'#F26625', flexShrink:0 }} />
+              <span style={{ flex:1, fontSize:14, fontWeight:700, color:'#0f172a', minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>YC Startups</span>
+              <span style={{ fontSize:14, fontWeight:800, color:'#F26625', flexShrink:0 }}>
+                {statsLoaded ? (stats?.ycImported ?? 0).toLocaleString() : '·'}
+              </span>
+              <span style={{ fontSize:14, color:'#cbd5e1', flexShrink:0 }}>›</span>
             </div>
           ) : (
             <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
@@ -380,28 +385,29 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
           )}
 
           {/* Regular categories */}
-          {sortedCats.map(cat => {
+          {sortedCats.map((cat, idx) => {
             const barW = Math.max(cat.count > 0 ? 3 : 0, Math.round((cat.count / maxCount) * 100))
-            // Phone: compact square-ish tile. Larger abbreviation badge,
-            // smaller label, count below. No long description (would
-            // wrap awkwardly in a 2-up grid).
-            // Desktop: original layout — abbr + label inline, big count,
-            // wrapped description, progress bar.
+            // Phone: settings-list row — colored dot, name, count, chevron.
+            // No card chrome, no badge, no progress bar. Tap to open.
             if (isPhone) {
+              const isLast = idx === sortedCats.length - 1
               return (
-                <div key={cat.id} className="dash-cat-card"
-                  onClick={() => goToCategory(cat.label)}
-                  style={{ background:'#fff', border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`, borderRadius:12, padding:'14px 14px 12px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1, display:'flex', flexDirection:'column', gap:8, minHeight:130 }}>
-                  <div style={{ width:42, height:42, borderRadius:10, background:cat.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:cat.tint }}>
-                    {cat.abbr}
-                  </div>
-                  <div style={{ fontSize:12, fontWeight:700, color:'#0f172a', lineHeight:1.25, flex:1 }}>{cat.label}</div>
-                  <div style={{ fontSize:22, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, lineHeight:1 }}>
-                    {!catCountsLoaded ? ' ' : cat.count.toLocaleString()}
-                  </div>
-                  <div style={{ height:3, background:'#f1f5f9', borderRadius:2 }}>
-                    <div style={{ height:'100%', background: cat.count === 0 ? '#e2e8f0' : cat.tint, borderRadius:2, width:`${barW}%`, transition:'width 0.5s' }} />
-                  </div>
+                <div key={cat.id} className="dash-cat-row"
+                  onClick={() => cat.count > 0 && goToCategory(cat.label)}
+                  style={{
+                    display:'flex', alignItems:'center', gap:12,
+                    padding:'14px 14px',
+                    borderBottom: isLast ? 'none' : '1px solid #f1f5f9',
+                    cursor: cat.count > 0 ? 'pointer' : 'default',
+                    background:'#fff',
+                    opacity: cat.count === 0 ? 0.5 : 1,
+                  }}>
+                  <span style={{ width:10, height:10, borderRadius:'50%', background: cat.count === 0 ? '#cbd5e1' : cat.tint, flexShrink:0 }} />
+                  <span style={{ flex:1, fontSize:14, fontWeight:700, color:'#0f172a', minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{cat.label}</span>
+                  <span style={{ fontSize:14, fontWeight:800, color: cat.count === 0 ? '#94a3b8' : cat.tint, flexShrink:0 }}>
+                    {!catCountsLoaded ? '·' : cat.count.toLocaleString()}
+                  </span>
+                  <span style={{ fontSize:14, color:'#cbd5e1', flexShrink:0 }}>›</span>
                 </div>
               )
             }

@@ -83,7 +83,14 @@ export default function Dropdown({
       {open && (
         <div role="listbox"
           style={{
-            position:'absolute', top:'calc(100% + 6px)', left:0, right:0,
+            position:'absolute', top:'calc(100% + 6px)',
+            // For compact triggers (status pills) the trigger itself is
+            // narrow — pin the menu to the LEFT edge but let it grow to
+            // fit option labels (min 160px). Non-compact still spans the
+            // full trigger width.
+            left:0,
+            right: compact ? 'auto' : 0,
+            minWidth: compact ? 160 : undefined,
             background:'#fff', border:'1px solid #e2e8f0',
             borderRadius:10, padding:6, zIndex:120,
             boxShadow:'0 12px 32px rgba(15,23,42,0.14)',
