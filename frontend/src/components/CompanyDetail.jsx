@@ -794,25 +794,45 @@ function JobScraperTab({ company, onTabSwitch }) {
         </div>
       )}
 
-      {/* Filter + Sort bar — only shown when roles exist */}
+      {/* Filter + Sort bar — pill row for filters and a matching pill-shaped
+          sort selector. Wraps to multiple lines on narrow viewports without
+          breaking the visual rhythm. */}
       {!loading && roles.length > 0 && (
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:16, marginBottom:16, padding:'12px 0', borderBottom:'1px solid #f1f5f9' }}>
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:16, padding:'12px 0', borderBottom:'1px solid #f1f5f9', flexWrap:'wrap' }}>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
             {ROLE_FILTERS.map(f => (
               <button key={f.label} onClick={() => setActiveFilter(f.label)}
-                style={{ padding:'6px 14px', borderRadius:20, border:'none', fontSize:12, fontWeight:600, cursor:'pointer', transition:'all 0.15s',
-                  background: activeFilter === f.label ? '#6366f1' : '#f1f5f9',
-                  color: activeFilter === f.label ? '#fff' : '#64748b' }}>
+                style={{
+                  padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:700,
+                  cursor:'pointer', transition:'all 0.15s', whiteSpace:'nowrap',
+                  border:'1px solid',
+                  borderColor: activeFilter === f.label ? '#6366f1' : '#e2e8f0',
+                  background:  activeFilter === f.label ? '#6366f1' : '#fff',
+                  color:       activeFilter === f.label ? '#fff'    : '#64748b',
+                }}>
                 {f.label}
               </button>
             ))}
           </div>
-          <select value={sortOrder} onChange={e => setSortOrder(e.target.value)}
-            style={{ padding:'6px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, fontWeight:600, color:'#475569', outline:'none', background:'#fff', cursor:'pointer' }}>
-            <option value="newest">Newest first</option>
-            <option value="oldest">Oldest first</option>
-            <option value="az">A → Z</option>
-          </select>
+          <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+            {[
+              { value:'newest', label:'Newest' },
+              { value:'oldest', label:'Oldest' },
+              { value:'az',     label:'A → Z' },
+            ].map(opt => (
+              <button key={opt.value} onClick={() => setSortOrder(opt.value)}
+                style={{
+                  padding:'6px 14px', borderRadius:20, fontSize:12, fontWeight:700,
+                  cursor:'pointer', transition:'all 0.15s', whiteSpace:'nowrap',
+                  border:'1px solid',
+                  borderColor: sortOrder === opt.value ? '#6366f1' : '#e2e8f0',
+                  background:  sortOrder === opt.value ? '#6366f1' : '#fff',
+                  color:       sortOrder === opt.value ? '#fff'    : '#64748b',
+                }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
