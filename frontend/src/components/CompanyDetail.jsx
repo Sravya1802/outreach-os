@@ -2377,12 +2377,18 @@ export default function CompanyDetail() {
           </div>
           {/* Status dropdown — themed Dropdown so the iOS picker doesn't
               cover the page when tapped on mobile. */}
-          <div style={{ flexShrink:0, minWidth:140 }}>
+          <div style={{ flexShrink:0, minWidth:150 }}>
             <Dropdown
               ariaLabel="Company status"
               value={status}
               onChange={onStatusChange}
-              options={['new','researching','contacted','responded','skip'].map(s => ({ value:s, label:s }))}
+              options={[
+                { value:'new',         label:'New' },
+                { value:'researching', label:'Researching' },
+                { value:'contacted',   label:'Contacted' },
+                { value:'responded',   label:'Responded' },
+                { value:'skip',        label:'Skip' },
+              ]}
             />
           </div>
         </div>

@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
+import Dropdown from './Dropdown'
+import { useMediaQuery } from '../hooks'
 
 // Category taxonomy — labels match DB values
 const CATEGORIES = [
@@ -80,6 +82,7 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
   const [showDropdown, setShowDropdown] = useState(false)
   const [hideEmpty, setHideEmpty] = useState(false)
   const [sortBy, setSortBy]       = useState('count') // count | az | za
+  const isPhone = useMediaQuery('(max-width: 480px)')
   const searchRef  = useRef(null)
   const debounce   = useRef(null)
 
@@ -193,20 +196,23 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
 
   return (
     <div style={{ flex:1, overflowY:'auto', background:'#f8fafc' }}>
-      {/* Header */}
-      <div style={{ padding:'32px 40px 20px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
+      {/* Header — tighter padding + smaller H1 on phone for vertical breathing room. */}
+      <div style={{ padding: isPhone ? '14px 14px 12px' : '32px 40px 20px', background:'#fff', borderBottom:'1px solid #e2e8f0' }}>
         <div style={{ marginBottom:4 }}>
-          <h1 style={{ fontSize:24, fontWeight:800, color:'#0f172a', margin:0 }}>Companies</h1>
-          <p style={{ fontSize:13, color:'#64748b', margin:'4px 0 0' }}>
-            {countsLoading
-              ? ' '
-              : `${totalInDb.toLocaleString()} companies · ${sortedCats.filter(c => c.count > 0).length} industries`}
-          </p>
+          <h1 style={{ fontSize: isPhone ? 18 : 24, fontWeight:800, color:'#0f172a', margin:0 }}>Companies</h1>
+          {!isPhone && (
+            <p style={{ fontSize:13, color:'#64748b', margin:'4px 0 0' }}>
+              {countsLoading
+                ? ' '
+                : `${totalInDb.toLocaleString()} companies · ${sortedCats.filter(c => c.count > 0).length} industries`}
+            </p>
+          )}
         </div>
 
-        {/* Stats row */}
+        {/* Stats row — compact cards on phone (12px padding, 18px value)
+            so 5 cards in a 2-up grid don't dominate the viewport. */}
         {stats && (
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(5, 1fr)', gap:12, marginTop:20 }}>
+          <div style={{ display:'grid', gridTemplateColumns: isPhone ? 'repeat(2, 1fr)' : 'repeat(5, 1fr)', gap: isPhone ? 8 : 12, marginTop: isPhone ? 12 : 20 }}>
             {[
               { label:'Companies', value: stats.totalCompanies?.toLocaleString() ?? '—', sub:'in database' },
               { label:'Contacts',  value: stats.totalContacts?.toLocaleString() ?? '—', sub:[
@@ -217,10 +223,10 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
               { label:'Response Rate', value: stats.responseRate != null ? `${stats.responseRate}%` : '—', sub:'reply rate' },
               { label:'Sources', value: stats.activeSources?.toLocaleString() ?? '—', sub:'active feeds' },
             ].map(s => (
-              <div key={s.label} className="dash-stat-card" style={{ padding:'14px 16px', background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0' }}>
-                <div style={{ fontSize:20, fontWeight:800, color:'#0f172a' }}>{s.value}</div>
+              <div key={s.label} className="dash-stat-card" style={{ padding: isPhone ? '12px 14px' : '14px 16px', background:'#f8fafc', borderRadius:10, border:'1px solid #e2e8f0' }}>
+                <div style={{ fontSize: isPhone ? 18 : 20, fontWeight:800, color:'#0f172a', lineHeight:1.1 }}>{s.value}</div>
                 <div style={{ fontSize:11, color:'#94a3b8', marginTop:3, fontWeight:600 }}>{s.label}</div>
-                <div style={{ fontSize:10, color:'#94a3b8', marginTop:2 }}>{s.sub}</div>
+                <div style={{ fontSize:10, color:'#94a3b8', marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.sub}</div>
               </div>
             ))}
           </div>
@@ -287,29 +293,38 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
       </div>
 
       {/* Category grid */}
-      <div style={{ padding:'24px 40px 40px' }}>
-        {/* Controls */}
-        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20 }}>
-          <span style={{ fontSize:13, color:'#64748b', fontWeight:600 }}>
+      <div style={{ padding: isPhone ? '14px 12px 24px' : '24px 40px 40px' }}>
+        {/* Controls — single row that wraps on phone so the count label,
+            sort dropdown, and Hide-empty toggle each get full-width when
+            stacked. Themed Dropdown matches the indigo aesthetic instead
+            of falling back to the OS picker. */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:20, gap:10, flexWrap:'wrap' }}>
+          <span style={{ fontSize:13, color:'#64748b', fontWeight:600, flex:'1 1 auto' }}>
             {!catCountsLoaded
               ? ' '
               : `${sortedCats.filter(c => c.count > 0).length} active${!hideEmpty ? ` · ${sortedCats.filter(c => c.count === 0).length} empty` : ''}`}
           </span>
-          <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-            <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-              style={{ padding:'5px 10px', borderRadius:7, border:'1px solid #e2e8f0', fontSize:12, fontWeight:600, color:'#475569', background:'#fff', outline:'none' }}>
-              <option value="count">↓ Most companies</option>
-              <option value="az">A → Z</option>
-              <option value="za">Z → A</option>
-            </select>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+            <div style={{ minWidth:170 }}>
+              <Dropdown
+                ariaLabel="Sort categories"
+                value={sortBy}
+                onChange={setSortBy}
+                options={[
+                  { value:'count', label:'↓ Most companies' },
+                  { value:'az',    label:'A → Z' },
+                  { value:'za',    label:'Z → A' },
+                ]}
+              />
+            </div>
             <button onClick={() => setHideEmpty(v => !v)}
-              style={{ padding:'5px 12px', borderRadius:7, border:'1px solid #e2e8f0', background: hideEmpty ? '#eff6ff' : '#fff', color: hideEmpty ? '#2563eb' : '#64748b', fontSize:12, fontWeight:600, cursor:'pointer' }}>
+              style={{ padding:'9px 14px', borderRadius:9, border:`1px solid ${hideEmpty ? '#c7d2fe' : '#e2e8f0'}`, background: hideEmpty ? '#eef2ff' : '#fff', color: hideEmpty ? '#4f46e5' : '#64748b', fontSize:13, fontWeight:600, cursor:'pointer', whiteSpace:'nowrap', flexShrink:0 }}>
               {hideEmpty ? '✓ Hide empty' : 'Hide empty'}
             </button>
           </div>
         </div>
 
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:16 }}>
+        <div style={{ display:'grid', gridTemplateColumns: isPhone ? '1fr' : 'repeat(auto-fit, minmax(260px, 1fr))', gap: isPhone ? 10 : 16 }}>
           {/* YC Startups special card */}
           <div className="dash-cat-card" onClick={() => goToCategory('YC Startups')}
             style={{ background:'#fff', border:'1px solid rgba(242,102,37,0.3)', borderLeft:'4px solid #F26625', borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.05)' }}>

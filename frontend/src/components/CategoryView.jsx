@@ -441,12 +441,18 @@ function RegularCategoryView({ categoryName }) {
                       Careers ↗
                     </a>
                   )}
-                  <div onClick={e => e.stopPropagation()} style={{ minWidth:120 }}>
+                  <div onClick={e => e.stopPropagation()} style={{ minWidth:130 }}>
                     <Dropdown
                       ariaLabel={`Status for ${c.name}`}
                       value={c.status || 'new'}
                       onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
-                      options={['new','researching','contacted','responded','skip'].map(s => ({ value:s, label:s }))}
+                      options={[
+                        { value:'new',         label:'New' },
+                        { value:'researching', label:'Researching' },
+                        { value:'contacted',   label:'Contacted' },
+                        { value:'responded',   label:'Responded' },
+                        { value:'skip',        label:'Skip' },
+                      ]}
                     />
                   </div>
                   <span style={{ fontSize:13, color:'#94a3b8' }}>→</span>
