@@ -357,7 +357,15 @@ export default function CompanyDashboard({ onStatsChange, statsSnapshot = null, 
             return (
               <div key={cat.id} className="dash-cat-card"
                 onClick={() => goToCategory(cat.label)}
-                style={{ background:'#fff', border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`, borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1 }}>
+                style={{
+                  background:'#fff',
+                  border:`1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`,
+                  // Phone only: thick left accent in the category tint to
+                  // match the YC Startups featured-card treatment. Desktop
+                  // keeps the cleaner all-around border.
+                  borderLeft: isPhone ? `4px solid ${cat.count === 0 ? '#e2e8f0' : cat.tint}` : `1px solid ${cat.count === 0 ? '#f1f5f9' : cat.border}`,
+                  borderRadius:12, padding:'18px 20px', boxShadow:'0 1px 4px rgba(0,0,0,0.04)', opacity: cat.count === 0 ? 0.5 : 1,
+                }}>
                 <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:10 }}>
                   <div style={{ width:38, height:38, borderRadius:8, background:cat.bg, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:800, color:cat.tint, flexShrink:0 }}>
                     {cat.abbr}
