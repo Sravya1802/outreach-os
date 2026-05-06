@@ -55,8 +55,20 @@ async function serperSearch(query, num = 10) {
   return res.json();
 }
 
-// Run an Apify actor and await completion with full status logging
+// Run an Apify actor and await completion with full status logging.
+// Short-circuits with a synthetic quota-error when the last Apify call hit
+// "Monthly usage hard limit exceeded" within the past hour — otherwise the
+// daily cron wastes minutes hammering every actor variant for every source
+// (LinkedIn × 4, Wellfound × 4, Indeed × 2, ...) just to log the same error
+// for each.
+const QUOTA_SHORT_CIRCUIT_MS = 60 * 60 * 1000; // 1h cooldown
 async function runActor(actorId, input, waitSecs = 120) {
+  if (apifyQuotaBurn.lastFailureAt && Date.now() - apifyQuotaBurn.lastFailureAt < QUOTA_SHORT_CIRCUIT_MS) {
+    const ageMin = Math.round((Date.now() - apifyQuotaBurn.lastFailureAt) / 60000);
+    const err = new Error(`Apify quota exhausted (last failure ${ageMin}m ago: ${apifyQuotaBurn.lastError || 'monthly limit'}) — skipping ${actorId} for the next hour.`);
+    err.code = 'APIFY_QUOTA_BURNED';
+    throw err;
+  }
   const client = getClient();
   console.log(`[apify] starting actor ${actorId}...`);
   try {
