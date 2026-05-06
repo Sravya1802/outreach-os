@@ -244,11 +244,10 @@ function RegularCategoryView({ categoryName }) {
   const [status, setStatus]       = useState('')
   const [sortBy, setSortBy]       = useState('hiring')
   const [scraping, setScraping]   = useState(null)
-  // Collapse state for the Yet-to-check / Already-checked sections. Both
-  // open by default so the user sees both piles; tap a header to fold one
-  // away. Keeps state across re-renders.
-  const [openSections, setOpenSections] = useState({ unchecked: true, checked: true })
-  const toggleSection = (k) => setOpenSections(s => ({ ...s, [k]: !s[k] }))
+  // Active pile selector — 'unchecked' (default) or 'checked'. User picks
+  // one via the segmented button choice below; the list shows that pile
+  // full-width instead of two side-by-side sections.
+  const [activePile, setActivePile] = useState('unchecked')
   const [scrapeMsg, setScrapeMsg] = useState(null)
   const debounce = useRef(null)
 
@@ -321,54 +320,37 @@ function RegularCategoryView({ categoryName }) {
           </div>
         </div>
 
-        {/* Filters + Sort — segmented pill rows. Wrap to multiple lines
-            naturally on narrow screens. Active pill is filled indigo to
-            match the rest of the action UI. */}
-        <input value={search} onChange={onSearch} placeholder="Filter by name…"
-          style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', outline:'none', boxSizing:'border-box', width:'100%', marginBottom:10 }} />
-
-        <div style={{ marginBottom:8 }}>
-          <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:6 }}>Status</div>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-            {[
-              { value:'',           label:'All' },
-              { value:'new',        label:'New' },
-              { value:'researching',label:'Researching' },
-              { value:'contacted',  label:'Contacted' },
-              { value:'responded',  label:'Responded' },
-              { value:'skip',       label:'Skip' },
-            ].map(opt => {
-              const active = status === opt.value
-              return (
-                <button key={opt.value || 'all'} type="button"
-                  onClick={() => { setStatus(opt.value); setPage(0); load(0, search, source, opt.value, sortBy) }}
-                  style={{ padding:'6px 12px', fontSize:12, fontWeight:700, border:'1px solid', borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#6366f1' : '#fff', color: active ? '#fff' : '#475569', borderRadius:20, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.12s' }}>
-                  {opt.label}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        <div>
-          <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.07em', marginBottom:6 }}>Sort by</div>
-          <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
-            {[
-              { value:'hiring',   label:'⭐ Top' },
-              { value:'contacts', label:'👥 Contacts' },
-              { value:'recent',   label:'📅 Recent' },
-              { value:'az',       label:'A → Z' },
-              { value:'za',       label:'Z → A' },
-            ].map(opt => {
-              const active = sortBy === opt.value
-              return (
-                <button key={opt.value} type="button"
-                  onClick={() => { setSortBy(opt.value); setPage(0); load(0, search, source, status, opt.value) }}
-                  style={{ padding:'6px 12px', fontSize:12, fontWeight:700, border:'1px solid', borderColor: active ? '#6366f1' : '#e2e8f0', background: active ? '#6366f1' : '#fff', color: active ? '#fff' : '#475569', borderRadius:20, cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.12s' }}>
-                  {opt.label}
-                </button>
-              )
-            })}
+        {/* Filters + Sort — themed Dropdown so the OS picker doesn't appear
+            on mobile and the look stays consistent with the rest of the app. */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:8, alignItems:'center' }}>
+          <input value={search} onChange={onSearch} placeholder="Filter by name…"
+            style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', outline:'none', boxSizing:'border-box', width:'100%' }} />
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <Dropdown
+              ariaLabel="Filter by status"
+              value={status}
+              onChange={(v) => { setStatus(v); setPage(0); load(0, search, source, v, sortBy) }}
+              options={[
+                { value:'',           label:'All Statuses' },
+                { value:'new',        label:'New' },
+                { value:'researching',label:'Researching' },
+                { value:'contacted',  label:'Contacted' },
+                { value:'responded',  label:'Responded' },
+                { value:'skip',       label:'Skip' },
+              ]}
+            />
+            <Dropdown
+              ariaLabel="Sort by"
+              value={sortBy}
+              onChange={(v) => { setSortBy(v); setPage(0); load(0, search, source, status, v) }}
+              options={[
+                { value:'hiring',   label:'⭐ Top Companies' },
+                { value:'contacts', label:'👥 Most Contacts' },
+                { value:'recent',   label:'📅 Recent First' },
+                { value:'az',       label:'A → Z' },
+                { value:'za',       label:'Z → A' },
+              ]}
+            />
           </div>
         </div>
       </div>
@@ -491,42 +473,54 @@ function RegularCategoryView({ categoryName }) {
             )
           }
 
-          const sectionHeader = (key, icon, label, count, accent) => (
-            <button type="button" onClick={() => toggleSection(key)}
-              style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, position:'sticky', top:0, zIndex:1, cursor:'pointer', width:'100%', textAlign:'left', fontFamily:'inherit' }}>
-              <span style={{ fontSize:16 }}>{icon}</span>
-              <span style={{ fontSize:13, fontWeight:800, color:'#0f172a', flex:1 }}>{label}</span>
-              <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:`${accent}15`, color:accent }}>{count}</span>
-              <span aria-hidden="true" style={{ fontSize:11, color:'#94a3b8', display:'inline-block', transform: openSections[key] ? 'rotate(180deg)' : 'rotate(0deg)', transition:'transform 0.18s' }}>▼</span>
-            </button>
-          )
-
           const emptyState = (msg) => (
             <div style={{ padding:'24px 16px', fontSize:12, color:'#94a3b8', fontStyle:'italic', textAlign:'center', background:'#fff', border:'1px dashed #e2e8f0', borderRadius:10 }}>
               {msg}
             </div>
           )
 
-          // Two-column grid on desktop, single column on phones / narrow
-          // tablets. The min track of 280px lets each section shrink
-          // gracefully on small viewports without forcing horizontal
-          // overflow (the previous 440px min was wider than a phone).
-          // minWidth:0 on each section so child rows can flex below the
-          // grid's intrinsic min-content width.
+          // Button-choice toggle: pick which pile to view (unchecked vs
+          // checked). One list at a time, full width — cleaner than the
+          // two-column split on every screen size.
+          const pileButton = (key, icon, label, count, accent) => {
+            const active = activePile === key
+            return (
+              <button type="button" onClick={() => setActivePile(key)}
+                style={{
+                  display:'flex', alignItems:'center', gap:8, padding:'9px 16px',
+                  fontSize:13, fontWeight:700, cursor:'pointer',
+                  border:'1px solid', borderColor: active ? accent : '#e2e8f0',
+                  background: active ? accent : '#fff',
+                  color: active ? '#fff' : '#475569',
+                  borderRadius:10, transition:'all 0.12s',
+                  flex:'1 1 auto', justifyContent:'center', whiteSpace:'nowrap',
+                }}>
+                <span aria-hidden="true">{icon}</span>
+                <span>{label}</span>
+                <span style={{
+                  fontSize:11, fontWeight:800, padding:'2px 8px', borderRadius:20,
+                  background: active ? 'rgba(255,255,255,0.25)' : `${accent}15`,
+                  color: active ? '#fff' : accent,
+                }}>
+                  {count}
+                </span>
+              </button>
+            )
+          }
+
+          const visible = activePile === 'unchecked' ? unchecked : checked
+
           return (
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:16, alignItems:'flex-start' }}>
-              <div style={{ minWidth:0 }}>
-                {sectionHeader('unchecked', '🔍', 'Yet to check', unchecked.length, '#6366f1')}
-                {openSections.unchecked && (unchecked.length > 0
-                  ? unchecked.map(renderRow)
-                  : emptyState('All companies in this category have been checked. 🎉'))}
+            <div>
+              <div style={{ display:'flex', gap:8, marginBottom:14, flexWrap:'wrap' }}>
+                {pileButton('unchecked', '🔍', 'Yet to check', unchecked.length, '#6366f1')}
+                {pileButton('checked',   '✓',  'Already checked', checked.length, '#16a34a')}
               </div>
-              <div style={{ minWidth:0 }}>
-                {sectionHeader('checked', '✓', 'Already checked', checked.length, '#16a34a')}
-                {openSections.checked && (checked.length > 0
-                  ? checked.map(renderRow)
-                  : emptyState('No companies triaged yet. Click ↻ Scrape on a company to move it here.'))}
-              </div>
+              {visible.length > 0
+                ? visible.map(renderRow)
+                : emptyState(activePile === 'unchecked'
+                    ? 'All companies in this category have been checked. 🎉'
+                    : 'No companies scraped yet. Click ↻ Scrape on a company to move it here.')}
             </div>
           )
         })()}
