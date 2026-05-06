@@ -474,6 +474,26 @@ export default function App() {
 
       {/* ── Main content ── */}
       <main className="app-main" style={{ flex:1, overflow:'hidden', display:'flex', flexDirection:'column' }}>
+        {/* Mobile top bar — only visible at ≤900px (CSS-gated). Replaces
+            the floating hamburger that was overlapping page titles. Sticky
+            so it stays in place while content scrolls. */}
+        <header className="app-mobile-topbar" aria-hidden="true">
+          <button
+            type="button"
+            className="app-mobile-topbar__menu"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open navigation"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+          </button>
+          <div className="app-mobile-topbar__brand">
+            <span className="app-mobile-topbar__logo">◈</span> OutreachOS
+          </div>
+          <div style={{ width:40, flexShrink:0 }} aria-hidden="true" />
+        </header>
+
         <Suspense fallback={<div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center' }}><Spin size={24} color="#6366f1" /></div>}>
         <Routes>
           {/* Top-level */}

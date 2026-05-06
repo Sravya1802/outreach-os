@@ -238,8 +238,9 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 button:focus:not(:focus-visible) { outline: none; }
 
 /* ── Mobile drawer (Option A): hide sidebar by default, slide in via JS ──── */
-.app-hamburger { display: none; }
-.app-backdrop  { display: none; }
+.app-hamburger      { display: none; }
+.app-backdrop       { display: none; }
+.app-mobile-topbar  { display: none; }
 
 /* ── Responsive production safeguards ─────────────────────────────────────── */
 @media (max-width: 900px) {
@@ -279,32 +280,62 @@ button:focus:not(:focus-visible) { outline: none; }
     pointer-events: auto;
   }
 
-  .app-hamburger {
-    display: flex;
-    position: fixed;
-    top: 12px;
-    left: 12px;
-    width: 40px;
-    height: 40px;
-    border-radius: 8px;
-    background: rgba(15, 23, 42, 0.92);
-    color: #f1f5f9;
-    border: 1px solid #1e293b;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-    cursor: pointer;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .app-hamburger:active { background: #1e293b; }
+  /* Floating hamburger replaced by the inline app-mobile-topbar (below). */
+  .app-hamburger { display: none !important; }
 
   .app-main {
     width: 100% !important;
     flex: 1 !important;
     min-height: 0 !important;
-    overflow: auto !important;
-    /* Leave room for the floating hamburger so page headers don't sit under it. */
-    padding-top: 8px;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+
+  /* Mobile top bar — sticky 52px header inside .app-main, with hamburger
+     + brand. Replaces the floating hamburger that overlapped page titles.
+     Page content below it gets full width and natural padding. */
+  .app-mobile-topbar {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    height: 52px;
+    flex-shrink: 0;
+    padding: 0 12px;
+    background: #0f172a;
+    border-bottom: 1px solid #1e293b;
+    color: #f8fafc;
+    z-index: 50;
+  }
+  .app-mobile-topbar__menu {
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: transparent;
+    color: #f1f5f9;
+    border: 1px solid #1e293b;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .app-mobile-topbar__menu:active { background: #1e293b; }
+  .app-mobile-topbar__brand {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: #f8fafc;
+    flex: 1;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .app-mobile-topbar__logo {
+    color: #818cf8;
+    margin-right: 4px;
   }
   [style*="padding: 32px 40px"],
   [style*="padding:32px 40px"],
@@ -346,39 +377,31 @@ button:focus:not(:focus-visible) { outline: none; }
     grid-template-columns: 1fr !important;
   }
 
-  /* Page headers must not sit under the fixed hamburger button (top:12,
-     left:12, 40px wide). Push title rows right by ~56px on the first
-     paint of a page header. The substring matches catch all paddings
-     starting with the listed two-value prefix regardless of any third
-     bottom value. */
+  /* The mobile top bar handles the hamburger now — page headers no longer
+     need a left-padding offset to clear it. Just normalize horizontal
+     padding so all headers feel consistent on small screens. */
   [style*="padding: 32px 40px"],
   [style*="padding:32px 40px"],
+  [style*="padding: 28px 40px"],
+  [style*="padding:28px 40px"],
   [style*="padding: 24px 40px"],
   [style*="padding:24px 40px"],
+  [style*="padding: 20px 40px"],
+  [style*="padding:20px 40px"],
   [style*="padding: 18px 32px"],
   [style*="padding:18px 32px"],
   [style*="padding: 18px 28px"],
   [style*="padding:18px 28px"],
   [style*="padding: 16px 28px"],
   [style*="padding:16px 28px"],
-  [style*="padding: 20px 24px"],
-  [style*="padding:20px 24px"],
-  [style*="padding: 28px 40px"],
-  [style*="padding:28px 40px"] {
-    padding-left: 64px !important;
-    padding-right: 16px !important;
-  }
-
-  /* Tab strip padding (e.g. padding:'0 28px') needs the same hamburger
-     offset so the first tab isn't half-eaten by the menu icon. */
   [style*="padding: 0 28px"],
   [style*="padding:0 28px"],
   [style*="padding: 0 32px"],
   [style*="padding:0 32px"],
   [style*="padding: 0 40px"],
   [style*="padding:0 40px"] {
-    padding-left: 56px !important;
-    padding-right: 12px !important;
+    padding-left: 16px !important;
+    padding-right: 16px !important;
   }
 
   /* Tab bars and horizontal pill rows that don't fit on phone — let them
@@ -416,36 +439,33 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* ── Phone (≤ 480px) — even tighter constraints ─────────────────────────────── */
 @media (max-width: 480px) {
-  /* Page padding shrinks further so content doesn't suffocate. */
+  /* Tighter page padding on phone — top bar already gives breathing room. */
   [style*="padding: 32px 40px"],
   [style*="padding:32px 40px"],
+  [style*="padding: 28px 40px"],
+  [style*="padding:28px 40px"],
   [style*="padding: 24px 40px"],
   [style*="padding:24px 40px"],
+  [style*="padding: 20px 40px"],
+  [style*="padding:20px 40px"],
   [style*="padding: 18px 32px"],
   [style*="padding:18px 32px"],
   [style*="padding: 18px 28px"],
   [style*="padding:18px 28px"],
-  [style*="padding: 28px 40px"],
-  [style*="padding:28px 40px"] {
-    padding: 14px 10px 10px 56px !important;
-  }
   [style*="padding: 16px 32px"],
   [style*="padding:16px 32px"],
+  [style*="padding: 16px 28px"],
+  [style*="padding:16px 28px"],
   [style*="padding: 12px 32px"],
   [style*="padding:12px 32px"],
-  [style*="padding: 16px 28px"],
-  [style*="padding:16px 28px"] {
-    padding-left: 12px !important;
-    padding-right: 12px !important;
-  }
   [style*="padding: 0 28px"],
   [style*="padding:0 28px"],
   [style*="padding: 0 32px"],
   [style*="padding:0 32px"],
   [style*="padding: 0 40px"],
   [style*="padding:0 40px"] {
-    padding-left: 56px !important;
-    padding-right: 8px !important;
+    padding-left: 12px !important;
+    padding-right: 12px !important;
   }
 
   /* Force-wrap large dollar values / counts so they don't break grid cards. */
