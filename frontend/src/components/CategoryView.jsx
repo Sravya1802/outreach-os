@@ -412,13 +412,27 @@ function RegularCategoryView({ categoryName }) {
           const unchecked = sorted.filter(c => !isChecked(c))
           const checked   = sorted.filter(c =>  isChecked(c))
 
+          // Unified button styles so every action chip on a company row
+          // looks like part of the same family. Three tiers:
+          //   primary  → indigo filled (the main action — Apply)
+          //   ghost    → indigo-outlined (secondary — Careers)
+          //   chip     → grey-outlined (Status, source pill)
+          const btnPrimary = { padding:'6px 12px', borderRadius:8, border:'none',
+            background:'#4f46e5', color:'#fff', fontSize:11, fontWeight:700,
+            cursor:'pointer', whiteSpace:'nowrap', display:'inline-flex',
+            alignItems:'center', gap:5, transition:'all 0.12s' }
+          const btnGhost   = { padding:'6px 12px', borderRadius:8,
+            border:'1px solid #c7d2fe', background:'#fff', color:'#4f46e5',
+            fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap',
+            textDecoration:'none', display:'inline-flex', alignItems:'center',
+            gap:5, transition:'all 0.12s' }
+
           const renderRow = (c) => {
-            const stColor  = STATUS_COLORS[c.status] || STATUS_COLORS.new
             const srcColor = SOURCE_COLORS[c.source?.split(',')[0]] || SOURCE_COLORS.manual_search
             return (
               <div key={c.id} className="cv-company-row"
                 onClick={() => navigate(`/company/${c.id}`)}
-                style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'14px 18px', marginBottom:8, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', rowGap:10 }}>
+                style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'14px 16px', marginBottom:8, display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', rowGap:10 }}>
                 <div style={{ width:38, height:38, borderRadius:8, background:'#eff6ff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:14, fontWeight:800, color:'#4f46e5', flexShrink:0 }}>
                   {(c.name || '?')[0].toUpperCase()}
                 </div>
@@ -426,18 +440,18 @@ function RegularCategoryView({ categoryName }) {
                   <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:3, flexWrap:'wrap' }}>
                     <span style={{ fontWeight:700, fontSize:14, color:'#0f172a' }}>{c.name}</span>
                     {c.yc_batch && <span style={{ fontSize:9, padding:'2px 6px', borderRadius:4, background:'rgba(242,102,37,0.1)', color:'#F26625', fontWeight:700 }}>{c.yc_batch}</span>}
+                    {c.source && c.source.split(',')[0] !== 'job' && (
+                      <span className="cv-source-pill" style={{ background:srcColor.bg, color:srcColor.color, border:`1px solid ${srcColor.border}` }}>
+                        {c.source.split(',')[0]}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize:11, color:'#64748b' }}>
                     {(c.roles && c.roles !== 'job') || c.role_title} {c.location ? `· ${c.location}` : ''}
                     {c.created_at && <span style={{ marginLeft:8, color:'#94a3b8' }}>{timeAgo(c.created_at)}</span>}
                   </div>
                 </div>
-                <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0, flexWrap:'wrap' }}>
-                  {c.source && c.source.split(',')[0] !== 'job' && (
-                    <span className="cv-source-pill" style={{ background:srcColor.bg, color:srcColor.color, border:`1px solid ${srcColor.border}` }}>
-                      {c.source.split(',')[0]}
-                    </span>
-                  )}
+                <div style={{ display:'flex', alignItems:'center', gap:6, flexShrink:0, flexWrap:'wrap' }}>
                   <button onClick={async (e) => {
                       e.stopPropagation()
                       try {
@@ -447,18 +461,18 @@ function RegularCategoryView({ categoryName }) {
                       } catch (err) { alert('Auto-Apply failed: ' + err.message) }
                     }}
                     title="Queue all known scraped intern roles for auto-apply"
-                    style={{ padding:'3px 9px', borderRadius:7, border:'1px solid #c7d2fe', background:'#eef2ff', color:'#4f46e5', fontSize:11, fontWeight:700, cursor:'pointer', whiteSpace:'nowrap' }}>
+                    style={btnPrimary}>
                     🤖 Apply
                   </button>
                   {(c.url || c.domain) && (
                     <a href={c.url || `https://${c.domain}/careers`} target="_blank" rel="noreferrer"
                       onClick={e => e.stopPropagation()}
                       title="Open careers page"
-                      style={{ padding:'3px 9px', borderRadius:7, border:'1px solid #e2e8f0', background:'#f8fafc', color:'#475569', fontSize:11, fontWeight:700, textDecoration:'none', whiteSpace:'nowrap' }}>
+                      style={btnGhost}>
                       Careers ↗
                     </a>
                   )}
-                  <div onClick={e => e.stopPropagation()} style={{ minWidth:130 }}>
+                  <div onClick={e => e.stopPropagation()} style={{ minWidth:118 }}>
                     <Dropdown
                       ariaLabel={`Status for ${c.name}`}
                       value={c.status || 'new'}
@@ -472,7 +486,6 @@ function RegularCategoryView({ categoryName }) {
                       ]}
                     />
                   </div>
-                  <span style={{ fontSize:13, color:'#94a3b8' }}>→</span>
                 </div>
               </div>
             )
