@@ -4,6 +4,7 @@ import { api, rawApiFetch } from '../api'
 import { AutoApplySetup } from './CareerOps'
 import { useMediaQuery } from '../hooks'
 import TabPicker from './TabPicker'
+import Dropdown from './Dropdown'
 
 const CD_CSS = `
   .cd-tab { cursor:pointer; padding:10px 20px; font-size:13px; font-weight:700; border:none; background:transparent; color:#64748b; border-bottom:3px solid transparent; transition:all 0.15s; white-space:nowrap; }
@@ -525,6 +526,10 @@ function JobScraperTab({ company, onTabSwitch }) {
   const [scrapingType, setScrapingType] = useState(null) // Track which scrape is running (intern, fulltime, or null)
   const [autoApplyBusy, setAutoApplyBusy] = useState('')   // '' | 'queue' | 'scrape-and-queue'
   const [autoApplyMsg, setAutoApplyMsg]   = useState(null) // { ok, text }
+  // Multi-select for "Queue selected for Auto-Apply" — keyed by role id.
+  const [selected, setSelected]   = useState(new Set())
+  const [bulkBusy, setBulkBusy]   = useState(false)
+  const [bulkMsg, setBulkMsg]     = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -578,6 +583,38 @@ function JobScraperTab({ company, onTabSwitch }) {
       setScrapeResult({ ok: false, error: err.message })
     }
     setSavingUrl(false)
+  }
+
+  // Multi-select helpers — toggleable checkboxes per role row, plus a
+  // bulk Queue Selected for Auto-Apply action that flips matching role
+  // ids into the auto-apply queue in one round-trip.
+  function toggleSelect(id) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }
+  function selectAllVisible(roleIds) {
+    setSelected(new Set(roleIds))
+  }
+  function clearSelection() { setSelected(new Set()) }
+
+  async function queueSelected() {
+    if (selected.size === 0) return
+    setBulkBusy(true); setBulkMsg(null)
+    try {
+      const ids = [...selected]
+      const r = await api.career.autoApplyCompanyQueue(company.id, { roleIds: ids })
+      const queued  = r?.queued ?? 0
+      const skipped = r?.skippedAlreadyInFlight ?? 0
+      setBulkMsg({ ok: true, text: `✓ Queued ${queued} role${queued === 1 ? '' : 's'} for auto-apply${skipped > 0 ? ` · ${skipped} already in queue` : ''}` })
+      setSelected(new Set())
+    } catch (err) {
+      setBulkMsg({ ok: false, text: err.message || 'Queue failed' })
+    }
+    setBulkBusy(false)
+    setTimeout(() => setBulkMsg(null), 6000)
   }
 
   async function trackRole(role) {
@@ -813,14 +850,48 @@ function JobScraperTab({ company, onTabSwitch }) {
         </div>
       ) : (
         <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+          {/* Multi-select bulk action header — only renders when there are
+              roles with apply_urls to queue. */}
+          {(() => {
+            const queueable = displayedRoles.filter(r => r.apply_url)
+            if (queueable.length === 0) return null
+            const allSelected = queueable.length > 0 && queueable.every(r => selected.has(r.id))
+            return (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, padding:'10px 14px', background: selected.size > 0 ? '#eef2ff' : '#f8fafc', border:`1px solid ${selected.size > 0 ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:10, transition:'all 0.12s' }}>
+                <div style={{ fontSize:12, fontWeight:600, color:'#475569' }}>
+                  {selected.size > 0 ? `${selected.size} selected` : 'Select roles to bulk-queue for auto-apply'}
+                </div>
+                <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                  <button onClick={() => allSelected ? clearSelection() : selectAllVisible(queueable.map(r => r.id))}
+                    style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer' }}>
+                    {allSelected ? 'Clear' : `Select all (${queueable.length})`}
+                  </button>
+                  <button onClick={queueSelected} disabled={!selected.size || bulkBusy}
+                    style={{ padding:'7px 14px', fontSize:12, fontWeight:700, background: selected.size ? 'linear-gradient(135deg,#7c3aed,#a855f7)' : '#f1f5f9', color: selected.size ? '#fff' : '#94a3b8', border:'none', borderRadius:8, cursor: selected.size && !bulkBusy ? 'pointer' : 'default', display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap' }}>
+                    {bulkBusy ? 'Queuing…' : `⚡ Queue ${selected.size || ''} for Auto-Apply`}
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
+          {bulkMsg && (
+            <div style={{ padding:'10px 14px', background: bulkMsg.ok ? '#dcfce7' : '#fee2e2', color: bulkMsg.ok ? '#15803d' : '#991b1b', borderRadius:8, fontSize:12, fontWeight:600 }}>
+              {bulkMsg.text}
+            </div>
+          )}
+
           {/* Intern Roles Section */}
           {displayedRoles.filter(r => r.role_type === 'intern').length > 0 && (
             <div>
               <h4 style={{ fontSize:13, fontWeight:800, color:'#1f2937', marginBottom:14, paddingBottom:10, borderBottom:'2px solid #6366f1', textTransform:'uppercase', letterSpacing:'0.05em' }}>🎓 Intern Roles ({displayedRoles.filter(r => r.role_type === 'intern').length})</h4>
               <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                 {displayedRoles.filter(r => r.role_type === 'intern').map(r => (
-            <div key={r.id} className="cd-role-card" style={{ background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, padding:'14px 18px', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', transition:'all 0.15s', cursor:'default' }} onMouseEnter={e => { e.currentTarget.style.borderColor='#cbd5e1'; e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.05)' }} onMouseLeave={e => { e.currentTarget.style.borderColor='#e2e8f0'; e.currentTarget.style.boxShadow='none' }}>
-              <div style={{ flex:1, minWidth:0 }}>
+            <div key={r.id} className="cd-role-card" style={{ background: selected.has(r.id) ? '#eef2ff' : '#fff', border:`1px solid ${selected.has(r.id) ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:10, padding:'14px 18px', display:'flex', alignItems:'center', gap:14, flexWrap:'wrap', transition:'all 0.15s', cursor:'default' }} onMouseEnter={e => { if (!selected.has(r.id)) { e.currentTarget.style.borderColor='#cbd5e1'; e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.05)' } }} onMouseLeave={e => { if (!selected.has(r.id)) { e.currentTarget.style.borderColor='#e2e8f0'; e.currentTarget.style.boxShadow='none' } }}>
+              {r.apply_url && (
+                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSelect(r.id)}
+                  style={{ width:18, height:18, cursor:'pointer', accentColor:'#7c3aed', flexShrink:0 }} />
+              )}
+              <div style={{ flex:'1 1 200px', minWidth:0 }}>
                 <div style={{ fontWeight:700, fontSize:14, color:'#0f172a', marginBottom:3 }}>{r.title}</div>
                 <div style={{ fontSize:11, color:'#64748b', display:'flex', flexWrap:'wrap', gap:10, alignItems:'center' }}>
                   {r.location && <span>📍 {r.location}</span>}
@@ -828,15 +899,15 @@ function JobScraperTab({ company, onTabSwitch }) {
                   {r.source && <span style={{ padding:'2px 7px', background:'#f1f5f9', borderRadius:4, fontSize:10, fontWeight:600, color:'#475569' }}>{SOURCE_LABELS[r.source] || r.source}</span>}
                 </div>
               </div>
-              <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
                 {r.apply_url && (
                   <a href={r.apply_url} target="_blank" rel="noreferrer"
-                    style={{ padding:'7px 16px', background:'#eff6ff', color:'#2563eb', border:'1px solid #bfdbfe', borderRadius:8, fontSize:12, fontWeight:700, textDecoration:'none', whiteSpace:'nowrap', transition:'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background='#dbeafe'; e.currentTarget.style.borderColor='#93c5fd' }} onMouseLeave={e => { e.currentTarget.style.background='#eff6ff'; e.currentTarget.style.borderColor='#bfdbfe' }}>
+                    style={{ padding:'7px 16px', background:'#eff6ff', color:'#2563eb', border:'1px solid #bfdbfe', borderRadius:8, fontSize:12, fontWeight:700, textDecoration:'none', whiteSpace:'nowrap', transition:'all 0.15s' }}>
                     Apply →
                   </a>
                 )}
                 <button onClick={() => trackRole(r)} disabled={tracking === r.id}
-                  style={{ padding:'7px 16px', background:'#eef2ff', color:'#3730a3', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor: tracking === r.id ? 'default' : 'pointer', whiteSpace:'nowrap', transition:'all 0.15s' }} onMouseEnter={e => { if (tracking !== r.id) { e.currentTarget.style.background='#e0e7ff'; e.currentTarget.style.borderColor='#a5b4fc' } }} onMouseLeave={e => { e.currentTarget.style.background='#eef2ff'; e.currentTarget.style.borderColor='#c7d2fe' }}>
+                  style={{ padding:'7px 16px', background:'#eef2ff', color:'#3730a3', border:'1px solid #c7d2fe', borderRadius:8, fontSize:12, fontWeight:700, cursor: tracking === r.id ? 'default' : 'pointer', whiteSpace:'nowrap', transition:'all 0.15s' }}>
                   {tracking === r.id ? 'Tracking…' : '+ Track'}
                 </button>
               </div>
@@ -852,8 +923,12 @@ function JobScraperTab({ company, onTabSwitch }) {
               <h4 style={{ fontSize:13, fontWeight:800, color:'#1f2937', marginBottom:14, paddingBottom:10, borderBottom:'2px solid #10b981', textTransform:'uppercase', letterSpacing:'0.05em' }}>💼 Full-Time & New Grad Roles ({displayedRoles.filter(r => r.role_type === 'fulltime').length})</h4>
               <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
                 {displayedRoles.filter(r => r.role_type === 'fulltime').map(r => (
-            <div key={r.id} className="cd-role-card" style={{ background:'#fff', border:'1px solid #d1d5db', borderRadius:10, padding:'14px 18px', display:'flex', alignItems:'center', gap:16, flexWrap:'wrap', transition:'all 0.15s', cursor:'default' }} onMouseEnter={e => { e.currentTarget.style.borderColor='#b4b8bf'; e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.05)' }} onMouseLeave={e => { e.currentTarget.style.borderColor='#d1d5db'; e.currentTarget.style.boxShadow='none' }}>
-              <div style={{ flex:1, minWidth:0 }}>
+            <div key={r.id} className="cd-role-card" style={{ background: selected.has(r.id) ? '#eef2ff' : '#fff', border:`1px solid ${selected.has(r.id) ? '#a5b4fc' : '#d1d5db'}`, borderRadius:10, padding:'14px 18px', display:'flex', alignItems:'center', gap:14, flexWrap:'wrap', transition:'all 0.15s', cursor:'default' }} onMouseEnter={e => { if (!selected.has(r.id)) { e.currentTarget.style.borderColor='#b4b8bf'; e.currentTarget.style.boxShadow='0 2px 8px rgba(0,0,0,0.05)' } }} onMouseLeave={e => { if (!selected.has(r.id)) { e.currentTarget.style.borderColor='#d1d5db'; e.currentTarget.style.boxShadow='none' } }}>
+              {r.apply_url && (
+                <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleSelect(r.id)}
+                  style={{ width:18, height:18, cursor:'pointer', accentColor:'#7c3aed', flexShrink:0 }} />
+              )}
+              <div style={{ flex:'1 1 200px', minWidth:0 }}>
                 <div style={{ fontWeight:700, fontSize:14, color:'#0f172a', marginBottom:3 }}>{r.title}</div>
                 <div style={{ fontSize:11, color:'#64748b', display:'flex', flexWrap:'wrap', gap:10, alignItems:'center' }}>
                   {r.location && <span>📍 {r.location}</span>}
@@ -861,15 +936,15 @@ function JobScraperTab({ company, onTabSwitch }) {
                   {r.source && <span style={{ padding:'2px 7px', background:'#f1f5f9', borderRadius:4, fontSize:10, fontWeight:600, color:'#475569' }}>{SOURCE_LABELS[r.source] || r.source}</span>}
                 </div>
               </div>
-              <div style={{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center' }}>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' }}>
                 {r.apply_url && (
                   <a href={r.apply_url} target="_blank" rel="noreferrer"
-                    style={{ padding:'7px 16px', background:'#ecfdf5', color:'#059669', border:'1px solid #a7f3d0', borderRadius:8, fontSize:12, fontWeight:700, textDecoration:'none', whiteSpace:'nowrap', transition:'all 0.15s' }} onMouseEnter={e => { e.currentTarget.style.background='#d1fae5'; e.currentTarget.style.borderColor='#6ee7b7' }} onMouseLeave={e => { e.currentTarget.style.background='#ecfdf5'; e.currentTarget.style.borderColor='#a7f3d0' }}>
+                    style={{ padding:'7px 16px', background:'#ecfdf5', color:'#059669', border:'1px solid #a7f3d0', borderRadius:8, fontSize:12, fontWeight:700, textDecoration:'none', whiteSpace:'nowrap', transition:'all 0.15s' }}>
                     Apply →
                   </a>
                 )}
                 <button onClick={() => trackRole(r)} disabled={tracking === r.id}
-                  style={{ padding:'7px 16px', background:'#f0f9ff', color:'#0369a1', border:'1px solid #bae6fd', borderRadius:8, fontSize:12, fontWeight:700, cursor: tracking === r.id ? 'default' : 'pointer', whiteSpace:'nowrap', transition:'all 0.15s' }} onMouseEnter={e => { if (tracking !== r.id) { e.currentTarget.style.background='#cffafe'; e.currentTarget.style.borderColor='#7dd3fc' } }} onMouseLeave={e => { e.currentTarget.style.background='#f0f9ff'; e.currentTarget.style.borderColor='#bae6fd' }}>
+                  style={{ padding:'7px 16px', background:'#f0f9ff', color:'#0369a1', border:'1px solid #bae6fd', borderRadius:8, fontSize:12, fontWeight:700, cursor: tracking === r.id ? 'default' : 'pointer', whiteSpace:'nowrap', transition:'all 0.15s' }}>
                   {tracking === r.id ? 'Tracking…' : '+ Track'}
                 </button>
               </div>
@@ -921,7 +996,7 @@ function detectPlatformClient(url = '') {
 
 const SUPPORTED_AUTO = new Set(['greenhouse', 'lever', 'ashby'])
 
-function AutoApplyRoleRow({ role, company, preview, onApplied, profileComplete }) {
+function AutoApplyRoleRow({ role, company, preview, onApplied, profileComplete, selected = false, onToggleSelect }) {
   const [mode, setMode] = useState('manual') // manual | auto
   const [running, setRunning] = useState(false)
   const [result, setResult]   = useState(null)
@@ -960,9 +1035,13 @@ function AutoApplyRoleRow({ role, company, preview, onApplied, profileComplete }
     : result?.error ? '#dc2626' : '#0f172a'
 
   return (
-    <div style={{ padding:'12px 14px', background:'#fff', border:'1px solid #e2e8f0', borderRadius:10, marginBottom:8 }}>
+    <div style={{ padding:'12px 14px', background: selected ? '#eef2ff' : '#fff', border:`1px solid ${selected ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:10, marginBottom:8, transition:'all 0.12s' }}>
       <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-        <div style={{ flex:1, minWidth:0 }}>
+        {onToggleSelect && (
+          <input type="checkbox" checked={selected} onChange={onToggleSelect}
+            style={{ width:18, height:18, cursor:'pointer', accentColor:'#7c3aed', flexShrink:0 }} />
+        )}
+        <div style={{ flex:'1 1 180px', minWidth:0 }}>
           <div style={{ fontSize:13, fontWeight:700, color:'#0f172a', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{role.title}</div>
           <div style={{ fontSize:11, color:'#64748b', display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
             <span style={{ padding:'2px 8px', borderRadius:6, background: canAuto ? '#f0fdf4' : '#f8fafc', color: canAuto ? '#15803d' : '#94a3b8', fontWeight:700, fontSize:10 }}>
@@ -1036,6 +1115,28 @@ function JobAutomationTab({ company, roles }) {
   const [profileOpen, setProfileOpen] = useState(false)
   const [profileMeta, setProfileMeta] = useState({ hasProfile: false, resumeCount: 0 })
   const [resumePreviews, setResumePreviews] = useState({}) // { [jobUrl]: { source, label, ... } }
+  // Multi-select for queueing several roles to auto-apply at once.
+  const [selected, setSelected] = useState(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkMsg, setBulkMsg]   = useState(null)
+  const toggleSelect = (id) => setSelected(prev => {
+    const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next
+  })
+  async function queueSelected() {
+    if (selected.size === 0) return
+    setBulkBusy(true); setBulkMsg(null)
+    try {
+      const r = await api.career.autoApplyCompanyQueue(company.id, { roleIds: [...selected] })
+      const queued  = r?.queued ?? 0
+      const skipped = r?.skippedAlreadyInFlight ?? 0
+      setBulkMsg({ ok: true, text: `✓ Queued ${queued} role${queued === 1 ? '' : 's'} for auto-apply${skipped > 0 ? ` · ${skipped} already in queue` : ''}` })
+      setSelected(new Set())
+    } catch (err) {
+      setBulkMsg({ ok: false, text: err.message || 'Queue failed' })
+    }
+    setBulkBusy(false)
+    setTimeout(() => setBulkMsg(null), 6000)
+  }
 
   useEffect(() => {
     (async () => {
@@ -1121,8 +1222,41 @@ function JobAutomationTab({ company, roles }) {
               ⚠️ <strong>Profile incomplete:</strong> Fill in Name, Email, Phone, and LinkedIn in the Profile & Resumes section above to enable auto-apply.
             </div>
           )}
+
+          {/* Multi-select bulk queue */}
+          {scrapedRoles.length > 0 && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10, padding:'10px 14px', marginBottom:12, background: selected.size > 0 ? '#eef2ff' : '#f8fafc', border:`1px solid ${selected.size > 0 ? '#a5b4fc' : '#e2e8f0'}`, borderRadius:10 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'#475569' }}>
+                {selected.size > 0 ? `${selected.size} selected` : 'Select roles to bulk-queue'}
+              </div>
+              <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+                <button onClick={() => setSelected(selected.size === scrapedRoles.length ? new Set() : new Set(scrapedRoles.map(r => r.id)))}
+                  style={{ padding:'5px 11px', fontSize:11, fontWeight:600, background:'#fff', color:'#4f46e5', border:'1px solid #c7d2fe', borderRadius:7, cursor:'pointer' }}>
+                  {selected.size === scrapedRoles.length ? 'Clear' : `Select all (${scrapedRoles.length})`}
+                </button>
+                <button onClick={queueSelected} disabled={!selected.size || bulkBusy}
+                  style={{ padding:'7px 14px', fontSize:12, fontWeight:700, background: selected.size ? 'linear-gradient(135deg,#7c3aed,#a855f7)' : '#f1f5f9', color: selected.size ? '#fff' : '#94a3b8', border:'none', borderRadius:8, cursor: selected.size && !bulkBusy ? 'pointer' : 'default', whiteSpace:'nowrap' }}>
+                  {bulkBusy ? 'Queuing…' : `⚡ Queue ${selected.size || ''} for Auto-Apply`}
+                </button>
+              </div>
+            </div>
+          )}
+          {bulkMsg && (
+            <div style={{ marginBottom:12, padding:'10px 14px', background: bulkMsg.ok ? '#dcfce7' : '#fee2e2', color: bulkMsg.ok ? '#15803d' : '#991b1b', borderRadius:8, fontSize:12, fontWeight:600 }}>
+              {bulkMsg.text}
+            </div>
+          )}
+
           {scrapedRoles.map(r => (
-            <AutoApplyRoleRow key={r.id} role={r} company={company} preview={resumePreviews[r.apply_url]} profileComplete={profileMeta.hasProfile} />
+            <AutoApplyRoleRow
+              key={r.id}
+              role={r}
+              company={company}
+              preview={resumePreviews[r.apply_url]}
+              profileComplete={profileMeta.hasProfile}
+              selected={selected.has(r.id)}
+              onToggleSelect={() => toggleSelect(r.id)}
+            />
           ))}
         </div>
       )}
@@ -2179,12 +2313,15 @@ export default function CompanyDetail() {
               ))}
             </div>
           </div>
-          {/* Status dropdown */}
-          <div style={{ flexShrink:0 }}>
-            <select value={status} onChange={e => onStatusChange(e.target.value)}
-              style={{ padding:'7px 12px', borderRadius:8, border:`1px solid ${stColor.border}`, background:stColor.bg, color:stColor.color, fontSize:12, fontWeight:700, cursor:'pointer' }}>
-              {['new','researching','contacted','responded','skip'].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
+          {/* Status dropdown — themed Dropdown so the iOS picker doesn't
+              cover the page when tapped on mobile. */}
+          <div style={{ flexShrink:0, minWidth:140 }}>
+            <Dropdown
+              ariaLabel="Company status"
+              value={status}
+              onChange={onStatusChange}
+              options={['new','researching','contacted','responded','skip'].map(s => ({ value:s, label:s }))}
+            />
           </div>
         </div>
 

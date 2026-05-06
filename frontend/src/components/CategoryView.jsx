@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../api'
+import Dropdown from './Dropdown'
 
 const CAT_CSS = `
   .cv-company-row { transition: all 0.12s; cursor: pointer; }
@@ -315,23 +316,38 @@ function RegularCategoryView({ categoryName }) {
           </div>
         </div>
 
-        {/* Filters + Sort */}
-        <div style={{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap' }}>
+        {/* Filters + Sort — themed Dropdown so the OS picker doesn't appear
+            on mobile and the look stays consistent with the rest of the app. */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr', gap:8, alignItems:'center' }}>
           <input value={search} onChange={onSearch} placeholder="Filter by name…"
-            style={{ padding:'7px 12px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', outline:'none', minWidth:200 }} />
-          <select value={status} onChange={e => { setStatus(e.target.value); setPage(0); load(0, search, source, e.target.value, sortBy) }}
-            style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
-            <option value="">All Statuses</option>
-            {['new','researching','contacted','responded','skip'].map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={sortBy} onChange={e => { setSortBy(e.target.value); setPage(0); load(0, search, source, status, e.target.value) }}
-            style={{ padding:'7px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', background:'#f8fafc', outline:'none', cursor:'pointer' }}>
-            <option value="hiring">⭐ Top Companies</option>
-            <option value="contacts">👥 Most Contacts</option>
-            <option value="recent">📅 Recent First</option>
-            <option value="az">A → Z</option>
-            <option value="za">Z → A</option>
-          </select>
+            style={{ padding:'9px 12px', borderRadius:9, border:'1px solid #e2e8f0', fontSize:13, color:'#0f172a', outline:'none', boxSizing:'border-box', width:'100%' }} />
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <Dropdown
+              ariaLabel="Filter by status"
+              value={status}
+              onChange={(v) => { setStatus(v); setPage(0); load(0, search, source, v, sortBy) }}
+              options={[
+                { value:'',           label:'All Statuses' },
+                { value:'new',        label:'New' },
+                { value:'researching',label:'Researching' },
+                { value:'contacted',  label:'Contacted' },
+                { value:'responded',  label:'Responded' },
+                { value:'skip',       label:'Skip' },
+              ]}
+            />
+            <Dropdown
+              ariaLabel="Sort by"
+              value={sortBy}
+              onChange={(v) => { setSortBy(v); setPage(0); load(0, search, source, status, v) }}
+              options={[
+                { value:'hiring',   label:'⭐ Top Companies' },
+                { value:'contacts', label:'👥 Most Contacts' },
+                { value:'recent',   label:'📅 Recent First' },
+                { value:'az',       label:'A → Z' },
+                { value:'za',       label:'Z → A' },
+              ]}
+            />
+          </div>
         </div>
       </div>
 
@@ -363,10 +379,14 @@ function RegularCategoryView({ categoryName }) {
             return 0
           })
 
-          // Split: "checked" = user has touched the company (status !== 'new');
-          // "unchecked" = still 'new' or null. This lets the user keep their
-          // un-reviewed pile separate from companies they've already triaged.
-          const isChecked = (c) => c.status && c.status !== 'new'
+          // Split: "checked" = the company has been scraped at least once
+          // (intern_roles_checked_at is set), regardless of whether roles
+          // were found. "Yet to check" = never scraped. This matches the
+          // user's mental model: "I either looked at this one or I didn't",
+          // not "I changed its status pill". User-set status (researching /
+          // contacted / etc.) still surfaces visually on the row but no
+          // longer drives the section split.
+          const isChecked = (c) => !!c.intern_roles_checked_at
           const unchecked = sorted.filter(c => !isChecked(c))
           const checked   = sorted.filter(c =>  isChecked(c))
 
@@ -416,11 +436,14 @@ function RegularCategoryView({ categoryName }) {
                       Careers ↗
                     </a>
                   )}
-                  <select value={c.status || 'new'} onClick={e => e.stopPropagation()}
-                    onChange={e => updateStatus(c.id, e.target.value, e)}
-                    style={{ padding:'3px 7px', borderRadius:7, border:`1px solid ${stColor.border}`, background:stColor.bg, color:stColor.color, fontSize:11, fontWeight:700, cursor:'pointer' }}>
-                    {['new','researching','contacted','responded','skip'].map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
+                  <div onClick={e => e.stopPropagation()} style={{ minWidth:120 }}>
+                    <Dropdown
+                      ariaLabel={`Status for ${c.name}`}
+                      value={c.status || 'new'}
+                      onChange={(v) => updateStatus(c.id, v, { stopPropagation: () => {} })}
+                      options={['new','researching','contacted','responded','skip'].map(s => ({ value:s, label:s }))}
+                    />
+                  </div>
                   <span style={{ fontSize:13, color:'#94a3b8' }}>→</span>
                 </div>
               </div>

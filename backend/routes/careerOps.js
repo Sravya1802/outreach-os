@@ -378,15 +378,24 @@ router.delete('/library/:archetype/:filename', async (req, res) => {
 // not only on Career Ops evaluations. For each role we know about for this
 // company, create an evaluation row and mark it apply_mode='auto' / queued.
 // Skips URLs that already have a queued/in-progress/submitted evaluation.
-async function queueCompanyRoles(userId, companyId, { roleType = 'intern' } = {}) {
+async function queueCompanyRoles(userId, companyId, { roleType = 'intern', roleIds = null } = {}) {
   const company = await one('SELECT id, name FROM jobs WHERE id = $1 AND user_id = $2', [companyId, userId]);
   if (!company) return { error: 'Company not found' };
-  const roles = await all(
-    `SELECT id, title, apply_url FROM roles
-     WHERE company_id = $1 AND user_id = $2 AND role_type = $3 AND apply_url IS NOT NULL AND apply_url <> ''
-     ORDER BY created_at DESC`,
-    [companyId, userId, roleType]
-  );
+  // When the caller passes explicit roleIds (multi-select UI), filter to
+  // those — otherwise fall back to "all roles of this type at this company"
+  // (used by the bulk Auto-Apply quick-action).
+  const useIdFilter = Array.isArray(roleIds) && roleIds.length > 0;
+  const sql = useIdFilter
+    ? `SELECT id, title, apply_url FROM roles
+       WHERE company_id = $1 AND user_id = $2 AND id = ANY($3::int[])
+         AND apply_url IS NOT NULL AND apply_url <> ''
+       ORDER BY created_at DESC`
+    : `SELECT id, title, apply_url FROM roles
+       WHERE company_id = $1 AND user_id = $2 AND role_type = $3
+         AND apply_url IS NOT NULL AND apply_url <> ''
+       ORDER BY created_at DESC`;
+  const params = useIdFilter ? [companyId, userId, roleIds] : [companyId, userId, roleType];
+  const roles = await all(sql, params);
   let queued = 0, skipped = 0;
   for (const role of roles) {
     const existing = await one(
@@ -420,7 +429,13 @@ async function queueCompanyRoles(userId, companyId, { roleType = 'intern' } = {}
 
 router.post('/auto-apply-company/:companyId/queue', async (req, res) => {
   try {
-    const result = await queueCompanyRoles(req.user.id, req.params.companyId, { roleType: req.body?.roleType || 'intern' });
+    const roleIds = Array.isArray(req.body?.roleIds)
+      ? req.body.roleIds.map(Number).filter(Number.isFinite)
+      : null;
+    const result = await queueCompanyRoles(req.user.id, req.params.companyId, {
+      roleType: req.body?.roleType || 'intern',
+      roleIds,
+    });
     if (result.error) return res.status(404).json(result);
     res.json({ ok: true, ...result });
   } catch (err) {
