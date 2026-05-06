@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api, rawApiFetch } from '../api'
 import { AutoApplySetup } from './CareerOps'
@@ -1451,6 +1451,23 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
     setSaving(false)
   }
 
+  // Auto-save: debounced PUT whenever any tracked field on `app` changes.
+  // Skips the very first render (when we just loaded the row from the
+  // server) so we don't immediately echo it back. Uses a ref to track
+  // whether the user has actually modified the state.
+  const dirtyRef = React.useRef(false)
+  const autoSaveTimer = React.useRef(null)
+  useEffect(() => {
+    if (!app) return
+    if (!dirtyRef.current) { dirtyRef.current = true; return }
+    clearTimeout(autoSaveTimer.current)
+    autoSaveTimer.current = setTimeout(() => { save() }, 800)
+    return () => clearTimeout(autoSaveTimer.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app?.status, app?.applied_date, app?.follow_up_date, app?.salary, app?.location_type, app?.notes, app?.job_title, app?.job_url])
+  // Reset dirty flag when company id changes (loaded a different row).
+  useEffect(() => { dirtyRef.current = false }, [company.id])
+
   async function uploadResume(file) {
     if (!file) return
     setResumeUp(true)
@@ -1687,17 +1704,15 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
           )}
         </div>
 
-        {/* ── Pipeline status ── */}
+        {/* ── Pipeline status — single dropdown, was 8 stacked buttons ── */}
         <div>
           <div style={{ fontSize:10, fontWeight:700, color:'#94a3b8', textTransform:'uppercase', letterSpacing:'0.08em', marginBottom:6 }}>Pipeline Status</div>
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:4 }}>
-            {PIPELINE_STATUSES.map(s => (
-              <button key={s.value} onClick={() => setApp(a => ({ ...a, status: s.value }))}
-                style={{ padding:'7px 8px', borderRadius:8, border:`1.5px solid ${app.status===s.value ? s.color : '#e2e8f0'}`, background: app.status===s.value ? s.bg : '#fff', color: app.status===s.value ? s.color : '#64748b', fontSize:11, fontWeight: app.status===s.value ? 700 : 500, cursor:'pointer', textAlign:'center', transition:'all 0.1s' }}>
-                {s.label}
-              </button>
-            ))}
-          </div>
+          <Dropdown
+            ariaLabel="Pipeline status"
+            value={app.status || 'evaluated'}
+            onChange={(v) => setApp(a => ({ ...a, status: v }))}
+            options={PIPELINE_STATUSES.map(s => ({ value:s.value, label:s.label }))}
+          />
         </div>
 
         {/* ── Details ── */}
@@ -1734,11 +1749,12 @@ function CareerOpsTab({ company, autoAnalyze, onAnalyzeDone }) {
             style={{ width:'100%', padding:'8px 10px', borderRadius:8, border:'1px solid #e2e8f0', fontSize:12, color:'#0f172a', lineHeight:1.5, outline:'none', resize:'vertical', fontFamily:'inherit', boxSizing:'border-box' }} />
         </div>
 
-        {/* ── Save ── */}
-        <button onClick={save} disabled={saving}
-          style={{ width:'100%', padding:'10px 0', background: saving?'#f1f5f9':'#0f172a', color: saving?'#94a3b8':'#fff', border:'none', borderRadius:10, fontSize:13, fontWeight:700, cursor: saving?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:6 }}>
-          {saving ? <><Spin color="#94a3b8" size={12}/> Saving…</> : saved ? '✓ Saved' : 'Save'}
-        </button>
+        {/* ── Auto-save indicator (replaces the manual Save button).
+             Shows 'Saving…' while a debounced PUT is in flight, '✓ Saved'
+             briefly after, otherwise blank. Quiet — no big black button. */}
+        <div style={{ minHeight:18, fontSize:11, color: saving ? '#64748b' : (saved ? '#15803d' : '#94a3b8'), display:'flex', alignItems:'center', justifyContent:'flex-end', gap:6, fontWeight:600 }}>
+          {saving ? <><Spin color="#94a3b8" size={11}/> Saving…</> : saved ? '✓ Saved' : '· auto-saves as you type'}
+        </div>
       </div>
 
       {/* ── RIGHT: evaluation report / tracker / reports ─────────────── */}
