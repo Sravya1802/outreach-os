@@ -865,6 +865,23 @@ router.post('/:id/scrape-roles', async (req, res) => {
       });
     }
 
+    // Mark this company as "scraped" so the Companies category page can move
+    // it from Yet-to-check → Already-checked, regardless of whether roles
+    // were found. intern_roles_count caches the result so we don't have to
+    // recount on every list render.
+    try {
+      await run(
+        `UPDATE jobs
+            SET intern_roles_checked_at = NOW(),
+                intern_roles_count      = $2,
+                intern_roles_source     = COALESCE($3, intern_roles_source)
+          WHERE id = $1 AND user_id = $4`,
+        [company.id, foundRoles.length, foundRoles[0]?.source || null, req.user.id]
+      );
+    } catch (e) {
+      console.warn('[scrape-roles] failed to mark intern_roles_checked_at:', e.message);
+    }
+
     const allRoles = await all('SELECT * FROM roles WHERE company_id = $1 AND user_id = $2 ORDER BY created_at DESC', [company.id, req.user.id]);
 
     // Build a canonical "careers search" URL for the "Check Careers Page" button.

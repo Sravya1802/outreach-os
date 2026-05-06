@@ -244,6 +244,11 @@ function RegularCategoryView({ categoryName }) {
   const [status, setStatus]       = useState('')
   const [sortBy, setSortBy]       = useState('hiring')
   const [scraping, setScraping]   = useState(null)
+  // Collapse state for the Yet-to-check / Already-checked sections. Both
+  // open by default so the user sees both piles; tap a header to fold one
+  // away. Keeps state across re-renders.
+  const [openSections, setOpenSections] = useState({ unchecked: true, checked: true })
+  const toggleSection = (k) => setOpenSections(s => ({ ...s, [k]: !s[k] }))
   const [scrapeMsg, setScrapeMsg] = useState(null)
   const debounce = useRef(null)
 
@@ -450,12 +455,14 @@ function RegularCategoryView({ categoryName }) {
             )
           }
 
-          const sectionHeader = (icon, label, count, accent) => (
-            <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, position:'sticky', top:0, zIndex:1 }}>
+          const sectionHeader = (key, icon, label, count, accent) => (
+            <button type="button" onClick={() => toggleSection(key)}
+              style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', marginBottom:10, background:'#fff', border:`1px solid ${accent}40`, borderLeft:`3px solid ${accent}`, borderRadius:10, position:'sticky', top:0, zIndex:1, cursor:'pointer', width:'100%', textAlign:'left', fontFamily:'inherit' }}>
               <span style={{ fontSize:16 }}>{icon}</span>
               <span style={{ fontSize:13, fontWeight:800, color:'#0f172a', flex:1 }}>{label}</span>
               <span style={{ fontSize:11, fontWeight:700, padding:'3px 10px', borderRadius:20, background:`${accent}15`, color:accent }}>{count}</span>
-            </div>
+              <span aria-hidden="true" style={{ fontSize:11, color:'#94a3b8', display:'inline-block', transform: openSections[key] ? 'rotate(180deg)' : 'rotate(0deg)', transition:'transform 0.18s' }}>▼</span>
+            </button>
           )
 
           const emptyState = (msg) => (
@@ -473,16 +480,16 @@ function RegularCategoryView({ categoryName }) {
           return (
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:16, alignItems:'flex-start' }}>
               <div style={{ minWidth:0 }}>
-                {sectionHeader('🔍', 'Yet to check', unchecked.length, '#6366f1')}
-                {unchecked.length > 0
+                {sectionHeader('unchecked', '🔍', 'Yet to check', unchecked.length, '#6366f1')}
+                {openSections.unchecked && (unchecked.length > 0
                   ? unchecked.map(renderRow)
-                  : emptyState('All companies in this category have been checked. 🎉')}
+                  : emptyState('All companies in this category have been checked. 🎉'))}
               </div>
               <div style={{ minWidth:0 }}>
-                {sectionHeader('✓', 'Already checked', checked.length, '#16a34a')}
-                {checked.length > 0
+                {sectionHeader('checked', '✓', 'Already checked', checked.length, '#16a34a')}
+                {openSections.checked && (checked.length > 0
                   ? checked.map(renderRow)
-                  : emptyState('No companies triaged yet. Set a status (researching / contacted / skip / …) on the left to move it here.')}
+                  : emptyState('No companies triaged yet. Click ↻ Scrape on a company to move it here.'))}
               </div>
             </div>
           )
