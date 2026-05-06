@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { api } from '../api'
+import { useMediaQuery } from '../hooks'
 
 // ── Inject styles ─────────────────────────────────────────────────────────────
 function injectStyles() {
@@ -1674,13 +1675,18 @@ export default function CareerOps() {
     setTab('evaluate')
   }
 
+  // Tab definitions broken into icon + short + full label so we can render
+  // the same source data three ways (icon-only on tablet, dropdown on phone,
+  // full label on desktop) without duplicating state.
   const TABS = [
-    { k:'scanner',  l:'🔍 Portal Scanner' },
-    { k:'evaluate', l:'⚡ Evaluate' },
-    { k:'batch',    l:'📦 Batch Evaluate' },
-    { k:'history',  l:`📋 History${history.length > 0 ? ` (${history.length})`:''}`},
-    { k:'profile',  l:'⚙ Auto-Apply Setup' },
+    { k:'scanner',  icon:'🔍', short:'Scanner',   full:'Portal Scanner' },
+    { k:'evaluate', icon:'⚡', short:'Evaluate',  full:'Evaluate' },
+    { k:'batch',    icon:'📦', short:'Batch',     full:'Batch Evaluate' },
+    { k:'history',  icon:'📋', short:`History${history.length > 0 ? ` (${history.length})` : ''}`, full:`History${history.length > 0 ? ` (${history.length})` : ''}` },
+    { k:'profile',  icon:'⚙',  short:'Auto-Apply', full:'Auto-Apply Setup' },
   ]
+  const isPhone   = useMediaQuery('(max-width: 480px)')
+  const isTablet  = useMediaQuery('(min-width: 481px) and (max-width: 900px)')
 
   // Add to auto-apply queue from a History row.
   async function handleQueueFromHistory(id) {
@@ -1702,15 +1708,34 @@ export default function CareerOps() {
           </div>
         </div>
 
-        {/* Tabs */}
-        <div style={{ display:'flex', padding:'0 28px', overflowX:'auto' }}>
-          {TABS.map(t => (
-            <button key={t.k} onClick={() => setTab(t.k)}
-              style={{ padding:'12px 18px', fontSize:13, fontWeight: tab===t.k ? 700:500, cursor:'pointer', background:'none', border:'none', whiteSpace:'nowrap', borderBottom: tab===t.k ? '2px solid #6366f1':'2px solid transparent', color: tab===t.k ? '#6366f1':'#94a3b8', transition:'all 0.12s', marginBottom:'-1px' }}>
-              {t.l}
-            </button>
-          ))}
-        </div>
+        {/* Tabs — three renderings:
+            • Phone (≤480px): native <select> dropdown — fits everything on
+              the narrowest screens, accessible, no horizontal scroll.
+            • Tablet (481-900px): icon-only tab strip — all 5 tabs fit
+              without clipping. Hover/active states show the full label.
+            • Desktop (>900px): full label strip (existing). */}
+        {isPhone ? (
+          <div style={{ padding:'10px 16px 12px', borderTop:'1px solid #f1f5f9' }}>
+            <select value={tab} onChange={e => setTab(e.target.value)}
+              style={{ width:'100%', padding:'10px 12px', fontSize:14, fontWeight:700, color:'#4f46e5', background:'#eef2ff', border:'1px solid #c7d2fe', borderRadius:9, cursor:'pointer' }}>
+              {TABS.map(t => (
+                <option key={t.k} value={t.k}>{t.icon}  {t.full}</option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div style={{ display:'flex', padding:'0 28px', overflowX:'auto' }}>
+            {TABS.map(t => (
+              <button key={t.k} onClick={() => setTab(t.k)}
+                title={t.full}
+                style={{ padding: isTablet ? '12px 12px' : '12px 18px', fontSize: isTablet ? 18 : 13, fontWeight: tab===t.k ? 700:500, cursor:'pointer', background:'none', border:'none', whiteSpace:'nowrap', borderBottom: tab===t.k ? '2px solid #6366f1':'2px solid transparent', color: tab===t.k ? '#6366f1':'#94a3b8', transition:'all 0.12s', marginBottom:'-1px', display:'flex', alignItems:'center', gap:6 }}>
+                <span aria-hidden="true">{t.icon}</span>
+                {!isTablet && <span>{t.full}</span>}
+                {isTablet && tab === t.k && <span style={{ fontSize:12 }}>{t.short}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Body */}

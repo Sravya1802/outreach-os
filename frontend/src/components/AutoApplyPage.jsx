@@ -1,19 +1,22 @@
 import { useState, useEffect } from 'react'
 import { api } from '../api'
 import { AutoApplySetup } from './CareerOps'
+import { useMediaQuery } from '../hooks'
 
 const TABS = [
-  { id: 'setup',          label: '⚙ Setup',          desc: 'Profile + resume library used to fill applications' },
-  { id: 'queue',          label: '📋 Queue',         desc: 'Bulk-queue evaluations + run the worker' },
-  { id: 'resume-folder',  label: '📁 Resume Folder', desc: 'Role-archetype PDFs: AIML / SWE / DS / DevOps / full stack / startup' },
-  { id: 'history',        label: '📜 History',       desc: 'Past auto-apply runs and outcomes' },
-  { id: 'completed',      label: '✅ Completed',     desc: 'Applications the auto-apply worker submitted successfully' },
+  { id: 'setup',          icon: '⚙',  short: 'Setup',     full: 'Setup',          desc: 'Profile + resume library used to fill applications' },
+  { id: 'queue',          icon: '📋', short: 'Queue',     full: 'Queue',          desc: 'Bulk-queue evaluations + run the worker' },
+  { id: 'resume-folder',  icon: '📁', short: 'Resumes',   full: 'Resume Folder',  desc: 'Role-archetype PDFs: AIML / SWE / DS / DevOps / full stack / startup' },
+  { id: 'history',        icon: '📜', short: 'History',   full: 'History',        desc: 'Past auto-apply runs and outcomes' },
+  { id: 'completed',      icon: '✅', short: 'Done',      full: 'Completed',      desc: 'Applications the auto-apply worker submitted successfully' },
 ]
 
 const GRADE_ORDER = ['A', 'B', 'C', 'D', 'F']
 
 export default function AutoApplyPage() {
   const [tab, setTab] = useState('setup')
+  const isPhone  = useMediaQuery('(max-width: 480px)')
+  const isTablet = useMediaQuery('(min-width: 481px) and (max-width: 900px)')
   return (
     <div style={{ flex:1, overflowY:'auto', background:'#f8fafc' }}>
       {/* Header */}
@@ -22,17 +25,33 @@ export default function AutoApplyPage() {
         <p style={{ fontSize:13, color:'#64748b', margin:'0 0 18px' }}>
           Submit applications automatically against Greenhouse, Lever, and Ashby portals using your tailored resume + profile.
         </p>
-        <div style={{ display:'flex', gap:0 }}>
-          {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              style={{ padding:'10px 22px', fontSize:13, fontWeight:700, background:'transparent',
-                color: tab === t.id ? '#4f46e5' : '#64748b',
-                border:'none', borderBottom: tab === t.id ? '3px solid #4f46e5' : '3px solid transparent',
-                cursor:'pointer' }}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+        {/* Tabs — adaptive: select dropdown on phone, icon-only strip on
+            tablet, full-label strip on desktop. */}
+        {isPhone ? (
+          <div style={{ paddingBottom:14 }}>
+            <select value={tab} onChange={e => setTab(e.target.value)}
+              style={{ width:'100%', padding:'10px 12px', fontSize:14, fontWeight:700, color:'#4f46e5', background:'#eef2ff', border:'1px solid #c7d2fe', borderRadius:9, cursor:'pointer' }}>
+              {TABS.map(t => (
+                <option key={t.id} value={t.id}>{t.icon}  {t.full}</option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div style={{ display:'flex', gap:0 }}>
+            {TABS.map(t => (
+              <button key={t.id} onClick={() => setTab(t.id)}
+                title={t.full}
+                style={{ padding: isTablet ? '10px 12px' : '10px 22px', fontSize: isTablet ? 18 : 13, fontWeight:700, background:'transparent',
+                  color: tab === t.id ? '#4f46e5' : '#64748b',
+                  border:'none', borderBottom: tab === t.id ? '3px solid #4f46e5' : '3px solid transparent',
+                  cursor:'pointer', display:'flex', alignItems:'center', gap:6 }}>
+                <span aria-hidden="true">{t.icon}</span>
+                {!isTablet && <span>{t.full}</span>}
+                {isTablet && tab === t.id && <span style={{ fontSize:12 }}>{t.short}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div style={{ padding:'24px 40px', maxWidth:1200, margin:'0 auto' }}>
