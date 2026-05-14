@@ -124,6 +124,23 @@ Also update the "Known gaps" section above when an item is resolved (strike thro
 
 ## Session log
 
+### 2026-05-13 — Include HR / recruiter contacts in Outreach decision-maker list
+
+- **What:** Outreach panel was hiding HR contacts (e.g. recruiters, talent partners, people-ops leads) behind the "non-tech filtered" message. `isEngineeringContact()` in [backend/routes/jobs.js:1266](backend/routes/jobs.js#L1266) is a two-stage filter: SKIP_TITLES blocklist, then ENGINEERING_TITLES allowlist. HR was being killed at BOTH stages — explicitly in SKIP_TITLES and implicitly by absence from ENGINEERING_TITLES.
+- **Fix:** Removed `'human resources'`, `'hr'`, `'recruiter'`, `'talent'` from SKIP_TITLES so HR-style titles pass the first gate; added `'human resources'`, `'hr manager'`, `'hr director'`, `'hr business'`, `'chief people'`, `'head of people'`, `'people operations'`, `'people ops'`, `'recruiter'`, `'recruiting'`, `'talent acquisition'`, `'talent partner'`, `'talent lead'`, `'hiring manager'` to ENGINEERING_TITLES so they pass the second gate. The remaining SKIP_TITLES (office manager, insurance, legal, accounting, copywriter, customer success, etc.) are genuine noise and stay filtered.
+- **Status:** Local edit done; committed and pushed; needs VM deploy via `sudo bash ~/outreach/deploy/update.sh` to take effect on https://outreach-jt.duckdns.org.
+- **Follow-up:** After VM deploy, re-run "Find Emails" on a company in Outreach and verify HR/recruiter contacts now appear alongside engineering contacts.
+
+### 2026-05-12 — VM backend DB auth fix (Supabase password rotated)
+
+- **What:** Backend on Mumbai VM was crash-looping on startup with `[db] Failed to connect: password authentication failed for user "postgres"`. Root cause: the `DATABASE_URL` password in `~/outreach/.env` no longer matched what Supabase had on file. Direct `psql` against the pooler with the .env password also failed, confirming the credential — not the URL encoding — was the problem. (The error message `user "postgres"` is the Supabase pooler stripping `.PROJECT_REF` from `postgres.dkifhfqgoremdjhkcojc` before authing the underlying role; reaching that error means we *did* reach Supabase.)
+- **Fix:** Reset the Supabase database password via Dashboard → Project Settings → Database → Reset database password. New password is symbol-free (letters/digits only) to avoid URL-encoding pitfalls — `@` in the old password had to be `%40` in the URL, which is the kind of thing that bites again later. Updated `DATABASE_URL` in `/home/ubuntu/outreach/.env`, restarted via `pm2 restart outreach-backend --update-env`. The `--update-env` flag is required; without it pm2 keeps the old env. The pm2 app name is `outreach-backend` (not `outreach`).
+- **Status:** Backend live again. `out.log` shows `[db] Connected to postgres @ 2026-05-12T23:33:44`, `PostgreSQL 17.6`, `Backend on port 3001`. New password stored only in `~/outreach/.env` on the VM (and in user's password manager) — not committed, not in memory.
+- **Gotchas captured for next time:**
+  - When picking a Supabase password, **use letters/digits only**. Any `@`/`#`/`?`/`&`/`/` in the password must be percent-encoded in `DATABASE_URL` and re-encoded every place the URL appears.
+  - Always restart pm2 with `--update-env` after editing `.env`. pm2 caches the original env from process start.
+  - The "password authentication failed for user `postgres`" error from the Supabase pooler is **post-routing** — it means the connection string is being parsed correctly and you reached Supabase. The fix is the credential, not the URL.
+
 ### 2026-04-28 — Daily multi-source role scraper + resume-storage bug fix
 
 - **What:** Two changes shipped today.

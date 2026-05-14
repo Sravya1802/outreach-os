@@ -1251,11 +1251,15 @@ const ENGINEERING_TITLES = [
   'quantitative', 'quant', 'founder', 'co-founder', 'ceo', 'president',
   'devops', 'sre', 'site reliability', 'security engineer', 'cloud',
   'mobile', 'firmware', 'embedded', 'systems engineer', 'network engineer',
+  'human resources', 'hr manager', 'hr director', 'hr business',
+  'chief people', 'head of people', 'people operations', 'people ops',
+  'recruiter', 'recruiting', 'talent acquisition', 'talent partner', 'talent lead',
+  'hiring manager',
 ];
 const SKIP_TITLES = [
   'office manager', 'agency owner', 'owner', 'agent', 'advisor',
-  'financial advisor', 'insurance', 'recruiter', 'talent',
-  'human resources', 'hr', 'marketing', 'sales', 'legal',
+  'financial advisor', 'insurance',
+  'marketing', 'sales', 'legal',
   'accountant', 'controller', 'operations', 'administrative',
   'executive assistant', 'coordinator', 'associate director of finance',
   'paralegal', 'attorney', 'counsel', 'compliance', 'bookkeeper',
